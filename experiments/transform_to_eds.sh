@@ -248,20 +248,19 @@ transform_to_leds() {
     local start_time=$SECONDS
 
     # Use eds2leds for EDS → l-EDS transformation
+    # Method is auto-detected: linear (with sources) or cartesian (without sources)
     if [[ -f "$seds_input" ]]; then
         $EDS2LEDS_TOOL \
             --input "$eds_file" \
             --sources "$seds_input" \
             --output "$leds_output" \
             --context-length "$l_value" \
-            --method linear \
             > "$log_output" 2>&1
     else
         $EDS2LEDS_TOOL \
             --input "$eds_file" \
             --output "$leds_output" \
             --context-length "$l_value" \
-            --method cartesian \
             > "$log_output" 2>&1
     fi
 

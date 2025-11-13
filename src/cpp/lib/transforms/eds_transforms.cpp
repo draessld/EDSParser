@@ -316,7 +316,8 @@ void eds_to_leds_linear(
     Length context_length,
     std::istream* phasing_input,
     std::ostream* phasing_output,
-    size_t num_threads
+    size_t num_threads,
+    bool compact
 ) {
     if (context_length == 0) {
         throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
@@ -362,7 +363,8 @@ void eds_to_leds_linear(
     }
 
     // Write output
-    eds.save(output, EDS::OutputFormat::COMPACT);
+    auto format = compact ? EDS::OutputFormat::COMPACT : EDS::OutputFormat::FULL;
+    eds.save(output, format);
 
     // Write updated sources if requested
     if (phasing_output && eds.has_sources()) {
@@ -380,7 +382,8 @@ void eds_to_leds_cartesian(
     std::istream& input,
     std::ostream& output,
     Length context_length,
-    size_t num_threads
+    size_t num_threads,
+    bool compact
 ) {
     if (context_length == 0) {
         throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
@@ -418,7 +421,8 @@ void eds_to_leds_cartesian(
         throw std::runtime_error("Maximum iterations reached without convergence");
     }
 
-    eds.save(output, EDS::OutputFormat::COMPACT);
+    auto format = compact ? EDS::OutputFormat::COMPACT : EDS::OutputFormat::FULL;
+    eds.save(output, format);
 }
 
 /**

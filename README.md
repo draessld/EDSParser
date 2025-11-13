@@ -42,7 +42,7 @@ msa2eds -i alignment.msa -l 10 -o output.leds
 vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 
 # Transform EDS to l-EDS
-eds2leds -i data.eds -s data.seds -l 10 --method linear
+eds2leds -i data.eds -s data.seds -l 10
 
 # View EDS statistics
 edsparser-stats -i data.eds
@@ -60,10 +60,13 @@ edsparser/
 │   │   ├── msa2eds             # MSA → EDS/l-EDS
 │   │   ├── vcf2eds             # VCF → EDS/l-EDS
 │   │   ├── eds2leds            # EDS → l-EDS
-│   │   └── edsparser-stats     # Statistics tool
+│   │   ├── edsparser-stats     # Statistics tool
+│   │   └── edsparser-genpatterns  # Pattern generation tool
 │   └── test/                   # Unit tests
 ├── experiments/                # Experiment scripts
-│   ├── run_experiment.sh       # Universal experiment runner
+│   ├── transform_to_eds.sh     # Transform MSA/VCF/EDS → EDS/l-EDS
+│   ├── generate_patterns.sh   # Pattern generation wrapper
+│   ├── generate_statistics.sh  # Statistics generation wrapper
 │   ├── clean_experiments.sh    # Cleanup utility
 │   └── datasets/               # Example datasets
 ├── data/test/                  # Test data
@@ -117,22 +120,29 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 
 ### eds2leds - EDS to l-EDS Transformation
 
-Transform EDS to length-constrained EDS:
+Transform EDS to length-constrained EDS with auto-detected merging method:
 
 ```bash
-# Linear merging (requires sources)
-eds2leds -i data.eds -s data.seds -l 10 --method linear
+# Linear merging (auto-detected with sources, compact output by default)
+eds2leds -i data.eds -s data.seds -l 10
 
-# Cartesian merging (all combinations)
-eds2leds -i data.eds -l 10 --method cartesian
+# Cartesian merging (auto-detected without sources)
+eds2leds -i data.eds -l 10
+
+# Full output format (brackets on all symbols)
+eds2leds -i data.eds -s data.seds -l 10 --full
 
 # Parallel processing
-eds2leds -i data.eds -l 10 --method cartesian --threads 4
+eds2leds -i data.eds -l 10 --threads 4
 ```
 
-**Merging Methods:**
-- **LINEAR**: Phasing-aware merging using source information (preserves valid haplotypes)
-- **CARTESIAN**: All-combinations merging (cross-product of alternatives)
+**Merging Methods (auto-detected):**
+- **LINEAR**: Phasing-aware merging using source information (preserves valid haplotypes) - automatically used when sources provided
+- **CARTESIAN**: All-combinations merging (cross-product of alternatives) - automatically used when no sources provided
+
+**Output Format:**
+- Default: Compact format (brackets only on degenerate symbols)
+- Use `--full` flag for full format (brackets on all symbols)
 
 ### edsparser-stats - Statistics and Analysis
 
@@ -142,18 +152,46 @@ Display EDS statistics and metadata:
 # Basic statistics
 edsparser-stats -i data.eds
 
-# Check l-EDS compliance
-edsparser-stats -i data.leds -l 10
+# With source tracking
+edsparser-stats -i data.eds -s data.seds
 
-# Memory usage estimates
-edsparser-stats -i data.eds
+# JSON output
+edsparser-stats -i data.eds --json
+
+# Full mode (load all strings)
+edsparser-stats -i data.eds --full
 ```
 
 **Output:**
-- Number of symbols (degenerate and non-degenerate)
-- File size and memory estimates
+- Number of symbols, characters, and strings
+- Context length statistics (min, max, average)
+- File size and memory estimates (METADATA_ONLY vs FULL mode)
+- Source tracking information (number of paths/genomes)
 - l-EDS compliance verification
-- Longest/shortest strings per symbol
+
+### edsparser-genpatterns - Pattern Generation
+
+Generate random patterns from EDS files for benchmarking:
+
+```bash
+# Generate 100 patterns of length 10
+edsparser-genpatterns -i data.eds -o patterns.txt -c 100 -l 10
+
+# Generate 1000 patterns of length 20
+edsparser-genpatterns -i data.eds -o patterns.txt -c 1000 -l 20
+
+# From l-EDS files
+edsparser-genpatterns -i data.leds -o patterns.txt -c 500 -l 15
+```
+
+**Options:**
+- `-i, --input` - Input EDS/l-EDS file
+- `-o, --output` - Output pattern file
+- `-c, --count` - Number of patterns to generate (default: 100)
+- `-l, --length` - Pattern length (default: 10)
+
+**Output:**
+Plain text file with one pattern per line (ACGT alphabet).
 
 ## File Formats
 
@@ -161,27 +199,35 @@ edsparser-stats -i data.eds
 
 Elastic-Degenerate String with curly braces notation:
 
+**Full format** (brackets on all symbols):
 ```
 {ACGT}{A,ACA}{CGT}{T,TG}
+```
+
+**Compact format** (brackets only on degenerate symbols):
+```
+ACGT{A,ACA}CGT{T,TG}
 ```
 
 - Each `{...}` represents a symbol (set of alternative strings)
 - Single strings: non-degenerate symbols
 - Multiple strings: degenerate symbols (variants)
+- Both formats are supported for reading; output format controlled by `--compact` flag
 
 ### SEDS Format (`.seds`)
 
-Source tracking file (text format):
+Source tracking file mapping each string to its originating sequences/samples:
 
 ```
-0 0
-1 0 1
-2 0
-3 0 1
+{0}{1,2,3,5}{2,3,4}{0}{1,2,3,5}...
 ```
 
-- Line N: source IDs for symbol N's strings
-- Maps each alternative string to originating sequence/sample
+**Format**: Flattened sequence of sets, one per string (not per symbol):
+- Each `{...}` contains source IDs (path/sample IDs) for one string
+- Order follows the global string indexing: all strings from symbol 0, then symbol 1, etc.
+- Example: For EDS `{A}{B,C}{D}` the .seds has 4 sets: one for A, two for B and C, one for D
+
+**Special marker**: `{0}` represents "all paths" (universal marker)
 
 ### MSA Format (`.msa`)
 

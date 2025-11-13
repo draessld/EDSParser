@@ -24,6 +24,7 @@ namespace edsparser {
  * @param phasing_input Optional phasing information (.seds file)
  * @param phasing_output Optional output for updated phasing
  * @param num_threads Number of threads for parallel processing (default: 1)
+ * @param compact Use compact output format (omit brackets on non-degenerate symbols)
  */
 void eds_to_leds_linear(
     std::istream& input,
@@ -31,19 +32,22 @@ void eds_to_leds_linear(
     Length context_length,
     std::istream* phasing_input = nullptr,
     std::ostream* phasing_output = nullptr,
-    size_t num_threads = 1
+    size_t num_threads = 1,
+    bool compact = true
 );
 
 /**
  * Convert EDS to l-EDS using cartesian merging
  *
  * @param num_threads Number of threads for parallel processing (default: 1)
+ * @param compact Use compact output format (omit brackets on non-degenerate symbols)
  */
 void eds_to_leds_cartesian(
     std::istream& input,
     std::ostream& output,
     Length context_length,
-    size_t num_threads = 1
+    size_t num_threads = 1,
+    bool compact = true
 );
 
 /**

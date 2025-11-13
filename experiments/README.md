@@ -4,16 +4,18 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 
 ## Available Scripts
 
-- **[run_experiment.sh](run_experiment.sh)** - Universal experiment runner (MSA/VCF/EDS → l-EDS)
+- **[transform_to_eds.sh](transform_to_eds.sh)** - Transform MSA/VCF/EDS to EDS/l-EDS formats
 - **[generate_patterns.sh](generate_patterns.sh)** - Generate random patterns from EDS files for benchmarking
+- **[generate_statistics.sh](generate_statistics.sh)** - Generate detailed statistics from EDS/l-EDS files
 - **[clean_experiments.sh](clean_experiments.sh)** - Universal cleanup script
 
 ## Dataset Structure
 
 ```
 experiments/
-├── run_experiment.sh           # Universal experiment runner
+├── transform_to_eds.sh         # Transform MSA/VCF/EDS to EDS/l-EDS
 ├── generate_patterns.sh        # Pattern generation script
+├── generate_statistics.sh      # Statistics generation script
 ├── clean_experiments.sh        # Cleanup script
 ├── README.md                   # This file
 └── datasets/
@@ -32,27 +34,27 @@ experiments/
 
 ## Quick Start
 
-### Run Experiments
+### Transform to EDS/l-EDS
 
-The **run_experiment.sh** script supports MSA, VCF, and EDS input formats:
+The **transform_to_eds.sh** script supports MSA, VCF, and EDS input formats:
 
 ```bash
 # MSA experiment - all 32 SARS-CoV-2 variants
-./run_experiment.sh --dataset SARS_cov2 --format msa
+./transform_to_eds.sh --dataset SARS_cov2 --format msa
 
 # MSA experiment - specific files only
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "20*"      # 20-series
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "*Delta*"  # Delta variants
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "21F_Iota" # Single file
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --pattern "20*"      # 20-series
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --pattern "*Delta*"  # Delta variants
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --pattern "21F_Iota" # Single file
 
 # Custom length values
-./run_experiment.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
 
 # VCF experiment (with reference genome)
-./run_experiment.sh --dataset human_chr1 --format vcf --reference ref.fasta
+./transform_to_eds.sh --dataset human_chr1 --format vcf --reference ref.fasta
 
 # EDS to l-EDS transformation
-./run_experiment.sh --dataset precomputed --format eds
+./transform_to_eds.sh --dataset precomputed --format eds
 ```
 
 ### Generate Patterns
@@ -79,6 +81,43 @@ Generate random patterns from EDS files for benchmarking:
 - `3_leds/patterns_1000_20/` - 1000 patterns of length 20 from l-EDS (l=3)
 - Each pattern folder contains `.patterns` files (one per input file)
 
+### Generate Statistics
+
+Generate detailed statistics from EDS/l-EDS files:
+
+```bash
+# Display statistics for all EDS files (table format)
+./generate_statistics.sh --dataset SARS_cov2
+
+# Generate statistics from multiple directories
+./generate_statistics.sh --dataset SARS_cov2 --input-dirs "eds,3_leds,5_leds,10_leds"
+
+# Save statistics as JSON
+./generate_statistics.sh --dataset SARS_cov2 --format json --output stats.json
+
+# Generate CSV statistics (requires jq)
+./generate_statistics.sh --dataset SARS_cov2 --format csv --output stats.csv
+
+# Use FULL mode for detailed statistics
+./generate_statistics.sh --dataset SARS_cov2 --full
+
+# Generate statistics from specific files
+./generate_statistics.sh --dataset SARS_cov2 --pattern "20*"
+```
+
+**Output Formats:**
+- `table` - Human-readable format (default, displays to stdout)
+- `json` - JSON format (one object per file, ideal for programmatic processing)
+- `csv` - CSV format (one row per file, requires `jq` for full parsing)
+
+**Key Statistics:**
+- File size and storage mode
+- Number of symbols, characters, and strings
+- Context length statistics (min, max, average)
+- Variation metrics (change size, common characters)
+- Memory usage (current vs. estimated full mode)
+- Source tracking information (number of paths/genomes)
+
 ### Clean Up Experiments
 
 Remove all generated outputs while preserving input data:
@@ -99,10 +138,10 @@ Remove all generated outputs while preserving input data:
 
 ## Command-Line Options
 
-### run_experiment.sh
+### transform_to_eds.sh
 
 ```bash
-./run_experiment.sh --dataset DATASET --format FORMAT [OPTIONS]
+./transform_to_eds.sh --dataset DATASET --format FORMAT [OPTIONS]
 
 Required:
   --dataset DATASET   Dataset name (e.g., "SARS_cov2")
@@ -135,6 +174,25 @@ Options:
   -h, --help          Show help message
 ```
 
+### generate_statistics.sh
+
+```bash
+./generate_statistics.sh --dataset DATASET [OPTIONS]
+
+Required:
+  --dataset DATASET   Dataset name (e.g., "SARS_cov2")
+
+Options:
+  --input-dirs DIRS   Comma-separated list of input directories (default: "eds")
+                      Examples: "eds", "3_leds,5_leds", "eds,3_leds,5_leds,10_leds"
+  --pattern PATTERN   File pattern to process (default: "*")
+  --format FORMAT     Output format: "table", "json", or "csv" (default: "table")
+  --output FILE       Save output to file (default: stdout)
+  --full              Use FULL mode (loads all strings, more detailed)
+  --force             Overwrite existing output file
+  -h, --help          Show help message
+```
+
 ### clean_experiments.sh
 
 ```bash
@@ -152,7 +210,7 @@ Options:
 
 ## Configuration
 
-All configuration is done via command-line arguments to `run_experiment.sh`. Common options:
+All configuration is done via command-line arguments to `transform_to_eds.sh`. Common options:
 
 - **Length values**: Use `--lengths 3,5,10,15,20` (default: 3,5,10,15,20)
 - **File pattern**: Use `--pattern "*.msa"` to filter files (default: "*")
@@ -196,7 +254,7 @@ Contains metrics for all transformations:
 
 ```bash
 # Process all 32 SARS-CoV-2 variants with default l-values (3,5,10,15,20)
-./run_experiment.sh --dataset SARS_cov2 --format msa
+./transform_to_eds.sh --dataset SARS_cov2 --format msa
 
 # Output:
 # - 32 EDS files + sources + logs
@@ -211,7 +269,7 @@ Contains metrics for all transformations:
 ./clean_experiments.sh SARS_cov2
 
 # Rerun with custom length values
-./run_experiment.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
 ```
 
 ### Example 3: Analyze Specific Lineage Evolution
@@ -219,10 +277,10 @@ Contains metrics for all transformations:
 Process chronologically related variants:
 ```bash
 # Alpha variant
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "20I_Alpha"
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --pattern "20I_Alpha"
 
 # Delta variants
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "*Delta*"
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --pattern "*Delta*"
 
 # Compare file sizes in statistics.csv
 head -1 datasets/SARS_cov2/statistics.csv
@@ -233,7 +291,7 @@ grep -E "(20I_Alpha|Delta)" datasets/SARS_cov2/statistics.csv
 
 Regenerate all outputs (useful after tool updates):
 ```bash
-./run_experiment.sh --dataset SARS_cov2 --format msa --force
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --force
 ```
 
 ## Understanding the Logs
@@ -339,7 +397,7 @@ Complete workflow for running experiments and cleaning up:
 
 ```bash
 # 1. Run full experiment
-./run_experiment.sh --dataset SARS_cov2 --format msa
+./transform_to_eds.sh --dataset SARS_cov2 --format msa
 
 # 2. Analyze results
 cat datasets/SARS_cov2/statistics.csv
@@ -347,19 +405,9 @@ ls -lh datasets/SARS_cov2/eds/
 
 # 3. Try different length values
 ./clean_experiments.sh SARS_cov2
-./run_experiment.sh --dataset SARS_cov2 --format msa --lengths 2,4,8
+./transform_to_eds.sh --dataset SARS_cov2 --format msa --lengths 2,4,8
 
 # 4. Final cleanup (preview first)
 ./clean_experiments.sh --dry-run SARS_cov2
 ./clean_experiments.sh SARS_cov2
 ```
-
-## Citation
-
-If you use this dataset or scripts in your research, please cite the EDSParser library.
-
-## See Also
-
-- [CLAUDE.md](../CLAUDE.md) - Project overview and architecture
-- [msa2eds documentation](../src/cpp/tools/README.md) - Tool-specific details
-- [EDSParser tests](../data/test/) - Example transformations

@@ -31,8 +31,9 @@ int main(int argc, char** argv) {
         std::filesystem::path output_file;
         std::filesystem::path sources_file;
         Length context_length;
-        std::string method;
         int num_threads;
+        bool compact_mode = true;  // Default to compact format
+        bool full_mode = false;
 
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
@@ -40,8 +41,8 @@ int main(int argc, char** argv) {
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file (.eds)")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output l-EDS file (default: <input>_l<N>.leds)")
             ("context-length,l", po::value<Length>(&context_length)->required(), "Minimum context length")
-            ("method,m", po::value<std::string>(&method)->default_value("linear"), "Merging method: linear (phasing-aware) or cartesian (all combinations)")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Input source file (.seds) - required for linear method")
+            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Input source file (.seds) for linear (phasing-aware) merging")
+            ("full", po::bool_switch(&full_mode), "Use full output format with brackets on all symbols (default: compact)")
             ("threads,t", po::value<int>(&num_threads)->default_value(1), "Number of threads for parallel processing");
 
         po::variables_map vm;
@@ -54,26 +55,31 @@ int main(int argc, char** argv) {
             std::cout << "  Transforms an Elastic-Degenerate String (EDS) to a length-constrained\n";
             std::cout << "  EDS (l-EDS) by merging adjacent symbols to ensure all non-degenerate\n";
             std::cout << "  regions meet the minimum context length requirement.\n\n";
-            std::cout << "METHODS:\n";
-            std::cout << "  linear:\n";
+            std::cout << "MERGING METHODS (auto-detected):\n";
+            std::cout << "  WITH sources:\n";
             std::cout << "    - Phasing-aware merging using source information\n";
-            std::cout << "    - Requires source file (.seds) via --sources/-s\n";
+            std::cout << "    - Automatically used when --sources/-s is provided\n";
             std::cout << "    - Preserves valid haplotype combinations\n";
             std::cout << "    - Use for: Genomic data with known phasing (MSA/VCF-derived)\n\n";
-            std::cout << "  cartesian:\n";
+            std::cout << "  WITHOUT sources:\n";
             std::cout << "    - All-combinations merging (cross-product of alternatives)\n";
-            std::cout << "    - No source information used\n";
+            std::cout << "    - Automatically used when no source file is provided\n";
             std::cout << "    - Use for: Unknown phasing or when all combinations needed\n\n";
+            std::cout << "OUTPUT MODES:\n";
+            std::cout << "  Default (compact): Omit brackets on non-degenerate symbols: ACGT{A,ACA}CGT\n";
+            std::cout << "  --full: Use brackets on all symbols: {ACGT}{A,ACA}{CGT}\n\n";
             std::cout << "EXAMPLES:\n";
-            std::cout << "  # Linear merging with source tracking:\n";
-            std::cout << "  eds2leds -i data.eds -s data.seds -l 5 --method linear\n\n";
-            std::cout << "  # Cartesian merging (no sources):\n";
-            std::cout << "  eds2leds -i data.eds -l 5 --method cartesian\n\n";
+            std::cout << "  # Linear merging (auto-detected with sources, compact output):\n";
+            std::cout << "  eds2leds -i data.eds -s data.seds -l 5\n\n";
+            std::cout << "  # Cartesian merging (auto-detected without sources):\n";
+            std::cout << "  eds2leds -i data.eds -l 5\n\n";
+            std::cout << "  # Full output format with brackets on all symbols:\n";
+            std::cout << "  eds2leds -i data.eds -s data.seds -l 5 --full\n\n";
             std::cout << "  # Parallel processing with 4 threads:\n";
-            std::cout << "  eds2leds -i data.eds -l 5 --method cartesian --threads 4\n\n";
+            std::cout << "  eds2leds -i data.eds -l 5 --threads 4\n\n";
             std::cout << "  # Custom output path:\n";
             std::cout << "  eds2leds -i data.eds -s data.seds -l 10 -o output.leds\n\n";
-            std::cout << "OUTPUT:\n";
+            std::cout << "OUTPUT FILES:\n";
             std::cout << "  Default output: <input_base>_l<N>.leds\n";
             std::cout << "  With sources:   <input_base>_l<N>.seds (source tracking preserved)\n";
             std::cout << "  where <N> is the context length value\n\n";
@@ -83,33 +89,17 @@ int main(int argc, char** argv) {
 
         po::notify(vm);
 
+        // Handle full mode flag
+        if (full_mode) {
+            compact_mode = false;
+        }
+
         // Validate input file extension
         if (input_file.extension() != ".eds") {
             std::cerr << "Error: Input file must be an EDS file (.eds)\n";
             std::cerr << "Got: " << input_file << "\n";
             print_performance();
             return 1;
-        }
-
-        // Validate method
-        if (method != "linear" && method != "cartesian") {
-            std::cerr << "Error: Invalid method '" << method << "'\n";
-            std::cerr << "Valid methods: linear, cartesian\n";
-            print_performance();
-            return 1;
-        }
-
-        // Validate linear method requires sources
-        if (method == "linear" && sources_file.empty()) {
-            std::cerr << "Error: Linear method requires source file\n";
-            std::cerr << "Use --sources/-s to specify the .seds file\n";
-            print_performance();
-            return 1;
-        }
-
-        // Validate cartesian method doesn't use sources
-        if (method == "cartesian" && !sources_file.empty()) {
-            std::cerr << "Warning: Cartesian method ignores source file\n";
         }
 
         // Validate threads
@@ -137,10 +127,10 @@ int main(int argc, char** argv) {
         std::cout << "  Input: " << input_file << "\n";
         std::cout << "  Output: " << output_file << "\n";
         std::cout << "  Context length: " << context_length << "\n";
-        std::cout << "  Method: " << method << "\n";
         if (!sources_file.empty()) {
             std::cout << "  Sources: " << sources_file << "\n";
         }
+        std::cout << "  Output mode: " << (compact_mode ? "compact" : "full") << "\n";
         std::cout << "  Threads: " << num_threads << (num_threads == 1 ? " (sequential)" : " (parallel)") << "\n";
 
         // Open input file
@@ -182,22 +172,26 @@ int main(int argc, char** argv) {
         }
 
         try {
-            // Call library function based on method
-            if (method == "linear") {
+            // Call library function based on auto-detected method
+            if (!sources_file.empty()) {
+                // LINEAR merging: phasing-aware using source information
                 edsparser::eds_to_leds_linear(
                     input,
                     output,
                     context_length,
                     sources_in,
                     sources_out,
-                    static_cast<size_t>(num_threads)
+                    static_cast<size_t>(num_threads),
+                    compact_mode
                 );
             } else {
+                // CARTESIAN merging: all combinations
                 edsparser::eds_to_leds_cartesian(
                     input,
                     output,
                     context_length,
-                    static_cast<size_t>(num_threads)
+                    static_cast<size_t>(num_threads),
+                    compact_mode
                 );
             }
 
