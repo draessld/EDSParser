@@ -69,7 +69,6 @@ edsparser/
 ├── data/test/                  # Test data
 ├── INSTALL.sh                  # Installation script
 ├── UNINSTALL.sh                # Uninstallation script
-├── CLAUDE.md                   # Detailed project documentation
 └── README.md                   # This file
 ```
 
@@ -373,21 +372,8 @@ cd sdsl-lite
 - **VCF Processing**: Streaming reference genome (only current position in RAM)
 - **l-EDS Generation**: Linear in number of symbols
 
-## Dataset: SARS-CoV-2 Variants
-
-The `experiments/datasets/SARS_cov2/` directory contains 32 MSA files representing major SARS-CoV-2 lineages:
-
-- **19 Series**: Early pandemic (19A, 19B)
-- **20 Series**: First wave including Alpha, Beta, Gamma VOCs
-- **21 Series**: Delta variants and predecessors
-- **22 Series**: Omicron variants (BA.1 through BQ.1)
-- **23 Series**: Recent Omicron subvariants (XBB.1.5, XBB.1.16)
-
-Total: 32 variants, ~8.5 MB of MSA data
-
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive project documentation, architecture, and development guide
 - **[experiments/README.md](experiments/README.md)** - Experiment framework documentation
 - **Tool Help**: Run any tool with `--help` for detailed usage information
 
@@ -422,33 +408,6 @@ export PATH="$HOME/.local/bin:$PATH"
 - Process files in smaller chunks
 - Use l-EDS transformation with smaller context lengths
 
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. Write tests for new features
-2. Follow existing code style (C++17)
-3. Document new command-line tools
-4. Update CLAUDE.md for architectural changes
-
-## License
-
-[Specify your license here]
-
-## Citation
-
-If you use EDSParser in your research, please cite:
-
-```
-[Add citation information here]
-```
-
-## Contact
-
-[Add contact information here]
-
 ## Acknowledgments
 
-- SARS-CoV-2 variant data sourced from [specify source]
-- Built with SDSL library for efficient sequence indexing
-- Inspired by elastic-degenerate string research in bioinformatics
+- CLAUDE CODE by Antrophic for supporting this project

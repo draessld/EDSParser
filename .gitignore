@@ -77,5 +77,5 @@ Thumbs.db
 # CLAUDE
 CLAUDE.md
 
-# Experiment outputs (keep scripts and input data structure)
+# Experiment outputs - exclude all dataset content
 experiments/datasets/**
