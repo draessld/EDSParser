@@ -5,6 +5,7 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 ## Available Scripts
 
 - **[run_experiment.sh](run_experiment.sh)** - Universal experiment runner (MSA/VCF/EDS → l-EDS)
+- **[generate_patterns.sh](generate_patterns.sh)** - Generate random patterns from EDS files for benchmarking
 - **[clean_experiments.sh](clean_experiments.sh)** - Universal cleanup script
 
 ## Dataset Structure
@@ -12,13 +13,16 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 ```
 experiments/
 ├── run_experiment.sh           # Universal experiment runner
+├── generate_patterns.sh        # Pattern generation script
 ├── clean_experiments.sh        # Cleanup script
 ├── README.md                   # This file
 └── datasets/
     └── <DATASET_NAME>/
         ├── <input_format>/     # Input: msa/, vcf/, eds/, etc.
         ├── eds/                # Output: EDS files + sources + logs
+        │   └── patterns_*/     # Optional: patterns generated from EDS
         ├── 3_leds/             # Output: l-EDS (l=3) + sources + logs
+        │   └── patterns_*/     # Optional: patterns generated from l-EDS
         ├── 5_leds/             # Output: l-EDS (l=5) + sources + logs
         ├── 10_leds/            # Output: l-EDS (l=10) + sources + logs
         ├── 15_leds/            # Output: l-EDS (l=15) + sources + logs
@@ -50,6 +54,30 @@ The **run_experiment.sh** script supports MSA, VCF, and EDS input formats:
 # EDS to l-EDS transformation
 ./run_experiment.sh --dataset precomputed --format eds
 ```
+
+### Generate Patterns
+
+Generate random patterns from EDS files for benchmarking:
+
+```bash
+# Generate 100 patterns of length 10 from all EDS files
+./generate_patterns.sh --dataset SARS_cov2
+
+# Generate 1000 patterns of length 20
+./generate_patterns.sh --dataset SARS_cov2 --count 1000 --length 20
+
+# Generate patterns from l-EDS files
+./generate_patterns.sh --dataset SARS_cov2 --input-dir 3_leds --count 500 --length 15
+
+# Generate from specific files
+./generate_patterns.sh --dataset SARS_cov2 --pattern "20*"
+```
+
+**Output:** Patterns are organized in folders inside the input directory:
+- `eds/patterns_100_10/` - 100 patterns of length 10 from EDS files
+- `3_leds/patterns_100_10/` - 100 patterns of length 10 from l-EDS (l=3)
+- `3_leds/patterns_1000_20/` - 1000 patterns of length 20 from l-EDS (l=3)
+- Each pattern folder contains `.patterns` files (one per input file)
 
 ### Clean Up Experiments
 
@@ -87,6 +115,23 @@ Options:
   --reference FILE    Reference FASTA (required for VCF input)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
+  -h, --help          Show help message
+```
+
+### generate_patterns.sh
+
+```bash
+./generate_patterns.sh --dataset DATASET [OPTIONS]
+
+Required:
+  --dataset DATASET   Dataset name (e.g., "SARS_cov2")
+
+Options:
+  --input-dir DIR     Input directory name (default: "eds")
+  --pattern PATTERN   File pattern to process (default: "*")
+  --count N           Number of patterns per file (default: 100)
+  --length L          Pattern length (default: 10)
+  --force             Overwrite existing pattern files
   -h, --help          Show help message
 ```
 
@@ -259,8 +304,8 @@ The `msa2eds` tool uses streaming architecture and should handle large files eff
 The **clean_experiments.sh** script intelligently removes only generated outputs:
 
 ### What Gets Deleted
-- EDS output directories (`eds/`, `leds/`)
-- All l-EDS directories (`3_leds/`, `5_leds/`, `10_leds/`, etc.)
+- EDS output directories (`eds/`, `leds/`) - including any pattern folders inside
+- All l-EDS directories (`3_leds/`, `5_leds/`, `10_leds/`, etc.) - including any pattern folders inside
 - Statistics files (`statistics.csv`, `*.csv`)
 - Log files within output directories (`*.log`)
 

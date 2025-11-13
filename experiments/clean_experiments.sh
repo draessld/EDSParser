@@ -108,6 +108,10 @@ is_output_directory() {
             # Matches: 3_leds, 5_leds, 10_leds, etc.
             return 0
             ;;
+        patterns_*)
+            # Matches: patterns_100_10, patterns_1000_20, etc.
+            return 0
+            ;;
         *)
             return 1
             ;;
