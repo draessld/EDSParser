@@ -1,0 +1,80 @@
+# C/C++
+*.o
+*.a
+*.so
+*.out
+*.exe
+*.dll
+*.dylib
+*.obj
+*.elf
+*.gch
+*.pch
+*.dSYM/
+*.su
+*.idb
+*.pdb
+*.mod
+*.smod
+*.lai
+*.la
+*.lo
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+!EDSParserConfig.cmake.in
+
+# Build directories
+build/
+bin/
+obj/
+out/
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# Compiled test executables (keep source .cpp files)
+tests/cpp/test_*
+!tests/cpp/test_*.cpp
+tests/python/test_*
+!tests/python/test_*.py
+
+# Documentation
+docs/_build/
+*.pdf.bak
+
+# Logs
+*.log
+cmd_history.log
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# CLAUDE
+CLAUDE.md

@@ -1,0 +1,41 @@
+# EDSParserConfig.cmake - Config file for the EDSParser package
+
+@PACKAGE_INIT@
+
+# Provide EDSParser version
+set(EDSParser_VERSION "@PROJECT_VERSION@")
+
+# Find required dependencies
+find_package(Boost REQUIRED COMPONENTS program_options)
+
+# Find OpenMP (optional)
+find_package(OpenMP)
+
+# Find SDSL (required for MSA transformations)
+find_library(SDSL_LIBRARY NAMES sdsl)
+find_library(DIVSUFSORT_LIBRARY NAMES divsufsort)
+find_library(DIVSUFSORT64_LIBRARY NAMES divsufsort64)
+
+# Define EDSParser library target
+set(EDSParser_INCLUDE_DIR "@CMAKE_INSTALL_PREFIX@/include")
+set(EDSParser_LIB_DIR "@CMAKE_INSTALL_PREFIX@/lib")
+
+add_library(EDSParser::EDSParser STATIC IMPORTED)
+set_target_properties(EDSParser::EDSParser PROPERTIES
+    IMPORTED_LOCATION "${EDSParser_LIB_DIR}/libedsparser_lib.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${EDSParser_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES "Boost::program_options;${SDSL_LIBRARY};${DIVSUFSORT_LIBRARY};${DIVSUFSORT64_LIBRARY}"
+)
+
+if(OpenMP_CXX_FOUND)
+    set_property(TARGET EDSParser::EDSParser APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES OpenMP::OpenMP_CXX
+    )
+endif()
+
+# Report that EDSParser was found
+set(EDSParser_FOUND TRUE)
+
+message(STATUS "Found EDSParser ${EDSParser_VERSION}")
+message(STATUS "  Include dir: ${EDSParser_INCLUDE_DIR}")
+message(STATUS "  Library dir: ${EDSParser_LIB_DIR}")
