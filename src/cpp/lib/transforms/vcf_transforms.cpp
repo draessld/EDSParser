@@ -216,10 +216,21 @@ std::vector<int> parse_genotype(const std::string& gt_field) {
 }
 
 /**
+ * Enum for tracking why a variant was skipped
+ */
+enum class SkipReason {
+    NONE,              // Not skipped
+    HEADER,            // Header or comment line
+    MALFORMED,         // Malformed VCF line
+    UNSUPPORTED_SV     // Unsupported structural variant
+};
+
+/**
  * Parse a single VCF line (non-header) into VCFVariant structure.
  * Returns nullptr if line should be skipped (header, comment, malformed).
  */
-std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_samples) {
+std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_samples, SkipReason& skip_reason) {
+    skip_reason = SkipReason::NONE;
     if (line.empty() || line[0] == '#') {
         // Header or comment line - check if it's the column header
         if (line.substr(0, 6) == "#CHROM") {
@@ -235,6 +246,7 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
                 n_samples = columns.size() - 9;
             }
         }
+        skip_reason = SkipReason::HEADER;
         return nullptr;
     }
 
@@ -267,6 +279,7 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
     }
 
     if (fields.size() < 5) {
+        skip_reason = SkipReason::MALFORMED;
         return nullptr;  // Malformed line
     }
 
@@ -275,6 +288,7 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
     try {
         var->pos = std::stoull(fields[1]);  // VCF positions are 1-indexed
     } catch (...) {
+        skip_reason = SkipReason::MALFORMED;
         return nullptr;  // Invalid position
     }
     var->ref = fields[3];
@@ -286,6 +300,7 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
         // Unsupported SV type - skip this line
         std::cerr << "Warning: Skipping variant at " << var->chrom << ":" << var->pos
                   << " - " << e.what() << std::endl;
+        skip_reason = SkipReason::UNSUPPORTED_SV;
         return nullptr;
     }
 
@@ -661,7 +676,8 @@ std::pair<std::string, std::string> generate_eds_from_variants(
  */
 std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
-    std::istream& fasta_stream)
+    std::istream& fasta_stream,
+    VCFStats* stats)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
@@ -672,7 +688,24 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
     size_t n_samples = 0;
 
     while (std::getline(vcf_stream, line)) {
-        auto var = parse_vcf_line(line, n_samples);
+        SkipReason skip_reason;
+        auto var = parse_vcf_line(line, n_samples, skip_reason);
+
+        // Track statistics
+        if (stats) {
+            if (skip_reason == SkipReason::NONE) {
+                stats->total_variants++;
+                stats->processed_variants++;
+            } else if (skip_reason == SkipReason::MALFORMED) {
+                stats->total_variants++;
+                stats->skipped_malformed++;
+            } else if (skip_reason == SkipReason::UNSUPPORTED_SV) {
+                stats->total_variants++;
+                stats->skipped_unsupported_sv++;
+            }
+            // HEADER lines don't count as variants
+        }
+
         if (var) {
             variants.push_back(*var);
         }
@@ -685,7 +718,14 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
               });
 
     // Step 4: Generate EDS and sEDS
-    return generate_eds_from_variants(fasta_stream, fasta_meta, variants, n_samples);
+    auto result = generate_eds_from_variants(fasta_stream, fasta_meta, variants, n_samples);
+
+    // Update variant groups count
+    if (stats) {
+        stats->variant_groups = group_overlapping_variants(variants, fasta_stream, fasta_meta).size();
+    }
+
+    return result;
 }
 
 /**
@@ -695,10 +735,11 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
 std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
-    size_t context_length)
+    size_t context_length,
+    VCFStats* stats)
 {
     // Step 1: Generate EDS + sEDS
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_stream, fasta_stream);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, stats);
 
     // Step 2: Create streams for transformation
     std::stringstream eds_input(eds_str);

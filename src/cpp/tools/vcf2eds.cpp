@@ -113,13 +113,6 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Validate context length
-        if (context_length < 0) {
-            std::cerr << "Error: Context length must be >= 0\n";
-            print_performance();
-            return 1;
-        }
-
         // Open VCF file
         std::ifstream vcf_in(input_file);
         if (!vcf_in) {
@@ -144,14 +137,15 @@ int main(int argc, char** argv) {
         std::cout << "  Input: " << input_file << "\n";
         std::cout << "  Reference: " << reference_file << "\n";
 
-        // Perform transformation
+        // Perform transformation with statistics tracking
+        edsparser::VCFStats stats;
         std::string eds_str, seds_str;
         if (create_leds) {
-            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length);
+            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats);
             eds_str = result.first;
             seds_str = result.second;
         } else {
-            auto result = edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in);
+            auto result = edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, &stats);
             eds_str = result.first;
             seds_str = result.second;
         }
@@ -204,6 +198,23 @@ int main(int argc, char** argv) {
         std::cout << "Transformation complete!\n";
         std::cout << "  Output: " << eds_path << "\n";
         std::cout << "  Sources: " << seds_path << "\n";
+        std::cout << "\n";
+
+        // Print variant processing statistics
+        std::cout << "Variant Processing Statistics:\n";
+        std::cout << "  Total variants read:        " << stats.total_variants << "\n";
+        std::cout << "  Successfully processed:     " << stats.processed_variants << "\n";
+        std::cout << "  Skipped (malformed):        " << stats.skipped_malformed << "\n";
+        std::cout << "  Skipped (unsupported SV):   " << stats.skipped_unsupported_sv << "\n";
+        std::cout << "  Total skipped:              " << stats.total_skipped() << "\n";
+        std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
+
+        if (stats.total_variants > 0) {
+            double success_rate = (100.0 * stats.processed_variants) / stats.total_variants;
+            std::cout << "  Success rate:               " << std::fixed << std::setprecision(1)
+                      << success_rate << "%\n";
+        }
+        std::cout << "\n";
 
         print_performance();
         return 0;

@@ -19,6 +19,22 @@ namespace edsparser {
  */
 
 /**
+ * Statistics for VCF parsing and transformation.
+ */
+struct VCFStats {
+    size_t total_variants = 0;        // Total variant lines processed (excluding headers)
+    size_t processed_variants = 0;    // Successfully processed variants
+    size_t skipped_malformed = 0;     // Skipped due to malformed VCF lines
+    size_t skipped_unsupported_sv = 0;  // Skipped due to unsupported SV types
+    size_t variant_groups = 0;        // Number of variant groups created (after merging overlaps)
+
+    // Helper to get total skipped count
+    size_t total_skipped() const {
+        return skipped_malformed + skipped_unsupported_sv;
+    }
+};
+
+/**
  * Parse VCF + FASTA reference to EDS with source tracking.
  *
  * Source tracking: Sample-level (diploid samples contribute to one path).
@@ -37,11 +53,13 @@ namespace edsparser {
  *
  * @param vcf_stream Input stream containing VCF file
  * @param fasta_stream Input stream containing reference FASTA
+ * @param stats Optional pointer to VCFStats structure to receive statistics
  * @return Pair of (EDS string, sEDS source string)
  */
 std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
-    std::istream& fasta_stream);
+    std::istream& fasta_stream,
+    VCFStats* stats = nullptr);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking.
@@ -51,12 +69,14 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
  * @param vcf_stream Input stream containing VCF file
  * @param fasta_stream Input stream containing reference FASTA
  * @param context_length Minimum context length for l-EDS
+ * @param stats Optional pointer to VCFStats structure to receive statistics
  * @return Pair of (l-EDS string, sEDS source string)
  */
 std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
-    size_t context_length);
+    size_t context_length,
+    VCFStats* stats = nullptr);
 
 } // namespace edsparser
 
