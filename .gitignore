@@ -80,13 +80,4 @@ Thumbs.db
 CLAUDE.md
 
 # Experiment outputs (keep scripts and input data structure)
-experiments/datasets/**/eds/
-experiments/datasets/**/*_leds/
-experiments/datasets/**/statistics.csv
-experiments/datasets/**/*.log
-
-# Keep input data directories
-!experiments/datasets/**/msa/
-!experiments/datasets/**/vcf/
-!experiments/datasets/**/fasta/
-!experiments/datasets/**/input/
+experiments/datasets/**
