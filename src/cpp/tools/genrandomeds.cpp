@@ -9,9 +9,23 @@
 #include <sstream>
 #include <algorithm>
 #include <set>
+#include <vector>
+#include <map>
 
 namespace po = boost::program_options;
 using namespace edsparser;
+
+/**
+ * Metadata for tracking degenerate symbols during generation
+ */
+struct SymbolMetadata {
+    bool is_degenerate;
+    size_t num_alternatives;
+
+    SymbolMetadata() : is_degenerate(false), num_alternatives(1) {}
+    SymbolMetadata(bool deg, size_t num_alts)
+        : is_degenerate(deg), num_alternatives(num_alts) {}
+};
 
 /**
  * Generate a random DNA sequence of given length from alphabet
@@ -98,9 +112,113 @@ std::vector<size_t> generate_variant_positions(
 }
 
 /**
- * Generate EDS with random variants
+ * Generate path choices ensuring every alternative is used at least once
+ *
+ * Returns a vector where path_choices[path_id][variant_idx] = alternative_idx
  */
-std::string generate_random_eds(
+std::vector<std::vector<size_t>> generate_path_choices(
+    size_t num_paths,
+    const std::vector<size_t>& num_alternatives_per_variant,
+    std::mt19937& gen
+) {
+    std::vector<std::vector<size_t>> path_choices(num_paths);
+
+    // Initialize all paths
+    for (auto& path : path_choices) {
+        path.resize(num_alternatives_per_variant.size());
+    }
+
+    // For each variant position
+    for (size_t var_idx = 0; var_idx < num_alternatives_per_variant.size(); ++var_idx) {
+        size_t num_alts = num_alternatives_per_variant[var_idx];
+
+        // Phase 1: Round-robin assignment to ensure every alternative is used
+        for (size_t alt_idx = 0; alt_idx < num_alts; ++alt_idx) {
+            size_t path_id = alt_idx % num_paths;
+            path_choices[path_id][var_idx] = alt_idx;
+        }
+
+        // Phase 2: Fill remaining paths with random choices
+        // Only paths beyond num_alts need assignment
+        std::uniform_int_distribution<size_t> dist(0, num_alts - 1);
+        for (size_t path_id = num_alts; path_id < num_paths; ++path_id) {
+            path_choices[path_id][var_idx] = dist(gen);
+        }
+    }
+
+    return path_choices;
+}
+
+/**
+ * Build source sets from path choices
+ *
+ * Returns a vector of sets where sources[string_idx] = set of path IDs
+ */
+std::vector<std::set<int>> build_source_sets(
+    const std::vector<SymbolMetadata>& symbols,
+    const std::vector<std::vector<size_t>>& path_choices,
+    size_t num_paths
+) {
+    std::vector<std::set<int>> sources;
+    size_t variant_idx = 0;
+
+    for (const auto& symbol : symbols) {
+        if (symbol.is_degenerate) {
+            // For each alternative at this degenerate position
+            for (size_t alt_idx = 0; alt_idx < symbol.num_alternatives; ++alt_idx) {
+                std::set<int> path_set;
+
+                // Find all paths that chose this alternative
+                for (size_t path_id = 0; path_id < num_paths; ++path_id) {
+                    if (path_choices[path_id][variant_idx] == alt_idx) {
+                        path_set.insert(path_id + 1); // 1-indexed path IDs
+                    }
+                }
+
+                sources.push_back(path_set);
+            }
+            variant_idx++;
+        } else {
+            // Non-degenerate symbol: universal path {0}
+            sources.push_back({0});
+        }
+    }
+
+    return sources;
+}
+
+/**
+ * Write sources to .seds file
+ */
+void write_seds_file(
+    const std::filesystem::path& seds_path,
+    const std::vector<std::set<int>>& sources
+) {
+    std::ofstream outfile(seds_path);
+    if (!outfile) {
+        throw std::runtime_error("Cannot open sources file: " + seds_path.string());
+    }
+
+    for (const auto& source_set : sources) {
+        outfile << "{";
+        bool first = true;
+        for (int path_id : source_set) {
+            if (!first) {
+                outfile << ",";
+            }
+            outfile << path_id;
+            first = false;
+        }
+        outfile << "}";
+    }
+
+    outfile.close();
+}
+
+/**
+ * Generate EDS with random variants and track metadata for source generation
+ */
+std::pair<std::string, std::vector<SymbolMetadata>> generate_random_eds_with_metadata(
     size_t ref_size_mb,
     double variability,
     size_t min_alternatives,
@@ -109,16 +227,21 @@ std::string generate_random_eds(
     double snp_ratio,
     const std::string& alphabet,
     size_t min_context,
-    unsigned seed
+    unsigned seed,
+    size_t& num_paths
 ) {
     std::mt19937 gen(seed);
     std::ostringstream eds;
+    std::vector<SymbolMetadata> symbols;
 
     // Calculate total length in base pairs
     size_t total_bp = ref_size_mb * 1000000;
 
     // Calculate number of variant sites
     size_t num_variants = static_cast<size_t>(total_bp * variability);
+
+    // Calculate number of paths: ensure enough to cover all alternatives
+    num_paths = std::max(max_alternatives, size_t(3));
 
     std::cerr << "Generating random EDS:\n";
     std::cerr << "  Reference size: " << ref_size_mb << " MB (" << total_bp << " bp)\n";
@@ -127,6 +250,7 @@ std::string generate_random_eds(
     std::cerr << "  Alternatives per variant: [" << min_alternatives << ", " << max_alternatives << "]\n";
     std::cerr << "  Max variant length: " << variant_length_max << " bp\n";
     std::cerr << "  SNP ratio: " << (snp_ratio * 100) << "%\n";
+    std::cerr << "  Number of paths (samples): " << num_paths << "\n";
     if (min_context > 0) {
         std::cerr << "  Minimum context: " << min_context << " bp (l-EDS mode)\n";
     }
@@ -167,6 +291,10 @@ std::string generate_random_eds(
         if (var_idx < variant_positions.size() && pos == variant_positions[var_idx]) {
             // Generate degenerate symbol
             size_t num_alternatives = num_alt_dist(gen);
+
+            // Track metadata
+            symbols.emplace_back(true, num_alternatives);
+
             eds << "{";
 
             // First alternative is always the reference base
@@ -209,6 +337,9 @@ std::string generate_random_eds(
                                        : total_bp;
             size_t block_length = next_variant_pos - pos;
 
+            // Track metadata
+            symbols.emplace_back(false, 1);
+
             eds << "{" << reference.substr(pos, block_length) << "}";
             pos += block_length;
         }
@@ -217,7 +348,7 @@ std::string generate_random_eds(
     std::cerr << "  Progress: 100.0%\n";
     std::cerr << "EDS generation complete\n";
 
-    return eds.str();
+    return {eds.str(), symbols};
 }
 
 int main(int argc, char** argv) {
@@ -281,6 +412,7 @@ int main(int argc, char** argv) {
             std::cout << "\nExample usage:\n";
             std::cout << "  genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds\n";
             std::cout << "  genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds\n";
+            std::cout << "\nNote: Sources file (.seds) is automatically generated alongside the EDS file.\n";
             print_performance();
             return 0;
         }
@@ -330,8 +462,9 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Generate random EDS
-        std::string eds_string = generate_random_eds(
+        // Generate random EDS with metadata
+        size_t num_paths = 0;
+        auto [eds_string, symbols] = generate_random_eds_with_metadata(
             ref_size_mb,
             variability,
             min_alternatives,
@@ -340,10 +473,27 @@ int main(int argc, char** argv) {
             snp_ratio,
             alphabet,
             min_context,
-            seed
+            seed,
+            num_paths
         );
 
-        // Write to output file
+        // Collect number of alternatives for each variant
+        std::vector<size_t> num_alternatives_per_variant;
+        for (const auto& symbol : symbols) {
+            if (symbol.is_degenerate) {
+                num_alternatives_per_variant.push_back(symbol.num_alternatives);
+            }
+        }
+
+        // Generate path choices
+        std::cerr << "Generating source paths...\n";
+        std::mt19937 gen(seed + 1); // Use slightly different seed for path generation
+        auto path_choices = generate_path_choices(num_paths, num_alternatives_per_variant, gen);
+
+        // Build source sets
+        auto sources = build_source_sets(symbols, path_choices, num_paths);
+
+        // Write EDS file
         std::cerr << "Writing to file: " << output_file << "\n";
         std::ofstream outfile(output_file);
         if (!outfile) {
@@ -351,12 +501,19 @@ int main(int argc, char** argv) {
             print_performance();
             return 1;
         }
-
         outfile << eds_string;
         outfile.close();
 
-        std::cerr << "Successfully generated random EDS\n";
+        // Write sources file (.seds)
+        std::filesystem::path seds_path = output_file;
+        seds_path.replace_extension(".seds");
+
+        std::cerr << "Writing sources to file: " << seds_path << "\n";
+        write_seds_file(seds_path, sources);
+
+        std::cerr << "Successfully generated random EDS with sources\n";
         std::cerr << "Output written to: " << output_file << "\n";
+        std::cerr << "Sources written to: " << seds_path << "\n";
 
         print_performance();
         return 0;

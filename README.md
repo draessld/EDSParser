@@ -6,6 +6,7 @@ A high-performance C++ library for parsing and transforming **Elastic-Degenerate
 
 - **Multiple Input Formats**: MSA (Multiple Sequence Alignment), VCF (Variant Call Format), and native EDS
 - **Format Transformations**: Convert between formats and produce length-constrained EDS (l-EDS)
+- **Random EDS Generation**: Create synthetic datasets with controlled variability for testing and benchmarking
 - **Memory-Efficient Streaming**: Handle large datasets with minimal memory footprint
 - **Source Tracking**: Maintain provenance information through transformations
 - **High Performance**: C++17 implementation with optional OpenMP parallelization
@@ -44,6 +45,9 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 # Transform EDS to l-EDS
 eds2leds -i data.eds -s data.seds -l 10
 
+# Generate random EDS for testing
+genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+
 # View EDS statistics
 edsparser-stats -i data.eds
 ```
@@ -61,7 +65,8 @@ edsparser/
 │   │   ├── vcf2eds             # VCF → EDS/l-EDS
 │   │   ├── eds2leds            # EDS → l-EDS
 │   │   ├── edsparser-stats     # Statistics tool
-│   │   └── edsparser-genpatterns  # Pattern generation tool
+│   │   ├── edsparser-genpatterns  # Pattern generation tool
+│   │   └── genrandomeds        # Random EDS generation tool
 │   └── test/                   # Unit tests
 ├── experiments/                # Experiment scripts
 │   ├── transform_to_eds.sh     # Transform MSA/VCF/EDS → EDS/l-EDS
@@ -192,6 +197,54 @@ edsparser-genpatterns -i data.leds -o patterns.txt -c 500 -l 15
 
 **Output:**
 Plain text file with one pattern per line (ACGT alphabet).
+
+### genrandomeds - Random EDS Generation
+
+Generate synthetic EDS files with controlled variability for testing and benchmarking:
+
+```bash
+# Generate 100 MB EDS with 10% variability
+genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+
+# Generate l-EDS with minimum context length
+genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds
+
+# High variability with more alternatives per variant
+genrandomeds --ref-size-mb 10 --variability 0.20 \
+  --min-alternatives 3 --max-alternatives 6 -o high_var.eds
+
+# Reproducible generation with seed
+genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
+```
+
+**Options:**
+- `--ref-size-mb` - Reference size in megabytes (required, 1 MB = 1,000,000 bp)
+- `-v, --variability` - Fraction of positions with variants (default: 0.10 = 10%)
+- `--min-alternatives` - Minimum strings per degenerate symbol (default: 2)
+- `--max-alternatives` - Maximum strings per degenerate symbol (default: 4)
+- `--variant-length-max` - Maximum indel length in bp (default: 10)
+- `--snp-ratio` - Fraction of variants that are SNPs vs indels (default: 0.70)
+- `--alphabet` - Character alphabet for sequence generation (default: "ACGT")
+- `--min-context` - Minimum context between variants for l-EDS compliance (default: 0 = disabled)
+- `--seed` - Random seed for reproducibility (optional)
+- `-o, --output` - Output EDS file (required)
+
+**Features:**
+- Automatically generates `.seds` (source) file alongside `.eds` file
+- **Coverage guarantee**: Every alternative in every degenerate symbol is used by at least one path
+- Number of paths (samples) automatically calculated as `max(max_alternatives, 3)`
+- Generates realistic variation: SNPs, insertions, and deletions
+- Progress reporting and performance metrics
+
+**Output:**
+- `output.eds` - Random EDS file with controlled variability
+- `output.seds` - Source tracking file with path assignments
+
+**Example Use Cases:**
+- **Benchmarking**: Generate large synthetic datasets for performance testing
+- **Testing**: Create controlled test cases with specific variation patterns
+- **Simulation**: Model sequence variation with adjustable mutation rates
+- **Validation**: Verify tools work correctly with various EDS characteristics
 
 ## File Formats
 
