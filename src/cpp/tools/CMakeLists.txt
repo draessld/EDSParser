@@ -18,6 +18,10 @@ target_link_libraries(edsparser-stats edsparser_lib ${Boost_LIBRARIES} ${SDSL_LI
 add_executable(edsparser-genpatterns genpatterns.cpp)
 target_link_libraries(edsparser-genpatterns edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
 
+# Generate random EDS tool
+add_executable(genrandomeds genrandomeds.cpp)
+target_link_libraries(genrandomeds edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
+
 # Install targets
 install(TARGETS
     eds2leds
@@ -25,5 +29,6 @@ install(TARGETS
     vcf2eds
     edsparser-stats
     edsparser-genpatterns
+    genrandomeds
     RUNTIME DESTINATION bin
 )
