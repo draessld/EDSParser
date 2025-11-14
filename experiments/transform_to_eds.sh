@@ -65,7 +65,7 @@ OPTIONS:
   --input-dir DIR     Input directory name (default: same as format)
   --pattern PATTERN   File pattern to process (default: "*")
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
-  --reference FILE    Reference FASTA (required for VCF input)
+  --reference FILE    Reference FASTA for VCF (auto-detected if <vcf_name>.{fasta,fa,fna} exists)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show this help message
@@ -74,8 +74,14 @@ EXAMPLES:
   # MSA experiment (SARS-CoV-2)
   $0 --dataset SARS_cov2 --format msa
 
-  # VCF experiment with reference
-  $0 --dataset human_chr1 --format vcf --reference ref.fasta
+  # VCF experiment (auto-detects reference if chr21.fasta exists)
+  $0 --dataset human_data --format vcf
+
+  # VCF with explicit reference
+  $0 --dataset human_chr1 --format vcf --reference genome.fasta
+
+  # VCF with custom lengths and pattern
+  $0 --dataset vcf_data --format vcf --pattern "chr*.vcf" --lengths 5,10,15
 
   # EDS to l-EDS transformation
   $0 --dataset precomputed --format eds
@@ -84,7 +90,7 @@ EXAMPLES:
   $0 --dataset SARS_cov2 --format msa --lengths 2,4,8,16
 
   # Process specific files
-  $0 --dataset SARS_cov2 --format msa --pattern "20*.msa"
+  $0 --dataset SARS_cov2 --format msa --pattern "20*"
 
 DIRECTORY STRUCTURE:
   datasets/DATASET_NAME/
@@ -201,9 +207,28 @@ transform_to_eds() {
                 > "$log_output" 2>&1
             ;;
         vcf)
+            # Auto-detect reference if not provided
+            local reference_file="$REFERENCE_FASTA"
+            if [[ -z "$reference_file" ]]; then
+                local input_dir=$(dirname "$input_file")
+                for ext in fasta fa fna; do
+                    local candidate="${input_dir}/${basename}.${ext}"
+                    if [[ -f "$candidate" ]]; then
+                        reference_file="$candidate"
+                        log_info "Auto-detected reference: $(basename $reference_file)"
+                        break
+                    fi
+                done
+
+                if [[ -z "$reference_file" ]]; then
+                    log_error "No reference file found for $basename (tried: .fasta, .fa, .fna)"
+                    return 1
+                fi
+            fi
+
             $VCF2EDS_TOOL \
                 --input "$input_file" \
-                --reference "$REFERENCE_FASTA" \
+                --reference "$reference_file" \
                 --output "$eds_output" \
                 --sources "$seds_output" \
                 > "$log_output" 2>&1

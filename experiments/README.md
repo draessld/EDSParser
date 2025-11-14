@@ -50,8 +50,14 @@ The **transform_to_eds.sh** script supports MSA, VCF, and EDS input formats:
 # Custom length values
 ./transform_to_eds.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
 
-# VCF experiment (with reference genome)
-./transform_to_eds.sh --dataset human_chr1 --format vcf --reference ref.fasta
+# VCF experiment (auto-detects reference if chr21.fasta exists)
+./transform_to_eds.sh --dataset human_chr1 --format vcf
+
+# VCF with explicit reference
+./transform_to_eds.sh --dataset human_data --format vcf --reference genome.fasta
+
+# VCF with custom lengths and pattern
+./transform_to_eds.sh --dataset vcf_data --format vcf --pattern "chr*.vcf" --lengths 5,10,15
 
 # EDS to l-EDS transformation
 ./transform_to_eds.sh --dataset precomputed --format eds
@@ -151,7 +157,7 @@ Options:
   --input-dir DIR     Input directory name (default: same as format)
   --pattern PATTERN   File pattern to process (default: "*")
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
-  --reference FILE    Reference FASTA (required for VCF input)
+  --reference FILE    Reference FASTA for VCF (auto-detected if <vcf_name>.{fasta,fa,fna} exists)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show help message
