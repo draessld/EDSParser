@@ -242,7 +242,7 @@ transform_to_eds() {
         local seds_size=$(get_file_size "$seds_output")
 
         log_success "Created $basename.eds (${elapsed}s)"
-        echo "$input_size,$output_size,$seds_size,$elapsed"
+        echo "$output_size,$seds_size,$elapsed"
         return 0
     else
         log_error "Failed to transform $basename"
@@ -330,7 +330,7 @@ process_file() {
         if eds_stats=$(transform_to_eds "$input_file" "$dataset_path"); then
             stats_row="${stats_row},${eds_stats}"
         else
-            stats_row="${stats_row},0,0,0,0"
+            stats_row="${stats_row},0,0,0"
             FAILED_FILES+=("$basename (EDS)")
             ((FAILURE_COUNT++))
             return
