@@ -1,0 +1,9 @@
+##fileformat=VCFv4.2
+##reference=test_cnv_inv.fa
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE1	SAMPLE2	SAMPLE3
+chr1	10	.	ACGT	<CN0>	99	PASS	.	GT	1|1	0|1	0|0
+chr1	20	.	ATG	<CN2>	99	PASS	.	GT	0|1	1|0	0|0
+chr1	30	.	GCTA	<CN3>	99	PASS	.	GT	0|0	1|1	0|1
+chr1	40	.	TGCA	<INV>	99	PASS	.	GT	1|0	0|1	1|1
+chr1	50	.	AAGG	<CN1>	99	PASS	.	GT	0|0	0|1	1|0
+chr1	60	.	T	<CN0>,<INV>	99	PASS	.	GT	0|1	1|2	2|0

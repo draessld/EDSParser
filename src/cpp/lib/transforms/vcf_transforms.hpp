@@ -44,11 +44,13 @@ struct VCFStats {
  * - SNPs and small indels
  * - Simple deletions (<DEL>)
  * - Simple insertions (<INS>)
+ * - Inversions (<INV>)
+ * - Copy number variations (<CN0>, <CN1>, <CN2>, etc.)
  * - Multi-allelic sites (multiple ALT alleles)
  *
  * Skips with warnings:
  * - Overlapping variants
- * - Complex structural variants (<INV>, <CN*>, mobile elements)
+ * - Complex structural variants (translocations, mobile elements, etc.)
  * - Malformed VCF lines
  *
  * @param vcf_stream Input stream containing VCF file

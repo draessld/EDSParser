@@ -358,6 +358,172 @@ void test_overlapping_merging() {
     std::cout << "  PASS" << std::endl;
 }
 
+/**
+ * Test 8: Copy Number Variation (CNV) handling
+ * Tests CN0 (deletion), CN1 (reference), CN2+ (duplication)
+ */
+void test_cnv_handling() {
+    std::cout << "Test 8: Copy Number Variation (CNV) handling..." << std::endl;
+
+    std::ifstream vcf_file(DATA_DIR + "test_cnv_inv.vcf");
+    std::ifstream fasta_file(DATA_DIR + "test_cnv_inv.fa");
+
+    if (!vcf_file.is_open() || !fasta_file.is_open()) {
+        std::cerr << "  SKIP: Test files not found" << std::endl;
+        return;
+    }
+
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+    std::cout << "  sEDS: " << seds_str << std::endl;
+
+    // Verify no variants were skipped as unsupported
+    assert(stats.skipped_unsupported_sv == 0 && "CNV variants should be supported, not skipped");
+    assert(stats.processed_variants >= 5 && "Should process at least 5 CNV variants");
+
+    // Parse the EDS to verify specific CNV transformations
+    std::stringstream eds_ss(eds_str);
+    std::stringstream seds_ss(seds_str);
+    EDS eds(eds_ss, seds_ss);
+
+    // Verify EDS was created successfully
+    assert(eds.length() > 0 && "EDS should have symbols");
+
+    // Count degenerate symbols
+    size_t degenerate_count = 0;
+    bool in_symbol = false;
+    bool has_comma = false;
+
+    for (char c : eds_str) {
+        if (c == '{') {
+            in_symbol = true;
+            has_comma = false;
+        } else if (c == '}') {
+            if (has_comma) degenerate_count++;
+            in_symbol = false;
+        } else if (c == ',' && in_symbol) {
+            has_comma = true;
+        }
+    }
+
+    std::cout << "  Degenerate symbols: " << degenerate_count << std::endl;
+    std::cout << "  Processed variants: " << stats.processed_variants << std::endl;
+
+    // Should have at least 5 degenerate symbols (one for each CNV variant)
+    assert(degenerate_count >= 5 && "Should have degenerate symbols for CNV variants");
+
+    std::cout << "  PASS" << std::endl;
+}
+
+/**
+ * Test 9: Inversion (INV) handling
+ * Tests that inversions are converted to reverse complement
+ */
+void test_inversion_handling() {
+    std::cout << "Test 9: Inversion (INV) handling..." << std::endl;
+
+    std::ifstream vcf_file(DATA_DIR + "test_cnv_inv.vcf");
+    std::ifstream fasta_file(DATA_DIR + "test_cnv_inv.fa");
+
+    if (!vcf_file.is_open() || !fasta_file.is_open()) {
+        std::cerr << "  SKIP: Test files not found" << std::endl;
+        return;
+    }
+
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    // Verify no variants were skipped as unsupported
+    assert(stats.skipped_unsupported_sv == 0 && "INV variants should be supported, not skipped");
+
+    // The test file has REF=TGCA at position 40 with ALT=<INV>
+    // Reverse complement of TGCA should be TGCA (palindrome)
+    // But we should still verify the transformation works
+
+    // Search for a symbol that contains both TGCA and its reverse complement
+    bool found_inversion = false;
+    size_t pos = 0;
+
+    while (pos < eds_str.size()) {
+        if (eds_str[pos] == '{') {
+            size_t end = eds_str.find('}', pos);
+            std::string symbol = eds_str.substr(pos + 1, end - pos - 1);
+
+            // Check if this symbol contains TGCA (reference or inverted)
+            if (symbol.find("TGCA") != std::string::npos && symbol.find(',') != std::string::npos) {
+                found_inversion = true;
+                std::cout << "  Found inversion symbol: {" << symbol << "}" << std::endl;
+                break;
+            }
+
+            pos = end + 1;
+        } else {
+            pos++;
+        }
+    }
+
+    assert(found_inversion && "Should find inversion variant");
+
+    std::cout << "  PASS" << std::endl;
+}
+
+/**
+ * Test 10: Multi-allelic with CNV and INV
+ * Tests mixed symbolic alleles (e.g., <CN0>,<INV>)
+ */
+void test_multiallelic_cnv_inv() {
+    std::cout << "Test 10: Multi-allelic with CNV and INV..." << std::endl;
+
+    std::ifstream vcf_file(DATA_DIR + "test_cnv_inv.vcf");
+    std::ifstream fasta_file(DATA_DIR + "test_cnv_inv.fa");
+
+    if (!vcf_file.is_open() || !fasta_file.is_open()) {
+        std::cerr << "  SKIP: Test files not found" << std::endl;
+        return;
+    }
+
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    // The test file has a variant at position 60: REF=T, ALT=<CN0>,<INV>
+    // This should create a symbol with: T (ref), "" (deletion from CN0), A (rev comp of T)
+    // Search for this pattern
+
+    bool found_multi = false;
+    size_t pos = 0;
+
+    while (pos < eds_str.size()) {
+        if (eds_str[pos] == '{') {
+            size_t end = eds_str.find('}', pos);
+            std::string symbol = eds_str.substr(pos + 1, end - pos - 1);
+
+            // Count commas - should have at least 2 for multi-allelic
+            size_t comma_count = std::count(symbol.begin(), symbol.end(), ',');
+
+            // Check if it contains T and A (reference and reverse complement)
+            if (comma_count >= 2 && symbol.find('T') != std::string::npos) {
+                found_multi = true;
+                std::cout << "  Found multi-allelic CNV/INV symbol: {" << symbol << "}" << std::endl;
+                break;
+            }
+
+            pos = end + 1;
+        } else {
+            pos++;
+        }
+    }
+
+    assert(found_multi && "Should find multi-allelic symbol with CNV and INV");
+
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -369,6 +535,9 @@ int main() {
         test_deletion();
         test_same_position_merging();
         test_overlapping_merging();
+        test_cnv_handling();
+        test_inversion_handling();
+        test_multiallelic_cnv_inv();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

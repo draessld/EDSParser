@@ -133,6 +133,34 @@ std::string read_fasta_region(std::istream& fasta_stream,
 // ============================================================================
 
 /**
+ * Reverse complement a DNA sequence.
+ * Used for handling inversions (INV).
+ */
+std::string reverse_complement(const std::string& seq) {
+    std::string result;
+    result.reserve(seq.size());
+
+    // Complement mapping
+    auto complement = [](char base) -> char {
+        switch (std::toupper(base)) {
+            case 'A': return 'T';
+            case 'T': return 'A';
+            case 'C': return 'G';
+            case 'G': return 'C';
+            case 'N': return 'N';
+            default: return base;  // Keep other characters as-is
+        }
+    };
+
+    // Reverse and complement
+    for (auto it = seq.rbegin(); it != seq.rend(); ++it) {
+        result += complement(*it);
+    }
+
+    return result;
+}
+
+/**
  * Parse ALT field to handle special symbolic alleles and multi-allelic sites.
  * Adapted from old VCFParser::check_alt()
  *
@@ -161,8 +189,37 @@ std::vector<std::string> parse_alt_field(const std::string& alt_field,
                 // VCF: REF=A, ALT=<INS> means insert the REF sequence
                 alts.push_back(ref);
             }
+            else if (sv_type == "INV") {
+                // Inversion - reverse complement of the reference
+                alts.push_back(reverse_complement(ref));
+            }
+            else if (sv_type.substr(0, 2) == "CN") {
+                // Copy number variation: CN<N> where N is the number of copies
+                try {
+                    int copy_number = std::stoi(sv_type.substr(2));
+
+                    if (copy_number == 0) {
+                        // CN0 = deletion (0 copies)
+                        alts.push_back("");
+                    } else if (copy_number == 1) {
+                        // CN1 = reference (1 copy, no change)
+                        // This is technically the reference allele, but we'll include it
+                        alts.push_back(ref);
+                    } else {
+                        // CN2+ = multiple copies (repeat the reference)
+                        std::string repeated;
+                        repeated.reserve(ref.size() * copy_number);
+                        for (int i = 0; i < copy_number; i++) {
+                            repeated += ref;
+                        }
+                        alts.push_back(repeated);
+                    }
+                } catch (const std::exception& e) {
+                    throw std::runtime_error("Invalid copy number format: " + sv_type);
+                }
+            }
             else {
-                // Unsupported SV type (INV, CN*, mobile elements, etc.)
+                // Unsupported SV type (mobile elements, translocations, etc.)
                 throw std::runtime_error("Unsupported structural variant type: " + sv_type);
             }
         }
