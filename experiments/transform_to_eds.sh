@@ -51,6 +51,22 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
+resolve_dataset_path() {
+    local input="$1"
+
+    # Check if input is an absolute path
+    if [[ "$input" == /* ]]; then
+        echo "$input"
+    # Check if input is a relative path (contains /)
+    elif [[ "$input" == */* ]]; then
+        # Convert to absolute path
+        echo "$(cd "$(dirname "$input")" 2>/dev/null && pwd)/$(basename "$input")"
+    else
+        # Treat as dataset name, use datasets/ prefix
+        echo "datasets/$input"
+    fi
+}
+
 show_help() {
     cat << EOF
 Usage: $0 --dataset DATASET --format FORMAT [OPTIONS]
@@ -58,7 +74,7 @@ Usage: $0 --dataset DATASET --format FORMAT [OPTIONS]
 Universal experiment runner for MSA, VCF, and EDS inputs.
 
 REQUIRED ARGUMENTS:
-  --dataset DATASET   Dataset name (e.g., "SARS_cov2")
+  --dataset DATASET   Dataset name or path (e.g., "SARS_cov2" or "/data/my_dataset")
   --format FORMAT     Input format: "msa", "vcf", or "eds"
 
 OPTIONS:
@@ -419,7 +435,8 @@ main() {
         exit 1
     fi
 
-    local dataset_path="datasets/$DATASET_NAME"
+    # Resolve dataset path (supports both names and paths)
+    local dataset_path=$(resolve_dataset_path "$DATASET_NAME")
 
     if [[ ! -d "$dataset_path" ]]; then
         log_error "Dataset not found: $dataset_path"

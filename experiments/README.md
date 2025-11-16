@@ -5,6 +5,7 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 ## Available Scripts
 
 - **[transform_to_eds.sh](transform_to_eds.sh)** - Transform MSA/VCF/EDS to EDS/l-EDS formats
+- **[generate_random_dataset.sh](generate_random_dataset.sh)** - Generate synthetic random EDS datasets
 - **[generate_patterns.sh](generate_patterns.sh)** - Generate random patterns from EDS files for benchmarking
 - **[generate_statistics.sh](generate_statistics.sh)** - Generate detailed statistics from EDS/l-EDS files
 - **[clean_experiments.sh](clean_experiments.sh)** - Universal cleanup script
@@ -14,6 +15,7 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 ```
 experiments/
 ├── transform_to_eds.sh         # Transform MSA/VCF/EDS to EDS/l-EDS
+├── generate_random_dataset.sh  # Generate synthetic random EDS datasets
 ├── generate_patterns.sh        # Pattern generation script
 ├── generate_statistics.sh      # Statistics generation script
 ├── clean_experiments.sh        # Cleanup script
@@ -32,7 +34,59 @@ experiments/
         └── statistics.csv      # Aggregated metrics
 ```
 
+## Dataset Path Support
+
+All scripts support both **dataset names** and **absolute/relative paths**:
+
+- **Dataset name**: `--dataset SARS_cov2` → Uses `datasets/SARS_cov2/`
+- **Absolute path**: `--dataset /data/experiments/my_dataset` → Uses `/data/experiments/my_dataset/`
+- **Relative path**: `--dataset ../my_datasets/test` → Resolves to absolute path
+
+This allows you to organize datasets anywhere on your filesystem.
+
 ## Quick Start
+
+### Generate Random Dataset
+
+Generate synthetic EDS datasets with controlled parameters for benchmarking:
+
+```bash
+# Generate small test dataset (10 files × 1 MB, default parameters)
+./generate_random_dataset.sh --dataset synthetic_test
+
+# Generate medium dataset with high variability (20 files × 5 MB, 20% variants)
+./generate_random_dataset.sh --dataset synthetic_medium \
+  --num-files 20 \
+  --ref-size-mb 5 \
+  --variability 0.20
+
+# Generate large dataset with custom parameters
+./generate_random_dataset.sh --dataset synthetic_large \
+  --num-files 50 \
+  --ref-size-mb 10 \
+  --variability 0.15 \
+  --min-alternatives 2 \
+  --max-alternatives 6 \
+  --variant-length-max 20
+
+# Generate dataset optimized for l-EDS (minimum context enforced during generation)
+./generate_random_dataset.sh --dataset synthetic_leds \
+  --min-context 10 \
+  --lengths 10,20,30
+
+# Generate reproducible dataset with fixed seed
+./generate_random_dataset.sh --dataset synthetic_reproducible \
+  --seed 42 \
+  --num-files 5
+
+# Generate without l-EDS transformations (faster)
+./generate_random_dataset.sh --dataset synthetic_raw --no-leds
+```
+
+**Note:** The `genrandomeds` tool must be installed. If not available:
+```bash
+cd .. && ./INSTALL.sh
+```
 
 ### Transform to EDS/l-EDS
 
@@ -168,6 +222,48 @@ Remove all generated outputs while preserving input data:
 ```
 
 ## Command-Line Options
+
+### generate_random_dataset.sh
+
+```bash
+./generate_random_dataset.sh --dataset DATASET [OPTIONS]
+
+Required:
+  --dataset DATASET       Dataset name (e.g., "synthetic_1MB")
+
+Dataset Parameters:
+  --num-files N           Number of EDS files to generate (default: 10)
+  --ref-size-mb SIZE      Reference size in MB per file (default: 1)
+  --variability FRAC      Fraction of variant positions, 0.0-1.0 (default: 0.10 = 10%)
+
+Variant Parameters:
+  --min-alternatives N    Minimum alternatives per variant (default: 2)
+  --max-alternatives N    Maximum alternatives per variant (default: 4)
+  --variant-length-max N  Maximum indel length in bp (default: 10)
+  --snp-ratio FRAC        Fraction of SNPs vs indels, 0.0-1.0 (default: 0.7 = 70%)
+  --alphabet STR          Sequence alphabet (default: "ACGT")
+
+L-EDS Parameters:
+  --min-context N         Minimum context between variants (default: 0, disabled)
+  --lengths L1,L2,...     Length values for l-EDS generation (default: "3,5,10,15,20")
+  --no-leds               Don't generate l-EDS transformations
+
+Other Options:
+  --seed N                Random seed for first file (incremented for each file)
+  --force                 Overwrite existing files
+  -h, --help              Show help message
+```
+
+**Key Parameters:**
+- **variability**: Controls density of variants (0.10 = 10% of positions have variants)
+- **min/max-alternatives**: Range of alternative strings per degenerate symbol
+- **variant-length-max**: Maximum length of insertions/deletions
+- **snp-ratio**: Balance between SNPs (0.7 = 70%) and indels (0.3 = 30%)
+- **min-context**: If set, ensures minimum spacing between variants (useful for l-EDS compliance)
+
+**Reproducibility:**
+- Use `--seed` to generate reproducible datasets
+- Each file uses seed + file_index (e.g., seed 100 → files with seeds 100, 101, 102...)
 
 ### transform_to_eds.sh
 
