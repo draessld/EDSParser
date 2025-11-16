@@ -29,6 +29,7 @@ STATS_TOOL="edsparser-stats"
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 declare -a FAILED_FILES
+declare -a OUTPUT_FILES
 
 # Helper functions
 log_info() {
@@ -61,9 +62,10 @@ OPTIONS:
                       Examples: "eds", "3_leds,5_leds", "eds,3_leds,5_leds,10_leds"
   --pattern PATTERN   File pattern to process (default: "*")
   --format FORMAT     Output format: "table", "json", or "csv" (default: "table")
-  --output FILE       Save output to file (default: stdout)
+  --output FILE       Custom output filename (default: auto-generate per directory)
+                      Auto-generated: datasets/DATASET/<dir_name>_statistics.<ext>
   --full              Use FULL mode (loads all strings, more detailed)
-  --force             Overwrite existing output file
+  --force             Overwrite existing output files
   -h, --help          Show this help message
 
 OUTPUT FORMATS:
@@ -72,23 +74,24 @@ OUTPUT FORMATS:
   csv     - CSV format (one row per file, requires 'jq' for full parsing)
 
 EXAMPLES:
-  # Generate table statistics for all EDS files
-  $0 --dataset SARS_cov2
+  # Generate CSV statistics for all EDS files (auto-saves to datasets/SARS_cov2/eds_statistics.csv)
+  $0 --dataset SARS_cov2 --format csv
 
-  # Generate statistics for multiple directories
-  $0 --dataset SARS_cov2 --input-dirs "eds,3_leds,5_leds,10_leds"
+  # Generate statistics for multiple directories (creates one file per directory)
+  $0 --dataset SARS_cov2 --input-dirs "eds,3_leds,5_leds,10_leds" --format csv
+  # Creates: eds_statistics.csv, 3_leds_statistics.csv, 5_leds_statistics.csv, 10_leds_statistics.csv
 
-  # Generate JSON statistics and save to file
-  $0 --dataset SARS_cov2 --format json --output stats.json
+  # Generate JSON statistics (auto-saves to datasets/SARS_cov2/eds_statistics.json)
+  $0 --dataset SARS_cov2 --format json
 
-  # Generate CSV statistics from l-EDS files
-  $0 --dataset SARS_cov2 --input-dirs "3_leds" --format csv --output leds_stats.csv
+  # Generate CSV statistics with custom output filename (all dirs in one file)
+  $0 --dataset SARS_cov2 --input-dirs "eds,3_leds" --format csv --output all_stats.csv
 
   # Generate statistics from specific files
-  $0 --dataset SARS_cov2 --pattern "20*"
+  $0 --dataset SARS_cov2 --pattern "20*" --format csv
 
   # Use FULL mode for detailed statistics
-  $0 --dataset SARS_cov2 --full
+  $0 --dataset SARS_cov2 --format csv --full
 
 CSV OUTPUT COLUMNS:
   file, input_dir, size_bytes, storage_mode, n_symbols, N_characters, m_strings,
@@ -176,7 +179,7 @@ generate_stats() {
         cmd="$cmd -s \"$seds_file\""
     fi
 
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_FORMAT" == "json" ]] || [[ "$OUTPUT_FORMAT" == "csv" ]]; then
         cmd="$cmd --json"
     fi
 
@@ -229,8 +232,11 @@ print_summary() {
     fi
 
     log_info "Output format: $OUTPUT_FORMAT"
-    if [[ -n "$OUTPUT_FILE" ]]; then
-        log_info "Output saved to: $OUTPUT_FILE"
+    if [[ ${#OUTPUT_FILES[@]} -gt 0 ]]; then
+        log_info "Output files created (${#OUTPUT_FILES[@]}):"
+        for output in "${OUTPUT_FILES[@]}"; do
+            log_info "  - $output"
+        done
     fi
     echo "" >&2
 }
@@ -251,13 +257,6 @@ main() {
         exit 1
     fi
 
-    # Check if output file exists
-    if [[ -n "$OUTPUT_FILE" ]] && [[ -f "$OUTPUT_FILE" ]] && [[ "$FORCE_OVERWRITE" == "false" ]]; then
-        log_error "Output file already exists: $OUTPUT_FILE"
-        log_error "Use --force to overwrite"
-        exit 1
-    fi
-
     log_info "Starting statistics generation"
     log_info "Dataset: $DATASET_NAME"
     log_info "Input directories: $INPUT_DIRS"
@@ -272,23 +271,13 @@ main() {
     # Split input directories
     IFS=',' read -ra DIR_ARRAY <<< "$INPUT_DIRS"
 
-    # Prepare output file if specified
-    local output_redirect=""
-    if [[ -n "$OUTPUT_FILE" ]]; then
-        > "$OUTPUT_FILE"  # Create/truncate file
-        output_redirect="> \"$OUTPUT_FILE\""
-        log_info "Output will be saved to: $OUTPUT_FILE"
-        echo ""
-    fi
-
-    # Print CSV header if needed
-    if [[ "$OUTPUT_FORMAT" == "csv" ]]; then
-        if [[ -n "$OUTPUT_FILE" ]]; then
-            print_csv_header > "$OUTPUT_FILE"
-        else
-            print_csv_header
-        fi
-    fi
+    # Determine file extension based on format
+    local file_ext
+    case "$OUTPUT_FORMAT" in
+        json) file_ext="json" ;;
+        csv)  file_ext="csv" ;;
+        *)    file_ext="txt" ;;
+    esac
 
     # Process each directory
     for input_dir in "${DIR_ARRAY[@]}"; do
@@ -301,7 +290,26 @@ main() {
             continue
         fi
 
+        # Determine output file for this directory
+        local dir_output_file
+        if [[ -n "$OUTPUT_FILE" ]]; then
+            # User specified a custom output file - use it for all directories
+            dir_output_file="$OUTPUT_FILE"
+        else
+            # Auto-generate filename: <dir_name>_statistics.<ext>
+            local dir_name=$(echo "$input_dir" | tr '/' '_')  # Replace slashes with underscores
+            dir_output_file="${dataset_path}/${dir_name}_statistics.${file_ext}"
+        fi
+
+        # Check if output file exists
+        if [[ -f "$dir_output_file" ]] && [[ "$FORCE_OVERWRITE" == "false" ]]; then
+            log_warning "Output file already exists: $dir_output_file (skipping directory)"
+            log_warning "Use --force to overwrite"
+            continue
+        fi
+
         log_info "Processing directory: $input_dir"
+        log_info "Output file: $dir_output_file"
         echo ""
 
         # Find EDS/l-EDS files
@@ -322,15 +330,21 @@ main() {
         log_info "Found ${#found_files[@]} file(s) in $input_dir"
         echo ""
 
+        # Create/truncate output file
+        > "$dir_output_file"
+
+        # Print CSV header if needed
+        if [[ "$OUTPUT_FORMAT" == "csv" ]]; then
+            print_csv_header > "$dir_output_file"
+        fi
+
         # Process each file
         for eds_file in "${found_files[@]}"; do
-            if [[ -n "$OUTPUT_FILE" ]]; then
-                generate_stats "$eds_file" "$dataset_path" "$input_dir" >> "$OUTPUT_FILE"
-            else
-                generate_stats "$eds_file" "$dataset_path" "$input_dir"
-            fi
+            generate_stats "$eds_file" "$dataset_path" "$input_dir" >> "$dir_output_file"
         done
 
+        log_success "Saved statistics to: $dir_output_file"
+        OUTPUT_FILES+=("$dir_output_file")
         echo ""
     done
 

@@ -79,6 +79,15 @@ Generate random patterns from EDS files for benchmarking:
 
 # Generate from specific files
 ./generate_patterns.sh --dataset SARS_cov2 --pattern "20*"
+
+# Generate multiple pattern sets with different counts
+./generate_patterns.sh --dataset SARS_cov2 --counts 100,500,1000 --length 10
+
+# Generate multiple pattern sets with different lengths
+./generate_patterns.sh --dataset SARS_cov2 --count 100 --lengths 10,20,30
+
+# Generate all combinations: directories × counts × lengths
+./generate_patterns.sh --dataset SARS_cov2 --input-dirs eds,3_leds --counts 100,500 --lengths 10,20
 ```
 
 **Output:** Patterns are organized in folders inside the input directory:
@@ -87,29 +96,45 @@ Generate random patterns from EDS files for benchmarking:
 - `3_leds/patterns_1000_20/` - 1000 patterns of length 20 from l-EDS (l=3)
 - Each pattern folder contains `.patterns` files (one per input file)
 
+**Batch Generation:** Use `--counts` and `--lengths` to generate multiple combinations:
+- `--counts 100,500,1000 --length 10` creates 3 folders with different pattern counts
+- `--count 100 --lengths 10,20,30` creates 3 folders with different pattern lengths
+- `--counts 100,500 --lengths 10,20` creates 4 folders (2×2 combinations)
+- `--input-dirs eds,3_leds,5_leds` processes multiple directories
+
 ### Generate Statistics
 
 Generate detailed statistics from EDS/l-EDS files:
 
 ```bash
-# Display statistics for all EDS files (table format)
+# Generate CSV statistics (auto-saves to datasets/SARS_cov2/eds_statistics.csv)
+./generate_statistics.sh --dataset SARS_cov2 --format csv
+
+# Generate statistics for multiple directories (one file per directory)
+./generate_statistics.sh --dataset SARS_cov2 --input-dirs "eds,3_leds,5_leds,10_leds" --format csv
+# Creates: eds_statistics.csv, 3_leds_statistics.csv, 5_leds_statistics.csv, 10_leds_statistics.csv
+
+# Generate JSON statistics (auto-saves to datasets/SARS_cov2/eds_statistics.json)
+./generate_statistics.sh --dataset SARS_cov2 --format json
+
+# Custom output filename (all directories combined into one file)
+./generate_statistics.sh --dataset SARS_cov2 --input-dirs "eds,3_leds" --format csv --output all_stats.csv
+
+# Display statistics in table format (stdout)
 ./generate_statistics.sh --dataset SARS_cov2
 
-# Generate statistics from multiple directories
-./generate_statistics.sh --dataset SARS_cov2 --input-dirs "eds,3_leds,5_leds,10_leds"
-
-# Save statistics as JSON
-./generate_statistics.sh --dataset SARS_cov2 --format json --output stats.json
-
-# Generate CSV statistics (requires jq)
-./generate_statistics.sh --dataset SARS_cov2 --format csv --output stats.csv
-
 # Use FULL mode for detailed statistics
-./generate_statistics.sh --dataset SARS_cov2 --full
+./generate_statistics.sh --dataset SARS_cov2 --format csv --full
 
 # Generate statistics from specific files
-./generate_statistics.sh --dataset SARS_cov2 --pattern "20*"
+./generate_statistics.sh --dataset SARS_cov2 --pattern "20*" --format csv
 ```
+
+**Output Behavior:**
+- **Auto-generated files**: Without `--output`, creates one file per directory named `<dir_name>_statistics.<ext>`
+  - Example: `eds_statistics.csv`, `3_leds_statistics.csv`, etc.
+- **Custom output**: With `--output`, all directories are combined into the specified file
+- **File location**: Statistics files are saved in `datasets/DATASET_NAME/`
 
 **Output Formats:**
 - `table` - Human-readable format (default, displays to stdout)
@@ -169,16 +194,25 @@ Options:
 ./generate_patterns.sh --dataset DATASET [OPTIONS]
 
 Required:
-  --dataset DATASET   Dataset name (e.g., "SARS_cov2")
+  --dataset DATASET       Dataset name (e.g., "SARS_cov2")
 
 Options:
-  --input-dir DIR     Input directory name (default: "eds")
-  --pattern PATTERN   File pattern to process (default: "*")
-  --count N           Number of patterns per file (default: 100)
-  --length L          Pattern length (default: 10)
-  --force             Overwrite existing pattern files
-  -h, --help          Show help message
+  --input-dir DIR         Input directory name (default: "eds")
+  --input-dirs D1,D2,...  Multiple input directories (comma-separated)
+  --pattern PATTERN       File pattern to process (default: "*")
+  --count N               Number of patterns per file (default: 100)
+  --length L              Pattern length (default: 10)
+  --counts N1,N2,...      Multiple counts (comma-separated, e.g., "100,500,1000")
+  --lengths L1,L2,...     Multiple lengths (comma-separated, e.g., "10,20,30")
+  --force                 Overwrite existing pattern files
+  -h, --help              Show help message
 ```
+
+**Batch Processing:**
+- Use `--input-dirs` to process multiple directories
+- Use `--counts` to generate multiple pattern count variants
+- Use `--lengths` to generate multiple pattern length variants
+- Combinations create all permutations: dirs × counts × lengths
 
 ### generate_statistics.sh
 
@@ -193,11 +227,17 @@ Options:
                       Examples: "eds", "3_leds,5_leds", "eds,3_leds,5_leds,10_leds"
   --pattern PATTERN   File pattern to process (default: "*")
   --format FORMAT     Output format: "table", "json", or "csv" (default: "table")
-  --output FILE       Save output to file (default: stdout)
+  --output FILE       Custom output filename (default: auto-generate per directory)
+                      Auto-generated: datasets/DATASET/<dir_name>_statistics.<ext>
   --full              Use FULL mode (loads all strings, more detailed)
-  --force             Overwrite existing output file
+  --force             Overwrite existing output files
   -h, --help          Show help message
 ```
+
+**Auto-generated Output Files:**
+- Without `--output`: Creates one file per directory in `datasets/DATASET_NAME/`
+  - Format: `<dir_name>_statistics.<ext>` (e.g., `eds_statistics.csv`)
+- With `--output`: All directories are combined into the specified file
 
 ### clean_experiments.sh
 
