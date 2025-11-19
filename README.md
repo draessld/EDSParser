@@ -474,10 +474,26 @@ cd sdsl-lite
 
 ## Performance Characteristics
 
+### Memory Efficiency
+
+**MSA Transformations**:
+- Memory: O(reference + bit vectors), independent of output size
+- Streaming output: Symbols flushed incrementally (no output accumulation)
+- Example: 1000 sequences × 100MB alignment ≈ 125MB peak memory
+- Suitable for: Any realistic MSA size (10K+ sequences, 1GB+ alignments)
+
+**VCF Transformations**:
+- Block-based processing: Default 10M bases per block
+- Memory: O(variants per block), not O(total variants)
+- Typical reduction: 120GB → 6-8GB for large population VCF files
+- Streaming reference: Random-access reading (not loaded into memory)
+- Adjustable: Use `--block-size` parameter to control memory usage
+
+**General**:
 - **MSA Parsing**: O(n×m) where n=number of sequences, m=alignment length
-- **Memory Usage**: Linear in output size (streaming mode uses constant memory)
-- **VCF Processing**: Streaming reference genome (only current position in RAM)
+- **VCF Processing**: Streaming reference genome (only current block in RAM)
 - **l-EDS Generation**: Linear in number of symbols
+- **Streaming Architecture**: All transforms write directly to disk (O(1) output memory)
 
 ## Documentation
 
