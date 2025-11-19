@@ -20,22 +20,31 @@ namespace edsparser {
 /**
  * Parse MSA (Multiple Sequence Alignment) to EDS with source tracking.
  * Uses streaming approach - only reference sequence kept in memory.
+ * Writes directly to output streams for memory efficiency.
  *
  * @param msa_stream Input stream containing MSA in FASTA format (with gaps as '-')
- * @return Pair of (EDS string, sEDS source string)
+ * @param eds_out Output stream for EDS data
+ * @param seds_out Output stream for source tracking data
  */
-std::pair<std::string, std::string> parse_msa_to_eds_streaming(std::istream& msa_stream);
+void parse_msa_to_eds_streaming(
+    std::istream& msa_stream,
+    std::ostream& eds_out,
+    std::ostream& seds_out);
 
 /**
  * Parse MSA directly to l-EDS with source tracking.
  * Uses streaming approach with merging based on context length.
+ * Writes directly to output streams for memory efficiency.
  *
  * @param msa_stream Input stream containing MSA in FASTA format (with gaps as '-')
+ * @param eds_out Output stream for l-EDS data
+ * @param seds_out Output stream for source tracking data
  * @param context_length Minimum context length for l-EDS
- * @return Pair of (l-EDS string, sEDS source string)
  */
-std::pair<std::string, std::string> parse_msa_to_leds_streaming(
+void parse_msa_to_leds_streaming(
     std::istream& msa_stream,
+    std::ostream& eds_out,
+    std::ostream& seds_out,
     size_t context_length);
 
 } // namespace edsparser

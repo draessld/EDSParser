@@ -196,15 +196,16 @@ sdsl::bit_vector build_leds_boundaries(const sdsl::bit_vector& B,
 /**
  * Generate EDS or l-EDS string and sources from bit vectors.
  * Uses file seeking to read sequence data on-demand.
+ * Writes directly to output streams for memory efficiency.
  */
-std::pair<std::string, std::string> generate_output(
+void generate_output(
     std::istream& in,
     const MSAMetadata& meta,
     const sdsl::bit_vector& B,
-    const sdsl::bit_vector& H)
+    const sdsl::bit_vector& H,
+    std::ostream& eds_out,
+    std::ostream& seds_out)
 {
-    std::ostringstream eds_out;
-    std::ostringstream seds_out;
 
     // Build select support for H
     sdsl::bit_vector::select_1_type select_h(&H);
@@ -318,9 +319,11 @@ std::pair<std::string, std::string> generate_output(
         }
 
         eds_out << '}';
-    }
 
-    return {eds_out.str(), seds_out.str()};
+        // Flush output after each symbol to prevent memory accumulation
+        eds_out.flush();
+        seds_out.flush();
+    }
 }
 
 // ============================================================================
@@ -329,9 +332,13 @@ std::pair<std::string, std::string> generate_output(
 
 /**
  * Transform MSA to EDS (no merging) with source tracking.
- * Returns pair: (EDS string, sEDS string)
+ * Writes directly to output streams for memory efficiency.
  */
-std::pair<std::string, std::string> parse_msa_to_eds_streaming(std::istream& msa_stream) {
+void parse_msa_to_eds_streaming(
+    std::istream& msa_stream,
+    std::ostream& eds_out,
+    std::ostream& seds_out)
+{
     // Pass 1: Parse MSA and build variant bit vector
     auto [meta, B] = parse_msa_and_build_variant_bv(msa_stream);
 
@@ -341,15 +348,17 @@ std::pair<std::string, std::string> parse_msa_to_eds_streaming(std::istream& msa
     // Pass 3: Generate output
     msa_stream.clear();
     msa_stream.seekg(0);
-    return generate_output(msa_stream, meta, B, H);
+    generate_output(msa_stream, meta, B, H, eds_out, seds_out);
 }
 
 /**
  * Transform MSA to l-EDS (with merging) with source tracking.
- * Returns pair: (l-EDS string, sEDS string)
+ * Writes directly to output streams for memory efficiency.
  */
-std::pair<std::string, std::string> parse_msa_to_leds_streaming(
+void parse_msa_to_leds_streaming(
     std::istream& msa_stream,
+    std::ostream& eds_out,
+    std::ostream& seds_out,
     size_t context_length)
 {
     // Pass 1: Parse MSA and build variant bit vector
@@ -361,7 +370,7 @@ std::pair<std::string, std::string> parse_msa_to_leds_streaming(
     // Pass 3: Generate output
     msa_stream.clear();
     msa_stream.seekg(0);
-    return generate_output(msa_stream, meta, B, H);
+    generate_output(msa_stream, meta, B, H, eds_out, seds_out);
 }
 
 } // namespace edsparser

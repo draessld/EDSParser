@@ -30,7 +30,11 @@ void test_msa_to_eds() {
         "AGTC--TATATA\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [eds_str, seds_str] = parse_msa_to_eds_streaming(msa_stream);
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected outputs
     std::string expected_eds = "{AGTC}{,CC}{T}{C,A}{TATA}";
@@ -73,7 +77,11 @@ void test_msa_to_leds() {
         "AGTC--TATATA\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [leds_str, seds_str] = parse_msa_to_leds_streaming(msa_stream, 4);
+    std::ostringstream leds_out, seds_out;
+    parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, 4);
+
+    std::string leds_str = leds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected outputs
     std::string expected_leds = "{AGTC}{TC,CCTA,TA}{TATA}";
@@ -115,7 +123,11 @@ void test_msa_identical_sequences() {
         "AGTCTA\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [eds_str, seds_str] = parse_msa_to_eds_streaming(msa_stream);
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected: single common symbol
     std::string expected_eds = "{AGTCTA}";
@@ -148,7 +160,11 @@ void test_msa_single_variant() {
         "AGCC\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [eds_str, seds_str] = parse_msa_to_eds_streaming(msa_stream);
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected: {AG}{T,C}{C}
     std::string expected_eds = "{AG}{T,C}{C}";
@@ -181,7 +197,11 @@ void test_msa_gap_at_beginning() {
         "CCAGTC\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [eds_str, seds_str] = parse_msa_to_eds_streaming(msa_stream);
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected: {,CC}{AGTC}
     std::string expected_eds = "{,CC}{AGTC}";
@@ -211,7 +231,11 @@ void test_msa_gap_at_end() {
         "AGTCGG\n";
 
     std::istringstream msa_stream(msa_input);
-    auto [eds_str, seds_str] = parse_msa_to_eds_streaming(msa_stream);
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::string seds_str = seds_out.str();
 
     // Expected: {AGTC}{,GG}
     std::string expected_eds = "{AGTC}{,GG}";
@@ -243,7 +267,9 @@ void test_msa_multiple_context_lengths() {
     // Test with l=2
     {
         std::istringstream msa_stream(msa_input);
-        auto [leds_str, seds_str] = parse_msa_to_leds_streaming(msa_stream, 2);
+        std::ostringstream leds_out, seds_out;
+        parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, 2);
+        std::string leds_str = leds_out.str();
         std::cout << "  l=2: " << leds_str << "\n";
         // With l=2, middle variants should still merge
         // AGTC (len 4 >= 2, standalone), variants merge, TATA (len 4 >= 2, standalone)
@@ -252,7 +278,9 @@ void test_msa_multiple_context_lengths() {
     // Test with l=10
     {
         std::istringstream msa_stream(msa_input);
-        auto [leds_str, seds_str] = parse_msa_to_leds_streaming(msa_stream, 10);
+        std::ostringstream leds_out, seds_out;
+        parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, 10);
+        std::string leds_str = leds_out.str();
         std::cout << "  l=10: " << leds_str << "\n";
         // With l=10, AGTC (len 4 < 10, merge), TATA (len 4 < 10, merge)
         // Should result in fewer symbols

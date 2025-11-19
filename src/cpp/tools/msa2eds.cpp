@@ -119,19 +119,6 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Input: " << input_file << "\n";
 
-        // Perform transformation
-        std::string eds_str, seds_str;
-        if (create_leds) {
-            auto result = edsparser::parse_msa_to_leds_streaming(msa_in, context_length);
-            eds_str = result.first;
-            seds_str = result.second;
-        } else {
-            auto result = edsparser::parse_msa_to_eds_streaming(msa_in);
-            eds_str = result.first;
-            seds_str = result.second;
-        }
-        msa_in.close();
-
         // Determine output paths
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
@@ -159,20 +146,27 @@ int main(int argc, char** argv) {
                 : sources_file;
         }
 
-        // Write EDS output
+        // Open output streams
         std::ofstream eds_out(eds_path);
         if (!eds_out) {
             throw std::runtime_error("Failed to open output file: " + eds_path.string());
         }
-        eds_out << eds_str;
-        eds_out.close();
 
-        // Write sources output
         std::ofstream seds_out(seds_path);
         if (!seds_out) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());
         }
-        seds_out << seds_str;
+
+        // Perform transformation with streaming output
+        if (create_leds) {
+            edsparser::parse_msa_to_leds_streaming(msa_in, eds_out, seds_out, context_length);
+        } else {
+            edsparser::parse_msa_to_eds_streaming(msa_in, eds_out, seds_out);
+        }
+
+        // Close files
+        msa_in.close();
+        eds_out.close();
         seds_out.close();
 
         std::cout << "Transformation complete!\n";
