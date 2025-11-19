@@ -35,7 +35,31 @@ struct VCFStats {
 };
 
 /**
- * Parse VCF + FASTA reference to EDS with source tracking.
+ * Parse VCF + FASTA reference to EDS with source tracking (file stream output).
+ *
+ * Memory-efficient version that writes output directly to file streams.
+ * Recommended for large VCF files to avoid output accumulation in memory.
+ *
+ * @param vcf_stream Input stream containing VCF file
+ * @param fasta_stream Input stream containing reference FASTA
+ * @param eds_output Output stream for EDS (written incrementally per block)
+ * @param seds_output Output stream for sEDS (written incrementally per block)
+ * @param stats Optional pointer to VCFStats structure to receive statistics
+ * @param block_size Genomic window size in bases (0 = load all, default 10M)
+ */
+void parse_vcf_to_eds_streaming(
+    std::istream& vcf_stream,
+    std::istream& fasta_stream,
+    std::ostream& eds_output,
+    std::ostream& seds_output,
+    VCFStats* stats = nullptr,
+    size_t block_size = 10000000);
+
+/**
+ * Parse VCF + FASTA reference to EDS with source tracking (string return).
+ *
+ * Convenience wrapper that returns strings. For large files, prefer the
+ * file stream version to avoid memory accumulation.
  *
  * Source tracking: Sample-level (diploid samples contribute to one path).
  * Path IDs are 1-indexed, matching sample order in VCF.
@@ -62,7 +86,7 @@ struct VCFStats {
  * @param block_size Genomic window size in bases (0 = load all, default 10M)
  * @return Pair of (EDS string, sEDS source string)
  */
-std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
+std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
     VCFStats* stats = nullptr,

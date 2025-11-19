@@ -155,22 +155,7 @@ int main(int argc, char** argv) {
             std::cout << "  Block size: " << block_size << " bases\n";
         }
 
-        // Perform transformation with statistics tracking
-        edsparser::VCFStats stats;
-        std::string eds_str, seds_str;
-        if (create_leds) {
-            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats, block_size);
-            eds_str = result.first;
-            seds_str = result.second;
-        } else {
-            auto result = edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, &stats, block_size);
-            eds_str = result.first;
-            seds_str = result.second;
-        }
-        vcf_in.close();
-        fasta_in.close();
-
-        // Determine output paths
+        // Determine output paths first
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
 
@@ -197,20 +182,34 @@ int main(int argc, char** argv) {
                 : sources_file;
         }
 
-        // Write EDS output
+        // Open output files early
         std::ofstream eds_out(eds_path);
         if (!eds_out) {
             throw std::runtime_error("Failed to open output file: " + eds_path.string());
         }
-        eds_out << eds_str;
-        eds_out.close();
 
-        // Write sources output
         std::ofstream seds_out(seds_path);
         if (!seds_out) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());
         }
-        seds_out << seds_str;
+
+        // Perform transformation with statistics tracking
+        // Output written directly to files (memory-efficient for large VCF)
+        edsparser::VCFStats stats;
+
+        if (create_leds) {
+            // For l-EDS, still need strings (two-pass pipeline)
+            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats, block_size);
+            eds_out << result.first;
+            seds_out << result.second;
+        } else {
+            // For regular EDS, use streaming output (no memory accumulation!)
+            edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, eds_out, seds_out, &stats, block_size);
+        }
+
+        vcf_in.close();
+        fasta_in.close();
+        eds_out.close();
         seds_out.close();
 
         std::cout << "Transformation complete!\n";

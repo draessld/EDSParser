@@ -739,20 +739,18 @@ void generate_eds_from_variants(
 // ============================================================================
 
 /**
- * Parse VCF + FASTA to EDS with source tracking.
+ * Parse VCF + FASTA to EDS with source tracking (file stream output).
  */
-std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
+void parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
+    std::ostream& eds_output,
+    std::ostream& seds_output,
     VCFStats* stats,
     size_t block_size)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
-
-    // Output streams
-    std::ostringstream eds_output;
-    std::ostringstream seds_output;
 
     size_t n_samples = 0;
     size_t total_variant_groups = 0;
@@ -834,6 +832,10 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
                                     eds_output, seds_output,
                                     current_block_start, current_block_end);
 
+        // Flush output to disk after each block (prevent memory accumulation)
+        eds_output.flush();
+        seds_output.flush();
+
         // Count variant groups for statistics
         if (stats) {
             total_variant_groups += group_overlapping_variants(block_variants, fasta_stream, fasta_meta).size();
@@ -857,6 +859,28 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
         stats->variant_groups = total_variant_groups;
     }
 
+    // Final flush
+    eds_output.flush();
+    seds_output.flush();
+}
+
+/**
+ * Parse VCF + FASTA to EDS with source tracking (string return wrapper).
+ * For large files, prefer the file stream version to avoid memory accumulation.
+ */
+std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
+    std::istream& vcf_stream,
+    std::istream& fasta_stream,
+    VCFStats* stats,
+    size_t block_size)
+{
+    // Use stringstreams for backward compatibility
+    std::ostringstream eds_output;
+    std::ostringstream seds_output;
+
+    // Call file stream version
+    parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_output, seds_output, stats, block_size);
+
     return {eds_output.str(), seds_output.str()};
 }
 
@@ -872,7 +896,7 @@ std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     size_t block_size)
 {
     // Step 1: Generate EDS + sEDS
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, stats, block_size);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_stream, fasta_stream, stats, block_size);
 
     // Step 2: Create streams for transformation
     std::stringstream eds_input(eds_str);
