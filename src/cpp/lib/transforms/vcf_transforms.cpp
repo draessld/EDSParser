@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cctype>
+#include <cstdio>
+#include <filesystem>
 
 namespace edsparser {
 
@@ -108,7 +110,9 @@ std::string read_fasta_region(std::istream& fasta_stream,
         length = meta.seq_size - start_pos;
     }
 
-    std::ostringstream result;
+    // Pre-allocate string to avoid reallocations
+    std::string result;
+    result.reserve(length);
 
     // Calculate file position (accounting for newlines)
     std::streamoff file_offset = start_pos + (start_pos / meta.line_width);
@@ -120,12 +124,12 @@ std::string read_fasta_region(std::istream& fasta_stream,
     char c;
     while (chars_read < length && fasta_stream.get(c)) {
         if (c != '\n' && c != '\r') {
-            result << c;
+            result += c;  // More efficient than ostringstream::operator<<
             chars_read++;
         }
     }
 
-    return result.str();
+    return result;
 }
 
 // ============================================================================
@@ -616,8 +620,9 @@ std::vector<VariantGroup> group_overlapping_variants(
  * @param seds_out Output stream for sEDS
  * @param start_pos Starting position in reference (0-indexed)
  * @param end_pos Ending position in reference (0-indexed, exclusive)
+ * @return Number of variant groups created (for statistics)
  */
-void generate_eds_from_variants(
+size_t generate_eds_from_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     const std::vector<VCFVariant>& variants,
@@ -630,6 +635,7 @@ void generate_eds_from_variants(
 
     // Group overlapping variants
     std::vector<VariantGroup> groups = group_overlapping_variants(variants, fasta_stream, fasta_meta);
+    size_t num_groups = groups.size();
 
     size_t current_pos = start_pos;  // Start from provided position
 
@@ -732,6 +738,8 @@ void generate_eds_from_variants(
             seds_out << "{0}";
         }
     }
+
+    return num_groups;
 }
 
 // ============================================================================
@@ -756,8 +764,11 @@ void parse_vcf_to_eds_streaming(
     size_t total_variant_groups = 0;
 
     // If block_size is 0, use old behavior (load all variants)
+    // Otherwise, if sequence is shorter than block size, process as single block
     if (block_size == 0) {
-        block_size = fasta_meta.seq_size;  // Single block
+        block_size = fasta_meta.seq_size;  // Legacy mode: load all
+    } else if (fasta_meta.seq_size < block_size) {
+        block_size = fasta_meta.seq_size;  // Sequence smaller than block: process all
     }
 
     // Block-based processing
@@ -827,18 +838,18 @@ void parse_vcf_to_eds_streaming(
                       return a.pos < b.pos;
                   });
 
-        // Generate EDS for this block
-        generate_eds_from_variants(fasta_stream, fasta_meta, block_variants, n_samples,
-                                    eds_output, seds_output,
-                                    current_block_start, current_block_end);
+        // Generate EDS for this block and count groups
+        size_t block_groups = generate_eds_from_variants(fasta_stream, fasta_meta, block_variants, n_samples,
+                                                          eds_output, seds_output,
+                                                          current_block_start, current_block_end);
 
         // Flush output to disk after each block (prevent memory accumulation)
         eds_output.flush();
         seds_output.flush();
 
-        // Count variant groups for statistics
+        // Accumulate variant groups for statistics
         if (stats) {
-            total_variant_groups += group_overlapping_variants(block_variants, fasta_stream, fasta_meta).size();
+            total_variant_groups += block_groups;
         }
 
         // Clear block variants to free memory
@@ -885,7 +896,87 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
 }
 
 /**
- * Parse VCF + FASTA to l-EDS with source tracking.
+ * Parse VCF + FASTA to l-EDS with source tracking (file stream output).
+ *
+ * Memory-efficient version that uses temporary files for the two-stage pipeline:
+ * VCF→EDS (temp file) → l-EDS (output file)
+ *
+ * This prevents accumulating the full EDS string in memory, which can be very large
+ * for population-scale VCF files.
+ *
+ * @param vcf_stream Input stream containing VCF file
+ * @param fasta_stream Input stream containing reference FASTA
+ * @param leds_output Output stream for l-EDS (written directly)
+ * @param seds_output Output stream for sEDS (written directly)
+ * @param context_length Minimum context length for l-EDS
+ * @param stats Optional pointer to VCFStats structure to receive statistics
+ * @param block_size Genomic window size in bases (0 = load all, default 10M)
+ */
+void parse_vcf_to_leds_streaming_direct(
+    std::istream& vcf_stream,
+    std::istream& fasta_stream,
+    std::ostream& leds_output,
+    std::ostream& seds_output,
+    size_t context_length,
+    VCFStats* stats,
+    size_t block_size)
+{
+    // Create temporary files for intermediate EDS/sEDS
+    // Use std::filesystem::temp_directory_path() for portability
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto temp_eds_path = temp_dir / ("edsparser_temp_eds_" + std::to_string(std::time(nullptr)) + ".tmp");
+    auto temp_seds_path = temp_dir / ("edsparser_temp_seds_" + std::to_string(std::time(nullptr)) + ".tmp");
+
+    try {
+        // Step 1: VCF → EDS (write to temp files)
+        {
+            std::ofstream temp_eds(temp_eds_path);
+            std::ofstream temp_seds(temp_seds_path);
+
+            if (!temp_eds || !temp_seds) {
+                throw std::runtime_error("Failed to create temporary files for l-EDS transformation");
+            }
+
+            parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, temp_eds, temp_seds, stats, block_size);
+
+            temp_eds.close();
+            temp_seds.close();
+        }
+
+        // Step 2: EDS → l-EDS (read from temp files, write to output)
+        {
+            std::ifstream temp_eds(temp_eds_path);
+            std::ifstream temp_seds(temp_seds_path);
+
+            if (!temp_eds || !temp_seds) {
+                throw std::runtime_error("Failed to open temporary files for l-EDS transformation");
+            }
+
+            eds_to_leds_linear(temp_eds, leds_output, context_length,
+                             &temp_seds, &seds_output);
+
+            temp_eds.close();
+            temp_seds.close();
+        }
+
+        // Clean up temporary files
+        std::filesystem::remove(temp_eds_path);
+        std::filesystem::remove(temp_seds_path);
+
+    } catch (...) {
+        // Clean up temporary files on error
+        std::filesystem::remove(temp_eds_path);
+        std::filesystem::remove(temp_seds_path);
+        throw;
+    }
+}
+
+/**
+ * Parse VCF + FASTA to l-EDS with source tracking (string return wrapper).
+ *
+ * WARNING: For large files, this accumulates entire output in memory.
+ * Prefer parse_vcf_to_leds_streaming_direct() for production use.
+ *
  * Uses two-pass approach: VCF→EDS→l-EDS
  */
 std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
@@ -895,18 +986,13 @@ std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     VCFStats* stats,
     size_t block_size)
 {
-    // Step 1: Generate EDS + sEDS
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_stream, fasta_stream, stats, block_size);
-
-    // Step 2: Create streams for transformation
-    std::stringstream eds_input(eds_str);
-    std::stringstream seds_input(seds_str);
+    // Use stringstreams (accumulates in memory - not recommended for large files)
     std::ostringstream leds_output;
     std::ostringstream seds_output;
 
-    // Step 3: Transform to l-EDS using linear merging (phasing-aware)
-    eds_to_leds_linear(eds_input, leds_output, context_length,
-                       &seds_input, &seds_output);
+    // Call the streaming version
+    parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_stream, leds_output, seds_output,
+                                       context_length, stats, block_size);
 
     return {leds_output.str(), seds_output.str()};
 }

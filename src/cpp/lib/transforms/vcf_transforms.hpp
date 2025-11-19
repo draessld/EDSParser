@@ -93,7 +93,35 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
     size_t block_size = 10000000);
 
 /**
- * Parse VCF + FASTA reference directly to l-EDS with source tracking.
+ * Parse VCF + FASTA reference directly to l-EDS with source tracking (file stream output).
+ *
+ * Memory-efficient version that uses temporary files for the two-stage pipeline.
+ * Recommended for large VCF files to avoid accumulating full EDS in memory.
+ *
+ * Pipeline: VCF → EDS (temp file) → l-EDS (output stream)
+ *
+ * @param vcf_stream Input stream containing VCF file
+ * @param fasta_stream Input stream containing reference FASTA
+ * @param leds_output Output stream for l-EDS (written directly)
+ * @param seds_output Output stream for sEDS (written directly)
+ * @param context_length Minimum context length for l-EDS
+ * @param stats Optional pointer to VCFStats structure to receive statistics
+ * @param block_size Genomic window size in bases (0 = load all, default 10M)
+ */
+void parse_vcf_to_leds_streaming_direct(
+    std::istream& vcf_stream,
+    std::istream& fasta_stream,
+    std::ostream& leds_output,
+    std::ostream& seds_output,
+    size_t context_length,
+    VCFStats* stats = nullptr,
+    size_t block_size = 10000000);
+
+/**
+ * Parse VCF + FASTA reference directly to l-EDS with source tracking (string return).
+ *
+ * WARNING: For large files, this accumulates entire output in memory.
+ * Prefer parse_vcf_to_leds_streaming_direct() for production use.
  *
  * Uses existing parse_vcf_to_eds_streaming() + eds_to_leds_linear() pipeline.
  *

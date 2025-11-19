@@ -28,7 +28,7 @@ void test_basic_vcf_parsing() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     // Verify outputs are non-empty
     assert(!eds_str.empty() && "EDS string should not be empty");
@@ -81,7 +81,7 @@ void test_eds_construction() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     // Construct EDS object
     std::stringstream eds_ss(eds_str);
@@ -153,7 +153,7 @@ void test_multiallelic() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     // Find the multi-allelic symbol
     // It should appear as {T,G,A} (REF=T, ALT1=G, ALT2=A)
@@ -200,7 +200,7 @@ void test_deletion() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     // Look for deletion pattern: {REF,} (empty alternative)
     // Note: empty string after comma
@@ -248,7 +248,7 @@ void test_same_position_merging() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     std::cout << "  EDS: " << eds_str << std::endl;
     std::cout << "  sEDS: " << seds_str << std::endl;
@@ -299,7 +299,7 @@ void test_overlapping_merging() {
         return;
     }
 
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file);
 
     std::cout << "  EDS: " << eds_str << std::endl;
     std::cout << "  sEDS: " << seds_str << std::endl;
@@ -374,7 +374,7 @@ void test_cnv_handling() {
     }
 
     VCFStats stats;
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file, &stats);
 
     std::cout << "  EDS: " << eds_str << std::endl;
     std::cout << "  sEDS: " << seds_str << std::endl;
@@ -433,7 +433,7 @@ void test_inversion_handling() {
     }
 
     VCFStats stats;
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file, &stats);
 
     std::cout << "  EDS: " << eds_str << std::endl;
 
@@ -487,7 +487,7 @@ void test_multiallelic_cnv_inv() {
     }
 
     VCFStats stats;
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_file, fasta_file, &stats);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_file, fasta_file, &stats);
 
     std::cout << "  EDS: " << eds_str << std::endl;
 

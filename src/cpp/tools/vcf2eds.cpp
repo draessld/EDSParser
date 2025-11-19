@@ -198,10 +198,8 @@ int main(int argc, char** argv) {
         edsparser::VCFStats stats;
 
         if (create_leds) {
-            // For l-EDS, still need strings (two-pass pipeline)
-            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats, block_size);
-            eds_out << result.first;
-            seds_out << result.second;
+            // For l-EDS, use streaming output with temp files (no memory accumulation!)
+            edsparser::parse_vcf_to_leds_streaming_direct(vcf_in, fasta_in, eds_out, seds_out, context_length, &stats, block_size);
         } else {
             // For regular EDS, use streaming output (no memory accumulation!)
             edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, eds_out, seds_out, &stats, block_size);
