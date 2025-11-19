@@ -779,10 +779,6 @@ void parse_vcf_to_eds_streaming(
     size_t current_block_start = 0;
     size_t current_block_end = block_size;
 
-    // Maximum overlap margin - variants can extend beyond their start position
-    // We use a conservative estimate: max variant length we expect
-    const size_t OVERLAP_MARGIN = 1000000;  // 1MB margin for large structural variants
-
     bool vcf_finished = false;
 
     while (current_block_start < fasta_meta.seq_size) {

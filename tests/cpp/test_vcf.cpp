@@ -181,6 +181,7 @@ void test_multiallelic() {
     }
 
     assert(found_multiallelic && "Should find at least one multi-allelic symbol");
+    (void)found_multiallelic;  // Used in assert
 
     std::cout << "  PASS" << std::endl;
 }
@@ -204,7 +205,6 @@ void test_deletion() {
 
     // Look for deletion pattern: {REF,} (empty alternative)
     // Note: empty string after comma
-    bool found_deletion = false;
     size_t pos = 0;
 
     while (pos < eds_str.size()) {
@@ -215,7 +215,6 @@ void test_deletion() {
             // Check for pattern "...," (comma followed by } or another comma)
             if (symbol.find(",,") != std::string::npos ||
                 symbol.back() == ',') {
-                found_deletion = true;
                 std::cout << "  Found deletion symbol: {" << symbol << "}" << std::endl;
                 break;
             }
@@ -281,6 +280,7 @@ void test_same_position_merging() {
     }
 
     assert(found_merged && "Should find merged symbol with A,C,G");
+    (void)found_merged;  // Used in assert
     std::cout << "  PASS" << std::endl;
 }
 
@@ -334,6 +334,7 @@ void test_overlapping_merging() {
     }
 
     assert(found_overlap_merge && "Should find merged symbol for overlapping variants");
+    (void)found_overlap_merge;  // Used in assert
 
     // Also verify non-overlapping variant (POS=10) is separate
     // Count total degenerate symbols (with commas)
@@ -467,6 +468,7 @@ void test_inversion_handling() {
     }
 
     assert(found_inversion && "Should find inversion variant");
+    (void)found_inversion;  // Used in assert
 
     std::cout << "  PASS" << std::endl;
 }
@@ -520,6 +522,7 @@ void test_multiallelic_cnv_inv() {
     }
 
     assert(found_multi && "Should find multi-allelic symbol with CNV and INV");
+    (void)found_multi;  // Used in assert
 
     std::cout << "  PASS" << std::endl;
 }
