@@ -115,13 +115,21 @@ vcf2eds -i variants.vcf --reference genome.fasta -l 10
 
 # Sample-level source tracking
 vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
+
+# Large VCF files: adjust block size for memory optimization
+vcf2eds -i large.vcf --reference genome.fasta --block-size 1000000  # 1M bases (lower memory)
+vcf2eds -i large.vcf --reference genome.fasta --block-size 100000000  # 100M bases (higher memory, faster)
 ```
 
 **Features:**
-- Handles SNPs, indels, insertions, deletions
+- Handles SNPs and small indels
+- Simple deletions (`<DEL>`) and insertions (`<INS>`)
+- **Inversions (`<INV>`)** - converted to reverse complement
+- **Copy Number Variations (`<CN0>`, `<CN1>`, `<CN2>`, etc.)** - handles deletions and duplications
 - Multi-allelic site support
 - Sample-level source tracking
 - Streaming reference processing
+- **Block-based processing** for memory-efficient handling of large VCF files (default 10M bases per block)
 
 ### eds2leds - EDS to l-EDS Transformation
 
@@ -453,7 +461,7 @@ cd sdsl-lite
 
 **Transform Modules** ([src/cpp/lib/transforms/](src/cpp/lib/transforms/))
 - **MSA Transforms**: MSA → EDS/l-EDS with source tracking
-- **VCF Transforms**: VCF → EDS/l-EDS with sample-level sources
+- **VCF Transforms**: VCF → EDS/l-EDS with sample-level sources. Supports SNPs, indels, deletions (`<DEL>`), insertions (`<INS>`), **inversions (`<INV>`)**, and **copy number variations (`<CN0>`, `<CN1>`, `<CN2>`, etc.)**
 - **EDS Transforms**: EDS → l-EDS with LINEAR or CARTESIAN merging
 
 ### Design Patterns

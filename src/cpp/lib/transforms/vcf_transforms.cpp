@@ -607,20 +607,31 @@ std::vector<VariantGroup> group_overlapping_variants(
  *    - If multiple overlapping variants: merge into single symbol with all haplotypes
  *    - Sources: {samples_with_haplotype1}{samples_with_haplotype2}...
  * 4. Flush final reference region
+ *
+ * @param fasta_stream Reference FASTA stream
+ * @param fasta_meta FASTA metadata
+ * @param variants Vector of variants to process
+ * @param n_samples Number of samples
+ * @param eds_out Output stream for EDS
+ * @param seds_out Output stream for sEDS
+ * @param start_pos Starting position in reference (0-indexed)
+ * @param end_pos Ending position in reference (0-indexed, exclusive)
  */
-std::pair<std::string, std::string> generate_eds_from_variants(
+void generate_eds_from_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     const std::vector<VCFVariant>& variants,
-    [[maybe_unused]] size_t n_samples)
+    [[maybe_unused]] size_t n_samples,
+    std::ostream& eds_out,
+    std::ostream& seds_out,
+    size_t start_pos,
+    size_t end_pos)
 {
-    std::ostringstream eds_out;
-    std::ostringstream seds_out;
 
     // Group overlapping variants
     std::vector<VariantGroup> groups = group_overlapping_variants(variants, fasta_stream, fasta_meta);
 
-    size_t current_pos = 0;  // 0-indexed position in reference
+    size_t current_pos = start_pos;  // Start from provided position
 
     for (const auto& group : groups) {
         // Flush reference region before this variant group
@@ -711,17 +722,16 @@ std::pair<std::string, std::string> generate_eds_from_variants(
         current_pos = group.end_pos;
     }
 
-    // Flush remaining reference sequence
-    if (current_pos < fasta_meta.seq_size) {
+    // Flush remaining reference sequence up to end_pos
+    size_t flush_end = std::min(end_pos, fasta_meta.seq_size);
+    if (current_pos < flush_end) {
         std::string ref_region = read_fasta_region(fasta_stream, fasta_meta,
-                                                    current_pos, fasta_meta.seq_size - current_pos);
+                                                    current_pos, flush_end - current_pos);
         if (!ref_region.empty()) {
             eds_out << '{' << ref_region << '}';
             seds_out << "{0}";
         }
     }
-
-    return {eds_out.str(), seds_out.str()};
 }
 
 // ============================================================================
@@ -734,55 +744,120 @@ std::pair<std::string, std::string> generate_eds_from_variants(
 std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
-    VCFStats* stats)
+    VCFStats* stats,
+    size_t block_size)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
 
-    // Step 2: Parse all VCF variants
-    std::vector<VCFVariant> variants;
-    std::string line;
+    // Output streams
+    std::ostringstream eds_output;
+    std::ostringstream seds_output;
+
     size_t n_samples = 0;
+    size_t total_variant_groups = 0;
 
-    while (std::getline(vcf_stream, line)) {
-        SkipReason skip_reason;
-        auto var = parse_vcf_line(line, n_samples, skip_reason);
-
-        // Track statistics
-        if (stats) {
-            if (skip_reason == SkipReason::NONE) {
-                stats->total_variants++;
-                stats->processed_variants++;
-            } else if (skip_reason == SkipReason::MALFORMED) {
-                stats->total_variants++;
-                stats->skipped_malformed++;
-            } else if (skip_reason == SkipReason::UNSUPPORTED_SV) {
-                stats->total_variants++;
-                stats->skipped_unsupported_sv++;
-            }
-            // HEADER lines don't count as variants
-        }
-
-        if (var) {
-            variants.push_back(*var);
-        }
+    // If block_size is 0, use old behavior (load all variants)
+    if (block_size == 0) {
+        block_size = fasta_meta.seq_size;  // Single block
     }
 
-    // Step 3: Sort variants by position
-    std::sort(variants.begin(), variants.end(),
-              [](const VCFVariant& a, const VCFVariant& b) {
-                  return a.pos < b.pos;
-              });
+    // Block-based processing
+    std::vector<VCFVariant> block_variants;
+    std::vector<VCFVariant> carryover_variants;  // Variants that extend beyond current block
+    std::string line;
 
-    // Step 4: Generate EDS and sEDS
-    auto result = generate_eds_from_variants(fasta_stream, fasta_meta, variants, n_samples);
+    size_t current_block_start = 0;
+    size_t current_block_end = block_size;
+
+    // Maximum overlap margin - variants can extend beyond their start position
+    // We use a conservative estimate: max variant length we expect
+    const size_t OVERLAP_MARGIN = 1000000;  // 1MB margin for large structural variants
+
+    bool vcf_finished = false;
+
+    while (current_block_start < fasta_meta.seq_size) {
+        // Start with variants from carryover (already read from VCF but belong to this block)
+        block_variants = carryover_variants;
+        carryover_variants.clear();
+
+        // Read more VCF lines for this block (if not finished)
+        if (!vcf_finished) {
+            while (std::getline(vcf_stream, line)) {
+                SkipReason skip_reason;
+                auto var = parse_vcf_line(line, n_samples, skip_reason);
+
+                // Track statistics
+                if (stats) {
+                    if (skip_reason == SkipReason::NONE) {
+                        stats->total_variants++;
+                        stats->processed_variants++;
+                    } else if (skip_reason == SkipReason::MALFORMED) {
+                        stats->total_variants++;
+                        stats->skipped_malformed++;
+                    } else if (skip_reason == SkipReason::UNSUPPORTED_SV) {
+                        stats->total_variants++;
+                        stats->skipped_unsupported_sv++;
+                    }
+                }
+
+                if (var) {
+                    size_t var_start = var->pos - 1;  // 0-indexed
+
+                    // Check if variant starts beyond current block end
+                    if (var_start >= current_block_end) {
+                        // This variant belongs to future blocks
+                        // Put it in carryover and stop reading for this block
+                        carryover_variants.push_back(*var);
+                        break;
+                    }
+
+                    // Add to current block (variant starts in this block)
+                    block_variants.push_back(*var);
+                }
+            }
+
+            // Check if we've finished reading VCF
+            if (vcf_stream.eof() || vcf_stream.fail()) {
+                vcf_finished = true;
+            }
+        }
+
+        // Sort block variants by position (should mostly be sorted already from VCF)
+        std::sort(block_variants.begin(), block_variants.end(),
+                  [](const VCFVariant& a, const VCFVariant& b) {
+                      return a.pos < b.pos;
+                  });
+
+        // Generate EDS for this block
+        generate_eds_from_variants(fasta_stream, fasta_meta, block_variants, n_samples,
+                                    eds_output, seds_output,
+                                    current_block_start, current_block_end);
+
+        // Count variant groups for statistics
+        if (stats) {
+            total_variant_groups += group_overlapping_variants(block_variants, fasta_stream, fasta_meta).size();
+        }
+
+        // Clear block variants to free memory
+        block_variants.clear();
+
+        // Move to next block
+        current_block_start = current_block_end;
+        current_block_end = std::min(current_block_start + block_size, fasta_meta.seq_size);
+
+        // If we've processed all VCF variants and reached the end, we're done
+        if (vcf_finished && carryover_variants.empty() && current_block_start >= fasta_meta.seq_size) {
+            break;
+        }
+    }
 
     // Update variant groups count
     if (stats) {
-        stats->variant_groups = group_overlapping_variants(variants, fasta_stream, fasta_meta).size();
+        stats->variant_groups = total_variant_groups;
     }
 
-    return result;
+    return {eds_output.str(), seds_output.str()};
 }
 
 /**
@@ -793,10 +868,11 @@ std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
     size_t context_length,
-    VCFStats* stats)
+    VCFStats* stats,
+    size_t block_size)
 {
     // Step 1: Generate EDS + sEDS
-    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, stats);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, stats, block_size);
 
     // Step 2: Create streams for transformation
     std::stringstream eds_input(eds_str);

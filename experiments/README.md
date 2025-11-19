@@ -104,7 +104,7 @@ The **transform_to_eds.sh** script supports MSA, VCF, and EDS input formats:
 # Custom length values
 ./transform_to_eds.sh --dataset SARS_cov2 --format msa --lengths 2,4,8,16
 
-# VCF experiment (auto-detects reference if chr21.fasta exists)
+# VCF experiment (auto-detects reference from vcf/ or ref/ directory)
 ./transform_to_eds.sh --dataset human_chr1 --format vcf
 
 # VCF with explicit reference
@@ -278,10 +278,31 @@ Options:
   --input-dir DIR     Input directory name (default: same as format)
   --pattern PATTERN   File pattern to process (default: "*")
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
-  --reference FILE    Reference FASTA for VCF (auto-detected if <vcf_name>.{fasta,fa,fna} exists)
+  --reference FILE    Reference FASTA for VCF (auto-detected, see below)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show help message
+```
+
+**VCF Reference Auto-Detection:**
+
+For VCF input, the reference FASTA is automatically detected if not specified with `--reference`. The script searches for files matching the VCF basename in the following locations:
+
+1. **Same directory as VCF:** `datasets/DATASET/vcf/BASENAME.{fasta,fa,fna}`
+2. **Dataset ref/ directory:** `datasets/DATASET/ref/BASENAME.{fasta,fa,fna}`
+
+Example directory structures:
+```
+datasets/human_chr1/
+  ├── vcf/
+  │   └── chr1.vcf
+  └── ref/
+      └── chr1.fasta        # Auto-detected
+
+datasets/human_chr1/
+  └── vcf/
+      ├── chr1.vcf
+      └── chr1.fa           # Auto-detected
 ```
 
 ### generate_patterns.sh
@@ -436,6 +457,25 @@ Regenerate all outputs (useful after tool updates):
 ./transform_to_eds.sh --dataset SARS_cov2 --format msa --force
 ```
 
+### Example 5: VCF with Structural Variants
+
+Process VCF files containing copy number variations and inversions:
+```bash
+# Process VCF with CNV and INV variants
+./transform_to_eds.sh --dataset human_sv --format vcf --reference genome.fasta
+
+# CNV examples in VCF:
+# chr1  1000  .  ACGT  <CN0>     # Deletion (0 copies)
+# chr1  2000  .  ATG   <CN2>     # Duplication (2 copies)
+# chr1  3000  .  GCTA  <CN3>     # Triplication (3 copies)
+
+# INV example in VCF:
+# chr1  4000  .  TGCA  <INV>     # Inversion (reverse complement: TGCA)
+
+# Multi-allelic with structural variants:
+# chr1  5000  .  T     <CN0>,<INV>  # Deletion OR inversion
+```
+
 ## Understanding the Logs
 
 Each `.log` file contains transformation metadata:
@@ -492,6 +532,23 @@ The `msa2eds` tool uses streaming architecture and should handle large files eff
 - **Memory**: Only reference sequence kept in RAM
 - **Merging**: LINEAR (phasing-aware) by default - preserves valid haplotype combinations
 - **Source Tracking**: Maps each string to originating sequence ID
+
+### VCF Transformation
+
+- **Algorithm**: Streaming VCF parser with sample-level source tracking
+- **Memory**: Only active regions loaded from reference FASTA
+- **Supported Variants**:
+  - SNPs and small indels
+  - Simple deletions (`<DEL>`)
+  - Simple insertions (`<INS>`)
+  - **Inversions (`<INV>`)** - Converts to reverse complement of reference
+  - **Copy Number Variations (`<CN0>`, `<CN1>`, `<CN2>`, etc.)** - Handles duplications and deletions
+    - `<CN0>` = Deletion (0 copies)
+    - `<CN1>` = Reference (1 copy)
+    - `<CN2>`, `<CN3>`, etc. = Duplication (2+ copies)
+  - Multi-allelic sites (multiple ALT alleles)
+- **Source Tracking**: One path per sample (diploid samples tracked together)
+- **Variant Merging**: Overlapping variants are automatically merged into single degenerate symbols
 
 ### File Format Details
 

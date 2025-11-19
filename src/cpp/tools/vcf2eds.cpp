@@ -32,6 +32,7 @@ int main(int argc, char** argv) {
         std::filesystem::path output_file;
         std::filesystem::path sources_file;
         Length context_length;
+        size_t block_size;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -40,7 +41,8 @@ int main(int argc, char** argv) {
             ("reference,r", po::value<std::filesystem::path>(&reference_file)->required(), "Reference FASTA file")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
             ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
-            ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)");
+            ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
+            ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -57,10 +59,14 @@ int main(int argc, char** argv) {
             std::cout << "  - Small indels (insertions and deletions)\n";
             std::cout << "  - Simple deletions (<DEL>)\n";
             std::cout << "  - Simple insertions (<INS>)\n";
+            std::cout << "  - Inversions (<INV>) - reverse complement of reference\n";
+            std::cout << "  - Copy number variations:\n";
+            std::cout << "    - <CN0> = Deletion (0 copies)\n";
+            std::cout << "    - <CN1> = Reference (1 copy)\n";
+            std::cout << "    - <CN2>, <CN3>, etc. = Duplication (2+ copies)\n";
             std::cout << "  - Multi-allelic sites (multiple ALT alleles)\n\n";
             std::cout << "SKIPPED WITH WARNINGS:\n";
-            std::cout << "  - Overlapping variants\n";
-            std::cout << "  - Complex structural variants (<INV>, <CN*>, mobile elements)\n";
+            std::cout << "  - Complex structural variants (translocations, mobile elements, etc.)\n";
             std::cout << "  - Malformed VCF lines\n\n";
             std::cout << "SOURCE TRACKING:\n";
             std::cout << "  Sample-level tracking: Each sample contributes to one path.\n";
@@ -91,7 +97,14 @@ int main(int argc, char** argv) {
             std::cout << "  This provides better code reuse, testability, and performance.\n\n";
             std::cout << "IMPLEMENTATION:\n";
             std::cout << "  Uses streaming approach for FASTA reference.\n";
-            std::cout << "  Only active regions loaded into memory.\n\n";
+            std::cout << "  Only active regions loaded into memory.\n";
+            std::cout << "  Block-based processing limits memory usage for large VCF files.\n\n";
+            std::cout << "MEMORY OPTIMIZATION:\n";
+            std::cout << "  --block-size: Control memory usage vs performance tradeoff\n";
+            std::cout << "    - Default 10M bases: Good balance for most use cases\n";
+            std::cout << "    - Smaller (e.g., 1M): Lower memory, more I/O overhead\n";
+            std::cout << "    - Larger (e.g., 100M): Higher memory, fewer I/O operations\n";
+            std::cout << "    - 0: Load all variants (legacy behavior, high memory)\n\n";
             print_performance();
             return 0;
         }
@@ -136,16 +149,21 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Input: " << input_file << "\n";
         std::cout << "  Reference: " << reference_file << "\n";
+        if (block_size == 0) {
+            std::cout << "  Block size: Load all (legacy mode)\n";
+        } else {
+            std::cout << "  Block size: " << block_size << " bases\n";
+        }
 
         // Perform transformation with statistics tracking
         edsparser::VCFStats stats;
         std::string eds_str, seds_str;
         if (create_leds) {
-            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats);
+            auto result = edsparser::parse_vcf_to_leds_streaming(vcf_in, fasta_in, context_length, &stats, block_size);
             eds_str = result.first;
             seds_str = result.second;
         } else {
-            auto result = edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, &stats);
+            auto result = edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, &stats, block_size);
             eds_str = result.first;
             seds_str = result.second;
         }

@@ -53,15 +53,20 @@ struct VCFStats {
  * - Complex structural variants (translocations, mobile elements, etc.)
  * - Malformed VCF lines
  *
+ * Memory optimization: Uses block-based processing to limit memory usage.
+ * Block size determines genomic window size (default 10M bases).
+ *
  * @param vcf_stream Input stream containing VCF file
  * @param fasta_stream Input stream containing reference FASTA
  * @param stats Optional pointer to VCFStats structure to receive statistics
+ * @param block_size Genomic window size in bases (0 = load all, default 10M)
  * @return Pair of (EDS string, sEDS source string)
  */
 std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
-    VCFStats* stats = nullptr);
+    VCFStats* stats = nullptr,
+    size_t block_size = 10000000);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking.
@@ -72,13 +77,15 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming(
  * @param fasta_stream Input stream containing reference FASTA
  * @param context_length Minimum context length for l-EDS
  * @param stats Optional pointer to VCFStats structure to receive statistics
+ * @param block_size Genomic window size in bases (0 = load all, default 10M)
  * @return Pair of (l-EDS string, sEDS source string)
  */
 std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
     size_t context_length,
-    VCFStats* stats = nullptr);
+    VCFStats* stats = nullptr,
+    size_t block_size = 10000000);
 
 } // namespace edsparser
 

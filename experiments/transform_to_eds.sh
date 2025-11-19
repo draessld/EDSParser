@@ -81,16 +81,35 @@ OPTIONS:
   --input-dir DIR     Input directory name (default: same as format)
   --pattern PATTERN   File pattern to process (default: "*")
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
-  --reference FILE    Reference FASTA for VCF (auto-detected if <vcf_name>.{fasta,fa,fna} exists)
+  --reference FILE    Reference FASTA for VCF (auto-detected, see below)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show this help message
+
+VCF REFERENCE AUTO-DETECTION:
+  For VCF input, the reference FASTA is auto-detected if not specified with --reference.
+  The script searches in the following order for files matching the VCF basename:
+
+  1. Same directory as VCF:     datasets/DATASET/vcf/BASENAME.{fasta,fa,fna}
+  2. Dataset ref/ directory:    datasets/DATASET/ref/BASENAME.{fasta,fa,fna}
+
+  Example directory structures:
+    datasets/human_chr1/
+      ├── vcf/
+      │   └── chr1.vcf
+      └── ref/
+          └── chr1.fasta        # Auto-detected
+
+    datasets/human_chr1/
+      └── vcf/
+          ├── chr1.vcf
+          └── chr1.fa           # Auto-detected
 
 EXAMPLES:
   # MSA experiment (SARS-CoV-2)
   $0 --dataset SARS_cov2 --format msa
 
-  # VCF experiment (auto-detects reference if chr21.fasta exists)
+  # VCF experiment (auto-detects reference from vcf/ or ref/ directory)
   $0 --dataset human_data --format vcf
 
   # VCF with explicit reference
@@ -152,13 +171,17 @@ check_tools() {
             fi
             log_success "Found $VCF2EDS_TOOL: $(which $VCF2EDS_TOOL)"
 
-            if [[ -z "$REFERENCE_FASTA" ]]; then
-                log_error "VCF format requires --reference FASTA file"
-                exit 1
-            fi
-            if [[ ! -f "$REFERENCE_FASTA" ]]; then
+            # If reference is explicitly provided, validate it exists
+            if [[ -n "$REFERENCE_FASTA" ]] && [[ ! -f "$REFERENCE_FASTA" ]]; then
                 log_error "Reference FASTA not found: $REFERENCE_FASTA"
                 exit 1
+            fi
+
+            # Note: If reference is not provided, it will be auto-detected per-file
+            if [[ -n "$REFERENCE_FASTA" ]]; then
+                log_info "Using explicit reference: $REFERENCE_FASTA"
+            else
+                log_info "Reference will be auto-detected for each VCF file"
             fi
             ;;
         eds)
@@ -227,17 +250,27 @@ transform_to_eds() {
             local reference_file="$REFERENCE_FASTA"
             if [[ -z "$reference_file" ]]; then
                 local input_dir=$(dirname "$input_file")
-                for ext in fasta fa fna; do
-                    local candidate="${input_dir}/${basename}.${ext}"
-                    if [[ -f "$candidate" ]]; then
-                        reference_file="$candidate"
-                        log_info "Auto-detected reference: $(basename $reference_file)"
-                        break
-                    fi
+                local dataset_dir=$(dirname "$input_dir")
+                local ref_dir="${dataset_dir}/ref"
+
+                # Try multiple locations in order:
+                # 1. Same directory as VCF with same basename
+                # 2. ref/ directory at dataset level with same basename
+                for location in "$input_dir" "$ref_dir"; do
+                    for ext in fasta fa fna; do
+                        local candidate="${location}/${basename}.${ext}"
+                        if [[ -f "$candidate" ]]; then
+                            reference_file="$candidate"
+                            log_info "Auto-detected reference: $candidate"
+                            break 2
+                        fi
+                    done
                 done
 
                 if [[ -z "$reference_file" ]]; then
-                    log_error "No reference file found for $basename (tried: .fasta, .fa, .fna)"
+                    log_error "No reference file found for $basename"
+                    log_error "  Searched in: $input_dir/${basename}.{fasta,fa,fna}"
+                    log_error "  Searched in: $ref_dir/${basename}.{fasta,fa,fna}"
                     return 1
                 fi
             fi

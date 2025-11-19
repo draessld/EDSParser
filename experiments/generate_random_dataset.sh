@@ -26,12 +26,9 @@ ALPHABET="ACGT"
 MIN_CONTEXT=0
 SEED=""
 FORCE_OVERWRITE=false
-GENERATE_LEDS=true
-LENGTH_VALUES=(3 5 10 15 20)
 
 # Tool paths
 GENRANDOMEDS_TOOL="genrandomeds"
-EDS2LEDS_TOOL="eds2leds"
 
 # Statistics
 SUCCESS_COUNT=0
@@ -78,11 +75,7 @@ VARIANT PARAMETERS:
   --variant-length-max N  Maximum indel length in bp (default: 10)
   --snp-ratio FRAC        Fraction of SNPs vs indels, 0.0-1.0 (default: 0.7 = 70%)
   --alphabet STR          Sequence alphabet (default: "ACGT")
-
-L-EDS PARAMETERS:
   --min-context N         Minimum context between variants (default: 0, disabled)
-  --lengths L1,L2,...     Length values for l-EDS generation (default: "3,5,10,15,20")
-  --no-leds               Don't generate l-EDS transformations
 
 OTHER OPTIONS:
   --seed N                Random seed for first file (incremented for each file)
@@ -91,15 +84,12 @@ OTHER OPTIONS:
 
 OUTPUT STRUCTURE:
   datasets/DATASET_NAME/
-    ├── eds/              # Generated EDS files with sources (.eds + .seds)
-    │   ├── file_0.eds
-    │   ├── file_0.seds
-    │   ├── file_1.eds
-    │   ├── file_1.seds
-    │   └── ...
-    ├── 3_leds/           # l-EDS transformations (l=3)
-    ├── 5_leds/           # l-EDS transformations (l=5)
-    └── ...
+    └── eds/              # Generated EDS files with sources (.eds + .seds)
+        ├── file_0.eds
+        ├── file_0.seds
+        ├── file_1.eds
+        ├── file_1.seds
+        └── ...
 
 EXAMPLES:
   # Generate small test dataset (10 files × 1 MB)
@@ -118,13 +108,10 @@ EXAMPLES:
      --variant-length-max 20
 
   # Generate dataset optimized for l-EDS (minimum context enforced during generation)
-  $0 --dataset synthetic_leds --min-context 10 --lengths 10,20,30
+  $0 --dataset synthetic_leds --min-context 10
 
   # Generate reproducible dataset with fixed seed
   $0 --dataset synthetic_reproducible --seed 42 --num-files 5
-
-  # Generate without l-EDS transformations (faster)
-  $0 --dataset synthetic_raw --no-leds
 
   # Generate to custom absolute path
   $0 --dataset /data/experiments/synthetic_custom --num-files 15
@@ -136,10 +123,13 @@ REPRODUCIBILITY:
   Use --seed to generate reproducible datasets. Each file uses seed + file_index.
   Example: --seed 100 generates files with seeds 100, 101, 102, ...
 
+L-EDS TRANSFORMATION:
+  This script generates only EDS files. To create l-EDS transformations, use:
+  ./transform_to_eds.sh --dataset DATASET_NAME --format eds --lengths 3,5,10,15,20
+
 PERFORMANCE NOTES:
   - Each MB takes ~1-3 seconds to generate depending on variability
   - Memory usage: ~2-3× reference size during generation
-  - l-EDS transformation adds additional time (depends on merge operations)
 
 EOF
 }
@@ -172,17 +162,7 @@ check_tool() {
 check_tools() {
     log_info "Checking for required tools..."
 
-    local all_ok=true
-
     if ! check_tool "$GENRANDOMEDS_TOOL"; then
-        all_ok=false
-    fi
-
-    if [[ "$GENERATE_LEDS" == "true" ]] && ! check_tool "$EDS2LEDS_TOOL"; then
-        all_ok=false
-    fi
-
-    if [[ "$all_ok" == "false" ]]; then
         exit 1
     fi
 
@@ -236,70 +216,6 @@ generate_single_eds() {
     fi
 }
 
-generate_leds_transformations() {
-    local eds_dir="$1"
-    local dataset_path="$2"
-
-    log_info ""
-    log_info "================================================"
-    log_info "Generating l-EDS transformations"
-    log_info "================================================"
-
-    for length in "${LENGTH_VALUES[@]}"; do
-        local leds_dir="${dataset_path}/${length}_leds"
-        mkdir -p "$leds_dir"
-
-        log_info "Transforming to l=$length..."
-
-        # Find all EDS files
-        local eds_files=("$eds_dir"/*.eds)
-
-        for eds_file in "${eds_files[@]}"; do
-            if [[ ! -f "$eds_file" ]]; then
-                continue
-            fi
-
-            local basename=$(basename "$eds_file" .eds)
-            local output_file="${leds_dir}/${basename}.leds"
-            local seds_file="${eds_dir}/${basename}.seds"
-
-            # Skip if exists and not forcing
-            if [[ -f "$output_file" ]] && [[ "$FORCE_OVERWRITE" == "false" ]]; then
-                log_warning "Skipping $basename (l=$length, already exists)"
-                continue
-            fi
-
-            log_info "  Transforming $basename (l=$length)..."
-
-            local start_time=$SECONDS
-
-            # Build command
-            local cmd="$EDS2LEDS_TOOL"
-            cmd+=" --input \"$eds_file\""
-            cmd+=" --output \"$output_file\""
-            cmd+=" --min-context $length"
-            cmd+=" --strategy linear"  # Use linear strategy (phasing-aware)
-
-            # Add sources if available
-            if [[ -f "$seds_file" ]]; then
-                cmd+=" --sources \"$seds_file\""
-            fi
-
-            # Execute
-            local log_file="${output_file}.log"
-            if eval "$cmd" > "$log_file" 2>&1; then
-                local elapsed=$((SECONDS - start_time))
-                log_success "  Transformed $basename (l=$length, ${elapsed}s)"
-                rm -f "$log_file"
-            else
-                log_error "  Failed to transform $basename (l=$length)"
-                log_error "  See log: $log_file"
-            fi
-        done
-
-        echo ""
-    done
-}
 
 print_summary() {
     local dataset_path="$1"
@@ -327,11 +243,7 @@ print_summary() {
     log_info "  SNP ratio: $(echo "$SNP_RATIO * 100" | bc)%"
 
     if [[ $MIN_CONTEXT -gt 0 ]]; then
-        log_info "  Minimum context: $MIN_CONTEXT bp (l-EDS mode)"
-    fi
-
-    if [[ "$GENERATE_LEDS" == "true" ]]; then
-        log_info "  l-EDS lengths: ${LENGTH_VALUES[*]}"
+        log_info "  Minimum context: $MIN_CONTEXT bp (for l-EDS compatibility)"
     fi
 
     echo ""
@@ -410,11 +322,6 @@ main() {
 
     echo ""
 
-    # Generate l-EDS transformations if requested
-    if [[ "$GENERATE_LEDS" == "true" ]] && [[ $SUCCESS_COUNT -gt 0 ]]; then
-        generate_leds_transformations "$eds_dir" "$dataset_path"
-    fi
-
     # Print summary
     print_summary "$dataset_path"
 }
@@ -465,14 +372,6 @@ while [[ $# -gt 0 ]]; do
         --seed)
             SEED="$2"
             shift 2
-            ;;
-        --lengths)
-            IFS=',' read -ra LENGTH_VALUES <<< "$2"
-            shift 2
-            ;;
-        --no-leds)
-            GENERATE_LEDS=false
-            shift
             ;;
         --force)
             FORCE_OVERWRITE=true
