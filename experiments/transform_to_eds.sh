@@ -22,6 +22,7 @@ FILE_PATTERN="*"
 FORCE_OVERWRITE=false
 GENERATE_STATISTICS=true
 REFERENCE_FASTA=""  # Required for VCF input
+THREADS=1  # Number of parallel jobs
 
 # Tool paths
 MSA2EDS_TOOL="msa2eds"
@@ -82,6 +83,7 @@ OPTIONS:
   --pattern PATTERN   File pattern to process (default: "*")
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
   --reference FILE    Reference FASTA for VCF (auto-detected, see below)
+  --threads N         Number of parallel jobs (default: 1, requires GNU parallel)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show this help message
@@ -126,6 +128,17 @@ EXAMPLES:
 
   # Process specific files
   $0 --dataset SARS_cov2 --format msa --pattern "20*"
+
+  # Process with 4 parallel jobs
+  $0 --dataset SARS_cov2 --format msa --threads 4
+
+PARALLEL PROCESSING:
+  Use --threads N to process N files concurrently (requires GNU parallel):
+    - --threads 1: Sequential processing (default)
+    - --threads 4: Process 4 files simultaneously
+    - --threads 0: Use all available CPU cores
+
+  Note: Parallel processing may produce interleaved output logs.
 
 DIRECTORY STRUCTURE:
   datasets/DATASET_NAME/
@@ -192,6 +205,18 @@ check_tools() {
             log_success "Found $EDS2LEDS_TOOL: $(which $EDS2LEDS_TOOL)"
             ;;
     esac
+
+    # Check for GNU parallel if threads > 1
+    if [[ $THREADS -gt 1 ]]; then
+        if ! command -v parallel &> /dev/null; then
+            log_error "GNU parallel not found (required for --threads > 1)"
+            log_error "Install with: sudo apt-get install parallel (Debian/Ubuntu)"
+            log_error "           or: brew install parallel (macOS)"
+            exit 1
+        fi
+        log_success "Found GNU parallel: $(which parallel)"
+        log_info "Using $THREADS parallel jobs"
+    fi
 }
 
 create_directories() {
@@ -533,11 +558,37 @@ main() {
 
     log_info "Found $total_files file(s) to process"
 
-    for input_file in "${input_files[@]}"; do
-        if [[ -f "$input_file" ]]; then
+    # Process files (sequentially or in parallel)
+    if [[ $THREADS -gt 1 ]]; then
+        # Export functions and variables for GNU parallel
+        export -f process_file transform_to_eds transform_to_leds log_info log_success log_warning log_error get_file_size
+        export DATASET_NAME INPUT_FORMAT INPUT_DIR FILE_PATTERN FORCE_OVERWRITE GENERATE_STATISTICS REFERENCE_FASTA
+        export MSA2EDS_TOOL VCF2EDS_TOOL EDS2LEDS_TOOL STATS_FILE
+        export RED GREEN YELLOW BLUE NC
+
+        # Export LENGTH_VALUES array (arrays need special handling)
+        export LENGTH_VALUES_STR="${LENGTH_VALUES[*]}"
+
+        # Create wrapper function that reconstructs the array
+        process_file_wrapper() {
+            local input_file="$1"
+            local dataset_path="$2"
+            # Reconstruct LENGTH_VALUES array from string
+            IFS=' ' read -ra LENGTH_VALUES <<< "$LENGTH_VALUES_STR"
             process_file "$input_file" "$dataset_path"
-        fi
-    done
+        }
+        export -f process_file_wrapper
+
+        # Use GNU parallel to process files
+        printf "%s\n" "${input_files[@]}" | parallel -j "$THREADS" --will-cite process_file_wrapper {} "$dataset_path"
+    else
+        # Sequential processing
+        for input_file in "${input_files[@]}"; do
+            if [[ -f "$input_file" ]]; then
+                process_file "$input_file" "$dataset_path"
+            fi
+        done
+    fi
 
     print_summary
 }
@@ -567,6 +618,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --reference)
             REFERENCE_FASTA="$2"
+            shift 2
+            ;;
+        --threads)
+            THREADS="$2"
             shift 2
             ;;
         --force)
