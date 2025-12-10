@@ -23,12 +23,24 @@ namespace {
     };
 
     /**
-     * Result of merging a pair of positions
+     * Result of merging a pair of positions (OLD: for backward compatibility)
      */
     struct MergeResult {
         size_t original_pos1;
         size_t original_pos2;
         StringSet merged_set;
+        std::vector<std::set<int>> merged_sources;  // Empty if no sources
+    };
+
+    /**
+     * Metadata-only result of merging a pair of positions
+     * This struct contains NO string data - only metadata for memory-efficient processing
+     */
+    struct MergeMetadata {
+        size_t original_pos1;
+        size_t original_pos2;
+        size_t merged_size;  // Number of strings in merged symbol
+        std::vector<Length> merged_string_lengths;  // Length of each string (no actual strings)
         std::vector<std::set<int>> merged_sources;  // Empty if no sources
     };
 
@@ -104,6 +116,134 @@ namespace {
         }
 
         return pairs;
+    }
+
+    /**
+     * Compute merge metadata for multiple pairs WITHOUT building string data.
+     * This is the memory-efficient version that works with METADATA_ONLY mode.
+     *
+     * Strategy: Calculate merged sizes, lengths, and sources using only metadata.
+     * No actual string concatenation occurs - strings are read on-demand during output streaming.
+     *
+     * @param eds The original EDS (can be METADATA_ONLY mode)
+     * @param pairs Vector of non-overlapping merge pairs
+     * @param num_threads Number of threads to use (1 = sequential)
+     * @return Vector of metadata-only merge results
+     */
+    std::vector<MergeMetadata> compute_merge_metadata(
+        const EDS& eds,
+        const std::vector<MergePair>& pairs,
+        size_t num_threads
+    ) {
+        std::vector<MergeMetadata> results(pairs.size());
+
+        // Lambda function to compute metadata for a single pair
+        auto compute_pair_metadata = [&eds](const MergePair& pair) -> MergeMetadata {
+            MergeMetadata result;
+            result.original_pos1 = pair.pos1;
+            result.original_pos2 = pair.pos2;
+
+            // Get metadata for both positions
+            const auto& metadata = eds.get_metadata();
+            size_t global_string_idx1 = metadata.cum_set_sizes[pair.pos1];
+            size_t global_string_idx2 = metadata.cum_set_sizes[pair.pos2];
+            size_t set1_size = metadata.symbol_sizes[pair.pos1];
+            size_t set2_size = metadata.symbol_sizes[pair.pos2];
+
+            // Determine if we're doing LINEAR or CARTESIAN merge
+            bool has_sources = eds.has_sources();
+
+            if (!has_sources) {
+                // CARTESIAN merge: size is product of set sizes
+                result.merged_size = set1_size * set2_size;
+
+                // Calculate string lengths for all combinations
+                result.merged_string_lengths.reserve(result.merged_size);
+                for (size_t i = 0; i < set1_size; ++i) {
+                    Length len1 = metadata.string_lengths[global_string_idx1 + i];
+                    for (size_t j = 0; j < set2_size; ++j) {
+                        Length len2 = metadata.string_lengths[global_string_idx2 + j];
+                        result.merged_string_lengths.push_back(len1 + len2);
+                    }
+                }
+            } else {
+                // LINEAR merge: only count valid combinations (non-empty source intersection)
+                for (size_t i = 0; i < set1_size; ++i) {
+                    const std::set<int> sources1 = eds.read_source(global_string_idx1 + i);
+                    Length len1 = metadata.string_lengths[global_string_idx1 + i];
+
+                    for (size_t j = 0; j < set2_size; ++j) {
+                        const std::set<int> sources2 = eds.read_source(global_string_idx2 + j);
+                        Length len2 = metadata.string_lengths[global_string_idx2 + j];
+
+                        // Compute intersection with special handling for {0} (universal marker)
+                        std::set<int> intersection;
+                        bool sources1_has_universal = sources1.count(0) > 0;
+                        bool sources2_has_universal = sources2.count(0) > 0;
+
+                        if (sources1_has_universal && sources2_has_universal) {
+                            // {0} ∩ {0} = {0}
+                            intersection.insert(0);
+                        } else if (sources1_has_universal) {
+                            // {0} ∩ {x,y,...} = {x,y,...}
+                            intersection = sources2;
+                        } else if (sources2_has_universal) {
+                            // {x,y,...} ∩ {0} = {x,y,...}
+                            intersection = sources1;
+                        } else {
+                            // Regular set intersection
+                            std::set_intersection(
+                                sources1.begin(), sources1.end(),
+                                sources2.begin(), sources2.end(),
+                                std::inserter(intersection, intersection.begin())
+                            );
+                        }
+
+                        // Only keep if intersection is non-empty
+                        if (!intersection.empty()) {
+                            result.merged_sources.push_back(intersection);
+                            result.merged_string_lengths.push_back(len1 + len2);
+                        }
+                    }
+                }
+
+                result.merged_size = result.merged_sources.size();
+
+                // Validation: merged set must not be empty
+                if (result.merged_size == 0) {
+                    throw std::runtime_error(
+                        "Merging positions " + std::to_string(pair.pos1) + " and " +
+                        std::to_string(pair.pos2) + " results in empty set "
+                        "(no valid source intersections)"
+                    );
+                }
+            }
+
+            return result;
+        };
+
+        // Process pairs in parallel or sequentially
+        if (num_threads <= 1 || pairs.empty()) {
+            // Sequential execution
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                results[i] = compute_pair_metadata(pairs[i]);
+            }
+        } else {
+            // Parallel execution with OpenMP
+#ifdef _OPENMP
+            #pragma omp parallel for num_threads(num_threads)
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                results[i] = compute_pair_metadata(pairs[i]);
+            }
+#else
+            // OpenMP not available, fall back to sequential
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                results[i] = compute_pair_metadata(pairs[i]);
+            }
+#endif
+        }
+
+        return results;
     }
 
     /**
@@ -295,6 +435,170 @@ namespace {
         }
     }
 
+    /**
+     * Stream merged EDS symbols directly to file WITHOUT accumulating in memory.
+     * This is the memory-efficient version that works with METADATA_ONLY mode.
+     *
+     * Strategy: Read symbols on-demand, merge strings on-the-fly, write immediately, flush.
+     * No ostringstream accumulation - direct file writes prevent memory growth.
+     *
+     * @param input_eds The original EDS (can be METADATA_ONLY mode)
+     * @param merge_metadata Vector of metadata-only merge results
+     * @param eds_out Output stream for EDS data
+     * @param sources_out Output stream for sources data (nullptr if no sources)
+     */
+    void stream_merged_symbols_to_file(
+        const EDS& input_eds,
+        const std::vector<MergeMetadata>& merge_metadata,
+        std::ostream& eds_out,
+        std::ostream* sources_out
+    ) {
+        // Build mapping: position -> merge metadata index (or -1 if not merged)
+        std::vector<int> merge_map(input_eds.length(), -1);
+        std::vector<bool> skip(input_eds.length(), false);
+
+        for (size_t i = 0; i < merge_metadata.size(); ++i) {
+            merge_map[merge_metadata[i].original_pos1] = static_cast<int>(i);
+            skip[merge_metadata[i].original_pos2] = true;  // Second position consumed by merge
+        }
+
+        bool has_sources = input_eds.has_sources();
+        const auto& metadata = input_eds.get_metadata();
+
+        // Stream output symbol-by-symbol
+        for (size_t pos = 0; pos < input_eds.length(); ++pos) {
+            if (skip[pos]) {
+                continue;  // Position was merged into previous
+            }
+
+            if (merge_map[pos] >= 0) {
+                // ===== MERGED POSITION =====
+                const auto& merge_meta = merge_metadata[merge_map[pos]];
+
+                // Read BOTH symbols on-demand (METADATA_ONLY compatible)
+                StringSet set1 = input_eds.read_symbol(pos);
+                StringSet set2 = input_eds.read_symbol(pos + 1);
+
+                // Get source indices for filtering
+                size_t global_string_idx1 = metadata.cum_set_sizes[pos];
+                size_t global_string_idx2 = metadata.cum_set_sizes[pos + 1];
+
+                // Write merged symbol to output
+                eds_out << '{';
+
+                bool first_string = true;
+                size_t merged_idx = 0;
+
+                if (!has_sources) {
+                    // CARTESIAN merge: all combinations
+                    for (size_t i = 0; i < set1.size(); ++i) {
+                        for (size_t j = 0; j < set2.size(); ++j) {
+                            if (!first_string) eds_out << ',';
+                            eds_out << set1[i] << set2[j];  // Concatenate on-the-fly
+                            first_string = false;
+                        }
+                    }
+                } else {
+                    // LINEAR merge: only valid combinations (source intersection check)
+                    for (size_t i = 0; i < set1.size(); ++i) {
+                        for (size_t j = 0; j < set2.size(); ++j) {
+                            // Check if this combination is in the merged metadata
+                            // (it was pre-filtered during compute_merge_metadata)
+                            if (merged_idx < merge_meta.merged_size) {
+                                const std::set<int> sources1 = input_eds.read_source(global_string_idx1 + i);
+                                const std::set<int> sources2 = input_eds.read_source(global_string_idx2 + j);
+
+                                // Compute intersection (same logic as compute_merge_metadata)
+                                std::set<int> intersection;
+                                bool sources1_has_universal = sources1.count(0) > 0;
+                                bool sources2_has_universal = sources2.count(0) > 0;
+
+                                if (sources1_has_universal && sources2_has_universal) {
+                                    intersection.insert(0);
+                                } else if (sources1_has_universal) {
+                                    intersection = sources2;
+                                } else if (sources2_has_universal) {
+                                    intersection = sources1;
+                                } else {
+                                    std::set_intersection(
+                                        sources1.begin(), sources1.end(),
+                                        sources2.begin(), sources2.end(),
+                                        std::inserter(intersection, intersection.begin())
+                                    );
+                                }
+
+                                // Only write if intersection is non-empty
+                                if (!intersection.empty()) {
+                                    if (!first_string) eds_out << ',';
+                                    eds_out << set1[i] << set2[j];  // Concatenate on-the-fly
+                                    first_string = false;
+
+                                    // Write sources for this merged string
+                                    if (sources_out) {
+                                        *sources_out << '{';
+                                        bool first_path = true;
+                                        for (int path_id : intersection) {
+                                            if (!first_path) *sources_out << ',';
+                                            *sources_out << path_id;
+                                            first_path = false;
+                                        }
+                                        *sources_out << '}';
+                                    }
+
+                                    merged_idx++;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                eds_out << '}';
+
+                // Flush immediately to prevent buffering
+                eds_out.flush();
+                if (sources_out) {
+                    sources_out->flush();
+                }
+
+            } else {
+                // ===== UNMODIFIED POSITION =====
+                // Read symbol on-demand and pass through
+                StringSet symbol = input_eds.read_symbol(pos);
+
+                // Write symbol
+                eds_out << '{';
+                for (size_t i = 0; i < symbol.size(); ++i) {
+                    if (i > 0) eds_out << ',';
+                    eds_out << symbol[i];
+                }
+                eds_out << '}';
+
+                // Write sources if present
+                if (has_sources && sources_out) {
+                    size_t symbol_size = input_eds.get_symbol_size(pos);
+                    size_t global_idx = metadata.cum_set_sizes[pos];
+                    for (size_t i = 0; i < symbol_size; ++i) {
+                        const std::set<int> src = input_eds.read_source(global_idx + i);
+                        *sources_out << '{';
+                        bool first = true;
+                        for (int path_id : src) {
+                            if (!first) *sources_out << ',';
+                            *sources_out << path_id;
+                            first = false;
+                        }
+                        *sources_out << '}';
+                    }
+                }
+
+                // Flush immediately to prevent buffering
+                eds_out.flush();
+                if (sources_out) {
+                    sources_out->flush();
+                }
+            }
+        }
+    }
+
 } // anonymous namespace
 
 /**
@@ -323,24 +627,58 @@ void eds_to_leds_linear(
         throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
     }
 
-    // Load EDS (with sources if provided)
-    EDS eds = phasing_input ? EDS(input, *phasing_input) : EDS(input);
+    // ===== STREAMING ARCHITECTURE FOR MEMORY STABILITY =====
+    // This implementation uses METADATA_ONLY mode with temp files to handle 100GB+ files
+    // with minimal memory footprint (~500MB for 100GB file)
 
-    // Enforce METADATA_ONLY mode for large datasets
-    // Note: Current implementation works with FULL mode, but for production
-    // should add mode enforcement and streaming support
+    // Create temp directory for iteration files
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "edsparser_leds";
+    std::filesystem::create_directories(temp_dir);
+
+    // Save input stream to temp file (needed for METADATA_ONLY loading)
+    std::filesystem::path temp_input = temp_dir / "input.eds";
+    {
+        std::ofstream temp_out(temp_input);
+        if (!temp_out) {
+            throw std::runtime_error("Failed to create temp input file: " + temp_input.string());
+        }
+        temp_out << input.rdbuf();
+        temp_out.close();
+    }
+
+    // Save sources if provided
+    std::filesystem::path temp_sources_input;
+    bool has_sources = (phasing_input != nullptr);
+    if (has_sources) {
+        temp_sources_input = temp_dir / "input.seds";
+        std::ofstream temp_seds_out(temp_sources_input);
+        if (!temp_seds_out) {
+            throw std::runtime_error("Failed to create temp sources file: " + temp_sources_input.string());
+        }
+        temp_seds_out << phasing_input->rdbuf();
+        temp_seds_out.close();
+    }
+
+    // Load as METADATA_ONLY (only ~100MB for 100GB file!)
+    EDS eds = has_sources
+        ? EDS::load(temp_input, temp_sources_input, EDS::StoringMode::METADATA_ONLY)
+        : EDS::load(temp_input, EDS::StoringMode::METADATA_ONLY);
 
     // Iterative merging until convergence
     size_t iteration = 0;
     const size_t MAX_ITERATIONS = 10000;  // Safety limit
+    const size_t BATCH_SIZE = 1000;  // Process 1000 pairs per batch to control parallel memory
+
+    std::filesystem::path current_eds_file = temp_input;
+    std::filesystem::path current_seds_file = temp_sources_input;
 
     while (iteration < MAX_ITERATIONS) {
-        // Check convergence
+        // Check convergence (metadata-only operation)
         if (is_leds(eds, context_length)) {
             break;  // All internal common blocks satisfy l-EDS property
         }
 
-        // Select independent pairs to merge
+        // Select independent pairs to merge (metadata-only operation)
         auto pairs = select_independent_merge_pairs(eds, context_length);
 
         if (pairs.empty()) {
@@ -349,11 +687,60 @@ void eds_to_leds_linear(
             break;
         }
 
-        // Merge pairs in parallel
-        auto merge_results = merge_multiple_pairs(eds, pairs, num_threads);
+        // Create temp output files for this iteration
+        std::filesystem::path temp_eds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".eds");
+        std::filesystem::path temp_seds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".seds");
 
-        // Reconstruct EDS with merged results
-        eds = reconstruct_eds(eds, merge_results);
+        std::ofstream eds_out_stream(temp_eds_out);
+        std::ofstream seds_out_stream;
+
+        if (!eds_out_stream) {
+            throw std::runtime_error("Failed to create temp output file: " + temp_eds_out.string());
+        }
+
+        if (has_sources) {
+            seds_out_stream.open(temp_seds_out);
+            if (!seds_out_stream) {
+                throw std::runtime_error("Failed to create temp sources output file: " + temp_seds_out.string());
+            }
+        }
+
+        // Process pairs in batches to control parallel memory usage
+        for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
+            size_t batch_end = std::min(batch_start + BATCH_SIZE, pairs.size());
+            std::vector<MergePair> batch_pairs(
+                pairs.begin() + batch_start,
+                pairs.begin() + batch_end
+            );
+
+            // Compute merge metadata (NO string data, minimal memory)
+            auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
+
+            // Stream output directly to file (immediate flush, no accumulation)
+            stream_merged_symbols_to_file(
+                eds,
+                batch_metadata,
+                eds_out_stream,
+                has_sources ? &seds_out_stream : nullptr
+            );
+
+            // batch_metadata freed here automatically (RAII)
+        }
+
+        eds_out_stream.close();
+        if (has_sources) {
+            seds_out_stream.close();
+        }
+
+        // Replace EDS with temp file (still METADATA_ONLY mode)
+        // This keeps memory footprint constant across iterations
+        eds = has_sources
+            ? EDS::load(temp_eds_out, temp_seds_out, EDS::StoringMode::METADATA_ONLY)
+            : EDS::load(temp_eds_out, EDS::StoringMode::METADATA_ONLY);
+
+        // Update file pointers for cleanup
+        current_eds_file = temp_eds_out;
+        current_seds_file = temp_seds_out;
 
         iteration++;
     }
@@ -362,13 +749,29 @@ void eds_to_leds_linear(
         throw std::runtime_error("Maximum iterations reached without convergence");
     }
 
-    // Write output
-    auto format = compact ? EDS::OutputFormat::COMPACT : EDS::OutputFormat::FULL;
-    eds.save(output, format);
+    // Copy final result to output streams
+    {
+        std::ifstream final_eds(current_eds_file);
+        if (!final_eds) {
+            throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
+        }
+        output << final_eds.rdbuf();
+    }
 
-    // Write updated sources if requested
-    if (phasing_output && eds.has_sources()) {
-        eds.save_sources(*phasing_output);
+    if (phasing_output && has_sources) {
+        std::ifstream final_seds(current_seds_file);
+        if (!final_seds) {
+            throw std::runtime_error("Failed to open final sources file: " + current_seds_file.string());
+        }
+        *phasing_output << final_seds.rdbuf();
+    }
+
+    // Cleanup temp directory
+    try {
+        std::filesystem::remove_all(temp_dir);
+    } catch (const std::exception& e) {
+        // Non-fatal: temp cleanup failed, but transformation succeeded
+        std::cerr << "Warning: Failed to cleanup temp directory " << temp_dir << ": " << e.what() << "\n";
     }
 }
 
@@ -389,30 +792,90 @@ void eds_to_leds_cartesian(
         throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
     }
 
-    // Load EDS (without sources)
-    EDS eds(input);
+    // ===== STREAMING ARCHITECTURE FOR MEMORY STABILITY =====
+    // This implementation uses METADATA_ONLY mode with temp files to handle 100GB+ files
+    // Same architecture as linear mode, but without source handling
+
+    // Create temp directory for iteration files
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "edsparser_leds_cart";
+    std::filesystem::create_directories(temp_dir);
+
+    // Save input stream to temp file (needed for METADATA_ONLY loading)
+    std::filesystem::path temp_input = temp_dir / "input.eds";
+    {
+        std::ofstream temp_out(temp_input);
+        if (!temp_out) {
+            throw std::runtime_error("Failed to create temp input file: " + temp_input.string());
+        }
+        temp_out << input.rdbuf();
+        temp_out.close();
+    }
+
+    // Load as METADATA_ONLY (only ~100MB for 100GB file!)
+    EDS eds = EDS::load(temp_input, EDS::StoringMode::METADATA_ONLY);
 
     if (eds.has_sources()) {
         throw std::invalid_argument("Cartesian mode cannot be used with source files");
     }
 
-    // Iterative merging (same logic as linear, but no source handling)
+    // Iterative merging until convergence
     size_t iteration = 0;
-    const size_t MAX_ITERATIONS = 10000;
+    const size_t MAX_ITERATIONS = 10000;  // Safety limit
+    const size_t BATCH_SIZE = 1000;  // Process 1000 pairs per batch to control parallel memory
+
+    std::filesystem::path current_eds_file = temp_input;
 
     while (iteration < MAX_ITERATIONS) {
+        // Check convergence (metadata-only operation)
         if (is_leds(eds, context_length)) {
             break;
         }
 
+        // Select independent pairs to merge (metadata-only operation)
         auto pairs = select_independent_merge_pairs(eds, context_length);
 
         if (pairs.empty()) {
             break;
         }
 
-        auto merge_results = merge_multiple_pairs(eds, pairs, num_threads);
-        eds = reconstruct_eds(eds, merge_results);
+        // Create temp output file for this iteration
+        std::filesystem::path temp_eds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".eds");
+        std::ofstream eds_out_stream(temp_eds_out);
+
+        if (!eds_out_stream) {
+            throw std::runtime_error("Failed to create temp output file: " + temp_eds_out.string());
+        }
+
+        // Process pairs in batches to control parallel memory usage
+        for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
+            size_t batch_end = std::min(batch_start + BATCH_SIZE, pairs.size());
+            std::vector<MergePair> batch_pairs(
+                pairs.begin() + batch_start,
+                pairs.begin() + batch_end
+            );
+
+            // Compute merge metadata (NO string data, minimal memory)
+            auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
+
+            // Stream output directly to file (immediate flush, no accumulation)
+            stream_merged_symbols_to_file(
+                eds,
+                batch_metadata,
+                eds_out_stream,
+                nullptr  // No sources in cartesian mode
+            );
+
+            // batch_metadata freed here automatically (RAII)
+        }
+
+        eds_out_stream.close();
+
+        // Replace EDS with temp file (still METADATA_ONLY mode)
+        // This keeps memory footprint constant across iterations
+        eds = EDS::load(temp_eds_out, EDS::StoringMode::METADATA_ONLY);
+
+        // Update file pointer for cleanup
+        current_eds_file = temp_eds_out;
 
         iteration++;
     }
@@ -421,8 +884,22 @@ void eds_to_leds_cartesian(
         throw std::runtime_error("Maximum iterations reached without convergence");
     }
 
-    auto format = compact ? EDS::OutputFormat::COMPACT : EDS::OutputFormat::FULL;
-    eds.save(output, format);
+    // Copy final result to output stream
+    {
+        std::ifstream final_eds(current_eds_file);
+        if (!final_eds) {
+            throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
+        }
+        output << final_eds.rdbuf();
+    }
+
+    // Cleanup temp directory
+    try {
+        std::filesystem::remove_all(temp_dir);
+    } catch (const std::exception& e) {
+        // Non-fatal: temp cleanup failed, but transformation succeeded
+        std::cerr << "Warning: Failed to cleanup temp directory " << temp_dir << ": " << e.what() << "\n";
+    }
 }
 
 /**

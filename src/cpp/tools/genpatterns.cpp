@@ -71,9 +71,9 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Load EDS in FULL mode (required for pattern generation)
+        // Load EDS in METADATA_ONLY mode (memory-efficient, works via read_symbol())
         std::cerr << "Loading EDS file: " << input_file << "\n";
-        EDS eds = EDS::load(input_file, EDS::StoringMode::FULL);
+        EDS eds = EDS::load(input_file, EDS::StoringMode::METADATA_ONLY);
 
         if (eds.empty()) {
             std::cerr << "Error: Cannot generate patterns from empty EDS\n";

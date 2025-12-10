@@ -30,12 +30,12 @@ void test_merge_two_degenerate() {
     assert(merged.cardinality() == 2);  // m = 2 (GT, CT)
     assert(merged.size() == 3);  // N = 3 (G+T=2, C+T=2, total 3 unique chars... wait)
 
-    // Check sets
-    const auto& sets = merged.get_sets();
-    assert(sets.size() == 1);
-    assert(sets[0].size() == 2);
-    assert(sets[0][0] == "GT");
-    assert(sets[0][1] == "CT");
+    // Check sets (using read_symbol for METADATA_ONLY compatibility)
+    assert(merged.length() == 1);
+    auto set0 = merged.read_symbol(0);
+    assert(set0.size() == 2);
+    assert(set0[0] == "GT");
+    assert(set0[1] == "CT");
 
     // Check metadata
     assert(merged.get_is_degenerate()[0] == true);  // 2 alternatives = degenerate
@@ -52,9 +52,9 @@ void test_merge_degenerate_nondegenerate() {
     assert(merged.length() == 1);
     assert(merged.cardinality() == 2);
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0][0] == "GT");
-    assert(sets[0][1] == "CT");
+    auto set0 = merged.read_symbol(0);
+    assert(set0[0] == "GT");
+    assert(set0[1] == "CT");
 
     pass();
 }
@@ -68,12 +68,11 @@ void test_merge_nondegenerate_degenerate() {
     assert(merged.length() == 1);
     assert(merged.cardinality() == 3);
 
-    const auto& sets = merged.get_sets();
-    assert(sets.size() == 1);
-    assert(sets[0].size() == 3);
-    assert(sets[0][0] == "TA");
-    assert(sets[0][1] == "TC");
-    assert(sets[0][2] == "TG");
+    auto set0 = merged.read_symbol(0);
+    assert(set0.size() == 3);
+    assert(set0[0] == "TA");
+    assert(set0[1] == "TC");
+    assert(set0[2] == "TG");
 
     pass();
 }
@@ -88,11 +87,11 @@ void test_merge_three_step() {
     assert(step2.length() == 1);
     assert(step2.cardinality() == 4);
 
-    const auto& sets = step2.get_sets();
-    assert(sets[0][0] == "GTA");
-    assert(sets[0][1] == "GTC");
-    assert(sets[0][2] == "CTA");
-    assert(sets[0][3] == "CTC");
+    auto set0 = step2.read_symbol(0);
+    assert(set0[0] == "GTA");
+    assert(set0[1] == "GTC");
+    assert(set0[2] == "CTA");
+    assert(set0[3] == "CTC");
 
     pass();
 }
@@ -105,9 +104,9 @@ void test_merge_with_empty_strings() {
 
     assert(merged.cardinality() == 2);
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0][0] == "T");   // "" + "T" = "T"
-    assert(sets[0][1] == "AT");  // "A" + "T" = "AT"
+    auto set0 = merged.read_symbol(0);
+    assert(set0[0] == "T");   // "" + "T" = "T"
+    assert(set0[1] == "AT");  // "A" + "T" = "AT"
 
     pass();
 }
@@ -128,13 +127,14 @@ void test_merge_metadata_update() {
     assert(is_deg[0] == false);  // {ACGT} non-degenerate
     assert(is_deg[1] == true);   // {GT,CT} degenerate
 
-    // Check sets
-    const auto& sets = merged.get_sets();
-    assert(sets[0].size() == 1);
-    assert(sets[0][0] == "ACGT");
-    assert(sets[1].size() == 2);
-    assert(sets[1][0] == "GT");
-    assert(sets[1][1] == "CT");
+    // Check sets (using read_symbol for METADATA_ONLY compatibility)
+    auto set0 = merged.read_symbol(0);
+    auto set1 = merged.read_symbol(1);
+    assert(set0.size() == 1);
+    assert(set0[0] == "ACGT");
+    assert(set1.size() == 2);
+    assert(set1[0] == "GT");
+    assert(set1[1] == "CT");
 
     pass();
 }
@@ -191,9 +191,9 @@ void test_merge_with_empty_intersection_filtered() {
 
     assert(merged.cardinality() == 1);  // Only AC
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0].size() == 1);
-    assert(sets[0][0] == "AC");
+    auto set0 = merged.read_symbol(0);
+    assert(set0.size() == 1);
+    assert(set0[0] == "AC");
 
     const auto& sources = merged.get_sources();
     assert(sources[0].size() == 1);
@@ -213,8 +213,8 @@ void test_merge_with_universal_marker() {
 
     assert(merged.cardinality() == 1);  // Only AC
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0][0] == "AC");
+    auto set0 = merged.read_symbol(0);
+    assert(set0[0] == "AC");
 
     const auto& sources = merged.get_sources();
     assert(sources[0].count(1) == 1);  // {0} ∩ {1} = {1}
@@ -315,9 +315,10 @@ void test_merge_at_start() {
 
     assert(merged.length() == 2);
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0][0] == "AB");
-    assert(sets[1][0] == "C");
+    auto set0 = merged.read_symbol(0);
+    auto set1 = merged.read_symbol(1);
+    assert(set0[0] == "AB");
+    assert(set1[0] == "C");
 
     pass();
 }
@@ -330,9 +331,10 @@ void test_merge_at_end() {
 
     assert(merged.length() == 2);
 
-    const auto& sets = merged.get_sets();
-    assert(sets[0][0] == "A");
-    assert(sets[1][0] == "BC");
+    auto set0 = merged.read_symbol(0);
+    auto set1 = merged.read_symbol(1);
+    assert(set0[0] == "A");
+    assert(set1[0] == "BC");
 
     pass();
 }
