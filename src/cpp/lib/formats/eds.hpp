@@ -6,6 +6,8 @@
 #include <vector>
 #include <string>
 #include <set>
+#include <list>
+#include <unordered_map>
 #include <fstream>
 #include <filesystem>
 
@@ -160,13 +162,18 @@ public:
     // Access to internal data
     const std::vector<StringSet>& get_sets() const;  // Throws if METADATA_ONLY mode
     const std::vector<bool>& get_is_degenerate() const { return metadata_.is_degenerate; }
-    const std::vector<std::set<int>>& get_sources() const { return sources_; }
+    const std::vector<std::set<int>>& get_sources() const;  // Throws if METADATA_ONLY mode
 
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
     Length get_symbol_size(Position pos) const { return metadata_.symbol_sizes[pos]; }
     std::streampos get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
     Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
+
+    // Source streaming access (works in both modes)
+    std::set<int> read_source(size_t string_id) const;  // Read source set from file or memory
+    void set_source_cache_capacity(size_t capacity);    // Configure LRU cache size
+    void clear_source_cache() const;                    // Clear source cache manually
 
 private:
     // Core state
@@ -188,17 +195,33 @@ private:
 
     // Optional source support
     bool has_sources_;                           // Whether sources are loaded
-    std::vector<std::set<int>> sources_;         // Path IDs per string (indexed by string ID)
+    std::vector<std::set<int>> sources_;         // Path IDs per string (indexed by string ID, only FULL mode)
+
+    // Source streaming support (only if has_sources_ && mode_ == METADATA_ONLY)
+    std::filesystem::path sources_file_path_;
+    mutable std::ifstream sources_stream_;       // Mutable for const methods
+    std::vector<std::streampos> source_base_positions_;  // Index: m × 8 bytes
+
+    // LRU cache for source streaming performance
+    struct SourceCacheEntry {
+        size_t string_id;
+        std::set<int> paths;
+    };
+    mutable std::list<SourceCacheEntry> source_cache_;
+    mutable std::unordered_map<size_t, std::list<SourceCacheEntry>::iterator> source_cache_map_;
+    size_t source_cache_capacity_;  // Default: 10000
 
     // Helper methods
     void parse(std::istream& is);
     void parse_sources(std::istream& is);
+    void parse_sources_metadata_only(std::istream& is);  // Build index without loading data
     void calculate_statistics();
     void calculate_source_statistics();
     std::string normalize_eds_format(const std::string& input) const;
 
     // Streaming helpers
     StringSet read_symbol_from_stream(Position pos) const;
+    std::set<int> read_source_from_stream(size_t string_id) const;  // Source streaming helper
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

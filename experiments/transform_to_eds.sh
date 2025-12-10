@@ -23,6 +23,7 @@ FORCE_OVERWRITE=false
 GENERATE_STATISTICS=true
 REFERENCE_FASTA=""  # Required for VCF input
 THREADS=1  # Number of parallel jobs
+USE_SCREEN=false  # Run each file in its own screen session
 
 # Tool paths
 MSA2EDS_TOOL="msa2eds"
@@ -84,6 +85,7 @@ OPTIONS:
   --lengths L1,L2,... Length values for l-EDS (default: "3,5,10,15,20")
   --reference FILE    Reference FASTA for VCF (auto-detected, see below)
   --threads N         Number of parallel jobs (default: 1, native bash)
+  --screen            Run each file in its own screen session (recommended for remote servers)
   --force             Overwrite existing output files
   --no-stats          Don't generate statistics.csv
   -h, --help          Show this help message
@@ -132,12 +134,38 @@ EXAMPLES:
   # Process with 4 parallel jobs
   $0 --dataset SARS_cov2 --format msa --threads 4
 
+  # Process large VCF files in screen sessions (remote server)
+  $0 --dataset human_genome --format vcf --screen
+
 PARALLEL PROCESSING:
   Use --threads N to process N files concurrently using native bash job control:
     - --threads 1: Sequential processing (default)
     - --threads 4: Process 4 files simultaneously
 
   Note: Files are processed in batches. Parallel processing may produce interleaved logs.
+
+SCREEN SESSIONS (Remote Server Workflow):
+  Use --screen to launch each file in its own named screen session. This is ideal for:
+    - Long-running VCF transformations on remote servers
+    - Ability to disconnect/reconnect without losing progress
+    - Independent monitoring of each file's progress
+
+  Example workflow:
+    # Launch transformations in screen sessions
+    $0 --dataset large_vcf --format vcf --screen
+
+    # List all screen sessions
+    screen -ls
+
+    # Attach to specific session
+    screen -r eds-transform-chr1
+
+    # Detach from session: Ctrl+A then D
+    # Kill session: Ctrl+A then K
+
+  Screen session naming: "eds-transform-<basename>"
+
+  Note: --screen ignores --threads (each file gets its own session)
 
 DIRECTORY STRUCTURE:
   datasets/DATASET_NAME/
@@ -205,9 +233,23 @@ check_tools() {
             ;;
     esac
 
+    # Check for screen if --screen is enabled
+    if [[ "$USE_SCREEN" == "true" ]]; then
+        if ! command -v screen &> /dev/null; then
+            log_error "screen command not found. Install screen or remove --screen flag."
+            exit 1
+        fi
+        log_success "Found screen: $(which screen)"
+        log_info "Each file will run in its own screen session"
+    fi
+
     # Log parallel processing mode if threads > 1
     if [[ $THREADS -gt 1 ]]; then
-        log_info "Using $THREADS parallel jobs (native bash)"
+        if [[ "$USE_SCREEN" == "true" ]]; then
+            log_warning "--threads ignored when --screen is enabled"
+        else
+            log_info "Using $THREADS parallel jobs (native bash)"
+        fi
     fi
 }
 
@@ -375,6 +417,81 @@ transform_to_leds() {
         log_error "Failed to transform $basename to l-EDS (l=$l_value)"
         cat "$log_output"
         return 1
+    fi
+}
+
+launch_in_screen() {
+    local input_file="$1"
+    local dataset_path="$2"
+    local basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
+    local session_name="eds-transform-${basename}"
+
+    # Create a temporary wrapper script to run in screen
+    local wrapper_script="$(mktemp)"
+    cat > "$wrapper_script" << 'EOF_WRAPPER'
+#!/bin/bash
+# Auto-generated wrapper for screen session
+
+# Export all necessary variables
+export SCRIPT_DIR="__SCRIPT_DIR__"
+export INPUT_FORMAT="__INPUT_FORMAT__"
+export FORCE_OVERWRITE="__FORCE_OVERWRITE__"
+export GENERATE_STATISTICS="__GENERATE_STATISTICS__"
+export REFERENCE_FASTA="__REFERENCE_FASTA__"
+export MSA2EDS_TOOL="__MSA2EDS_TOOL__"
+export VCF2EDS_TOOL="__VCF2EDS_TOOL__"
+export EDS2LEDS_TOOL="__EDS2LEDS_TOOL__"
+export STATS_FILE="__STATS_FILE__"
+
+# Export length values array
+__LENGTH_VALUES_EXPORT__
+
+# Source the main script to get all functions
+source "__MAIN_SCRIPT__"
+
+# Process the file
+process_file "__INPUT_FILE__" "__DATASET_PATH__"
+
+# Keep screen session alive after completion
+echo ""
+echo "Transformation complete. Press Ctrl+A then K to kill this session."
+exec bash
+EOF_WRAPPER
+
+    # Replace placeholders with actual values
+    sed -i "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" "$wrapper_script"
+    sed -i "s|__INPUT_FORMAT__|$INPUT_FORMAT|g" "$wrapper_script"
+    sed -i "s|__FORCE_OVERWRITE__|$FORCE_OVERWRITE|g" "$wrapper_script"
+    sed -i "s|__GENERATE_STATISTICS__|$GENERATE_STATISTICS|g" "$wrapper_script"
+    sed -i "s|__REFERENCE_FASTA__|$REFERENCE_FASTA|g" "$wrapper_script"
+    sed -i "s|__MSA2EDS_TOOL__|$MSA2EDS_TOOL|g" "$wrapper_script"
+    sed -i "s|__VCF2EDS_TOOL__|$VCF2EDS_TOOL|g" "$wrapper_script"
+    sed -i "s|__EDS2LEDS_TOOL__|$EDS2LEDS_TOOL|g" "$wrapper_script"
+    sed -i "s|__STATS_FILE__|$STATS_FILE|g" "$wrapper_script"
+    sed -i "s|__MAIN_SCRIPT__|${BASH_SOURCE[0]}|g" "$wrapper_script"
+    sed -i "s|__INPUT_FILE__|$input_file|g" "$wrapper_script"
+    sed -i "s|__DATASET_PATH__|$dataset_path|g" "$wrapper_script"
+
+    # Handle array export
+    local length_export="export LENGTH_VALUES=(${LENGTH_VALUES[*]})"
+    sed -i "s|__LENGTH_VALUES_EXPORT__|$length_export|g" "$wrapper_script"
+
+    chmod +x "$wrapper_script"
+
+    # Launch screen session in detached mode
+    screen -dmS "$session_name" bash "$wrapper_script"
+
+    # Clean up wrapper script after a delay (screen has captured it)
+    (sleep 2 && rm -f "$wrapper_script") &
+
+    log_success "Launched screen session: $session_name"
+    log_info "  Attach with: screen -r $session_name"
+
+    # Determine log location based on input format
+    if [[ "$INPUT_FORMAT" != "eds" ]]; then
+        log_info "  View logs: tail -f $dataset_path/eds/${basename}.eds.log"
+    else
+        log_info "  View logs: tail -f $dataset_path/*_leds/${basename}.leds.log"
     fi
 }
 
@@ -550,8 +667,37 @@ main() {
 
     log_info "Found $total_files file(s) to process"
 
-    # Process files (sequentially or in parallel)
-    if [[ $THREADS -gt 1 ]]; then
+    # Process files (screen sessions, parallel, or sequential)
+    if [[ "$USE_SCREEN" == "true" ]]; then
+        # Launch each file in its own screen session
+        local screen_sessions=()
+        for input_file in "${input_files[@]}"; do
+            if [[ -f "$input_file" ]]; then
+                local basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
+                launch_in_screen "$input_file" "$dataset_path"
+                screen_sessions+=("eds-transform-${basename}")
+            fi
+        done
+
+        echo ""
+        log_success "Launched ${#screen_sessions[@]} screen sessions"
+        log_info "================================================"
+        log_info "Screen Session Management:"
+        log_info "  List all sessions:    screen -ls"
+        log_info "  Attach to session:    screen -r <name>"
+        log_info "  Detach from session:  Ctrl+A then D"
+        log_info "  Kill session:         Ctrl+A then K"
+        log_info "================================================"
+        echo ""
+        log_info "Active sessions:"
+        for session in "${screen_sessions[@]}"; do
+            log_info "  - $session"
+        done
+        echo ""
+
+        # Don't print regular summary when using screen
+        return
+    elif [[ $THREADS -gt 1 ]]; then
         # Native bash parallel processing using & and wait
         local job_count=0
         for input_file in "${input_files[@]}"; do
@@ -610,6 +756,10 @@ while [[ $# -gt 0 ]]; do
         --threads)
             THREADS="$2"
             shift 2
+            ;;
+        --screen)
+            USE_SCREEN=true
+            shift
             ;;
         --force)
             FORCE_OVERWRITE=true

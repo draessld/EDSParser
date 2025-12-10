@@ -12,24 +12,24 @@ namespace edsparser {
 // ================================================================================
 
 // Stream-based constructor (always FULL mode for streams)
-EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false) {
+EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
     parse(eds_stream);
 }
 
 // Stream-based constructor with sources (always FULL mode)
-EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false) {
+EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
     parse(eds_stream);
     parse_sources(seds_stream);
 }
 
 // String-based constructor (always FULL mode for strings)
-EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false) {
+EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
     std::stringstream ss(eds_string);
     parse(ss);
 }
 
 // String-based constructor with sources (always FULL mode)
-EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false) {
+EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
     std::stringstream eds_ss(eds_string);
     std::stringstream seds_ss(seds_string);
     parse(eds_ss);
@@ -178,6 +178,14 @@ EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
     eds.mode_ = mode;
     eds.is_empty_ = false;
     eds.has_sources_ = false;
+    eds.source_cache_capacity_ = 10000;  // Default cache size
+
+    // Deprecation warning for FULL mode
+    if (mode == StoringMode::FULL) {
+        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
+                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
+                  << "         All operations now work with METADATA_ONLY mode.\n";
+    }
 
     // For METADATA_ONLY, save path for later streaming
     if (mode == StoringMode::METADATA_ONLY) {
@@ -207,10 +215,19 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     eds.mode_ = mode;
     eds.is_empty_ = false;
     eds.has_sources_ = false;
+    eds.source_cache_capacity_ = 10000;  // Default cache size
 
-    // For METADATA_ONLY, save path for later streaming
+    // Deprecation warning for FULL mode
+    if (mode == StoringMode::FULL) {
+        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
+                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
+                  << "         All operations now work with METADATA_ONLY mode.\n";
+    }
+
+    // For METADATA_ONLY, save BOTH paths for later streaming
     if (mode == StoringMode::METADATA_ONLY) {
         eds.file_path_ = eds_path;
+        eds.sources_file_path_ = seds_path;
     }
 
     std::ifstream eds_ifs(eds_path);
@@ -225,11 +242,18 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     }
     eds.parse_sources(seds_ifs);
 
-    // For METADATA_ONLY, reopen file and keep stream open
+    // For METADATA_ONLY, reopen BOTH files and keep streams open
     if (mode == StoringMode::METADATA_ONLY) {
+        // EDS stream
         eds.stream_.open(eds_path);
         if (!eds.stream_) {
             throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
+        }
+
+        // Sources stream
+        eds.sources_stream_.open(seds_path);
+        if (!eds.sources_stream_) {
+            throw std::runtime_error("Failed to reopen sources file for streaming: " + seds_path.string());
         }
     }
 
@@ -266,7 +290,13 @@ void EDS::load_sources(const std::string& seds_string) {
 //          sEDS is {0}{1,3}{2}{0}{1}{2,3}
 //          where str0→{0}, str1→{1,3}, str2→{2}, str3→{0}, str4→{1}, str5→{2,3}
 void EDS::parse_sources(std::istream& is) {
-    // Read entire input into string
+    // For METADATA_ONLY mode, build index without loading data
+    if (mode_ == StoringMode::METADATA_ONLY) {
+        parse_sources_metadata_only(is);
+        return;
+    }
+
+    // FULL mode: Read entire input into string
     std::stringstream buffer;
     buffer << is.rdbuf();
     std::string input = buffer.str();
@@ -352,6 +382,181 @@ void EDS::parse_sources(std::istream& is) {
 
     // Calculate source statistics
     calculate_source_statistics();
+}
+
+// Parse sEDS in METADATA_ONLY mode: build index without loading data
+void EDS::parse_sources_metadata_only(std::istream& is) {
+    source_base_positions_.clear();
+    source_base_positions_.reserve(m_);  // Pre-allocate for m strings
+
+    std::streampos current_pos = is.tellg();
+    size_t string_count = 0;
+    char ch;
+
+    // Single-pass scan to build index
+    while (is.get(ch)) {
+        if (ch == '{') {
+            // Record starting position of this source set
+            source_base_positions_.push_back(current_pos);
+
+            // Skip until matching '}'
+            int depth = 1;
+            while (depth > 0 && is.get(ch)) {
+                if (ch == '{') depth++;
+                else if (ch == '}') depth--;
+            }
+
+            current_pos = is.tellg();
+            string_count++;
+        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
+            throw std::runtime_error("Unexpected character in sEDS file: " +
+                                   std::string(1, ch));
+        } else {
+            current_pos = is.tellg();
+        }
+    }
+
+    // Validate count matches EDS cardinality
+    if (string_count != m_) {
+        throw std::runtime_error("sEDS: Source count (" +
+            std::to_string(string_count) + ") does not match EDS cardinality (" +
+            std::to_string(m_) + ")");
+    }
+
+    has_sources_ = true;
+
+    // Note: Source statistics cannot be calculated without loading actual data
+    // They will be computed on-demand if needed
+}
+
+// ================================================================================
+// SOURCE STREAMING ACCESS
+// ================================================================================
+
+// Read source set from stream (helper for METADATA_ONLY mode)
+std::set<int> EDS::read_source_from_stream(size_t string_id) const {
+    if (!sources_stream_.is_open()) {
+        throw std::runtime_error("Sources file stream not available");
+    }
+
+    // Seek to position
+    sources_stream_.clear();  // Clear error flags
+    sources_stream_.seekg(source_base_positions_[string_id]);
+
+    if (!sources_stream_) {
+        throw std::runtime_error("Failed to seek to source position " +
+                                std::to_string(string_id));
+    }
+
+    // Parse one source set: {path_id1,path_id2,...}
+    std::set<int> result;
+    char ch;
+    std::string current_number;
+
+    // Expect '{'
+    if (!sources_stream_.get(ch) || ch != '{') {
+        throw std::runtime_error("Expected '{' for source set " +
+                                std::to_string(string_id));
+    }
+
+    // Parse path IDs
+    while (sources_stream_.get(ch) && ch != '}') {
+        if (ch == ',') {
+            if (!current_number.empty()) {
+                result.insert(std::stoi(current_number));
+                current_number.clear();
+            }
+        } else if (std::isdigit(static_cast<unsigned char>(ch))) {
+            current_number += ch;
+        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
+            throw std::runtime_error("Invalid character in source set: " +
+                                   std::string(1, ch));
+        }
+    }
+
+    // Add last number
+    if (!current_number.empty()) {
+        result.insert(std::stoi(current_number));
+    }
+
+    return result;
+}
+
+// Read source set (works in both FULL and METADATA_ONLY modes)
+std::set<int> EDS::read_source(size_t string_id) const {
+    // Validation
+    if (!has_sources_) {
+        throw std::runtime_error("No sources loaded");
+    }
+    if (string_id >= m_) {
+        throw std::out_of_range("String ID " + std::to_string(string_id) +
+                               " out of range (m=" + std::to_string(m_) + ")");
+    }
+
+    // FULL mode: return directly from vector
+    if (mode_ == StoringMode::FULL) {
+        return sources_[string_id];
+    }
+
+    // METADATA_ONLY mode: check cache first
+    auto cache_it = source_cache_map_.find(string_id);
+    if (cache_it != source_cache_map_.end()) {
+        // Cache hit: move to front of LRU list
+        source_cache_.splice(source_cache_.begin(), source_cache_, cache_it->second);
+        return cache_it->second->paths;
+    }
+
+    // Cache miss: read from file
+    std::set<int> paths = read_source_from_stream(string_id);
+
+    // Add to cache
+    if (source_cache_capacity_ > 0) {
+        // Evict if cache full
+        if (source_cache_.size() >= source_cache_capacity_) {
+            size_t evict_id = source_cache_.back().string_id;
+            source_cache_map_.erase(evict_id);
+            source_cache_.pop_back();
+        }
+
+        // Insert at front (most recently used)
+        source_cache_.push_front({string_id, paths});
+        source_cache_map_[string_id] = source_cache_.begin();
+    }
+
+    return paths;
+}
+
+// Configure source cache capacity
+void EDS::set_source_cache_capacity(size_t capacity) {
+    source_cache_capacity_ = capacity;
+    if (source_cache_.size() > capacity) {
+        // Trim cache to new size
+        while (source_cache_.size() > capacity) {
+            size_t evict_id = source_cache_.back().string_id;
+            source_cache_map_.erase(evict_id);
+            source_cache_.pop_back();
+        }
+    }
+}
+
+// Clear source cache manually
+void EDS::clear_source_cache() const {
+    source_cache_.clear();
+    source_cache_map_.clear();
+}
+
+// Get sources vector (FULL mode only, for backward compatibility)
+const std::vector<std::set<int>>& EDS::get_sources() const {
+    if (!has_sources_) {
+        throw std::runtime_error("No sources loaded");
+    }
+    if (mode_ == StoringMode::METADATA_ONLY) {
+        throw std::runtime_error(
+            "Cannot access sources vector in METADATA_ONLY mode. "
+            "Use read_source(string_id) for on-demand access, or load with StoringMode::FULL"
+        );
+    }
+    return sources_;
 }
 
 // ================================================================================
@@ -557,13 +762,7 @@ void EDS::print_statistics(std::ostream& os) const {
 }
 
 void EDS::print(std::ostream& os) const {
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot print EDS in METADATA_ONLY mode. "
-            "Load with StoringMode::FULL to access string data for printing."
-        );
-    }
-
+    // Now works with both FULL and METADATA_ONLY modes via read_symbol()
     if (is_empty_) {
         os << "(empty EDS)\n";
         return;
@@ -571,8 +770,9 @@ void EDS::print(std::ostream& os) const {
 
     os << "EDS with " << n_ << " sets, " << m_ << " total strings:\n";
 
-    for (size_t i = 0; i < sets_.size(); i++) {
-        const auto& set = sets_[i];
+    for (size_t i = 0; i < n_; i++) {
+        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes)
+        StringSet set = read_symbol(i);
 
         os << "Set " << i << ": {";
 
@@ -598,16 +798,11 @@ void EDS::print(std::ostream& os) const {
 }
 
 void EDS::save(std::ostream& os, OutputFormat format) const {
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot save EDS in METADATA_ONLY mode. "
-            "Load with StoringMode::FULL to access string data for saving."
-        );
-    }
-
+    // Now works with both FULL and METADATA_ONLY modes via read_symbol()
     // Output EDS format
-    for (size_t i = 0; i < sets_.size(); i++) {
-        const auto& set = sets_[i];
+    for (size_t i = 0; i < n_; i++) {
+        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes)
+        StringSet set = read_symbol(i);
 
         // Determine if we should use brackets for this set
         bool use_brackets = (format == OutputFormat::FULL) || metadata_.is_degenerate[i];
@@ -769,14 +964,7 @@ void EDS::generate_patterns(std::ostream& os, size_t count, Length pattern_lengt
 }
 
 String EDS::extract(Position pos, Length len, const std::vector<int>& changes) const {
-    // Only available in FULL mode
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "extract() is only available in FULL mode. "
-            "Load EDS with StoringMode::FULL to use this function."
-        );
-    }
-
+    // Now works with both FULL and METADATA_ONLY modes via read_symbol()
     if (is_empty_ || n_ == 0) {
         throw std::runtime_error("Cannot extract from empty EDS");
     }
@@ -806,7 +994,8 @@ String EDS::extract(Position pos, Length len, const std::vector<int>& changes) c
         Position current_pos = pos + i;
         int change_idx = changes[i];
 
-        const StringSet& set = sets_[current_pos];
+        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes)
+        StringSet set = read_symbol(current_pos);
 
         // Validate change index
         if (change_idx < 0 || static_cast<size_t>(change_idx) >= set.size()) {

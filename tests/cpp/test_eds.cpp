@@ -17,29 +17,32 @@ void test_simple_eds() {
     assert(eds.size() == 14);         // 14 characters total
     assert(!eds.empty());
 
-    const auto& sets = eds.get_sets();
     const auto& is_deg = eds.get_is_degenerate();
 
     // Position 0: {ACGT} - regular
-    assert(sets[0].size() == 1);
-    assert(sets[0][0] == "ACGT");
+    auto set0 = eds.read_symbol(0);
+    assert(set0.size() == 1);
+    assert(set0[0] == "ACGT");
     assert(!is_deg[0]);
 
     // Position 1: {A,ACA} - degenerate
-    assert(sets[1].size() == 2);
-    assert(sets[1][0] == "A");
-    assert(sets[1][1] == "ACA");
+    auto set1 = eds.read_symbol(1);
+    assert(set1.size() == 2);
+    assert(set1[0] == "A");
+    assert(set1[1] == "ACA");
     assert(is_deg[1]);
 
     // Position 2: {CGT} - regular
-    assert(sets[2].size() == 1);
-    assert(sets[2][0] == "CGT");
+    auto set2 = eds.read_symbol(2);
+    assert(set2.size() == 1);
+    assert(set2[0] == "CGT");
     assert(!is_deg[2]);
 
     // Position 3: {T,TG} - degenerate
-    assert(sets[3].size() == 2);
-    assert(sets[3][0] == "T");
-    assert(sets[3][1] == "TG");
+    auto set3 = eds.read_symbol(3);
+    assert(set3.size() == 2);
+    assert(set3[0] == "T");
+    assert(set3[1] == "TG");
     assert(is_deg[3]);
 
     std::cout << "PASSED\n";
