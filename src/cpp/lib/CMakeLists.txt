@@ -4,6 +4,7 @@
 set(LIB_SOURCES
     common.cpp
     formats/eds.cpp
+    formats/sources.cpp
     transforms/eds_transforms.cpp
     transforms/msa_transforms.cpp
     transforms/vcf_transforms.cpp
@@ -12,6 +13,7 @@ set(LIB_SOURCES
 set(LIB_HEADERS
     common.hpp
     formats/eds.hpp
+    formats/sources.hpp
     transforms/eds_transforms.hpp
     transforms/msa_transforms.hpp
     transforms/vcf_transforms.hpp
@@ -49,7 +51,9 @@ install(FILES common.hpp
     DESTINATION include/edsparser
 )
 
-install(FILES formats/eds.hpp
+install(FILES
+    formats/eds.hpp
+    formats/sources.hpp
     DESTINATION include/edsparser/formats
 )
 

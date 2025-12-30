@@ -1,5 +1,6 @@
 // EDS parsing tests
 #include "formats/eds.hpp"
+#include "formats/sources.hpp"
 #include <sstream>
 #include <iostream>
 #include <cassert>
@@ -409,10 +410,12 @@ void test_string_with_sources() {
     assert(eds.cardinality() == 3);
     assert(eds.has_sources());
 
-    const auto& sources = eds.get_sources();
-    assert(sources[0].count(1) == 1);
-    assert(sources[1].count(2) == 1);
-    assert(sources[2].size() == 2);
+    auto src0 = eds.read_source(0);
+    auto src1 = eds.read_source(1);
+    auto src2 = eds.read_source(2);
+    assert(src0.count(1) == 1);
+    assert(src1.count(2) == 1);
+    assert(src2.size() == 2);
 
     std::cout << "PASSED\n";
 }
@@ -450,8 +453,11 @@ void test_mixed_inputs() {
     // Test: post-construction source loading with string
     edsparser::EDS eds4("{PQ}{RS}");
     assert(!eds4.has_sources());
-    std::string sources_str = "{2}{3}";
-    eds4.load_sources(sources_str);
+    // Create Sources object manually
+    auto sources4 = std::make_shared<Sources>(2, Sources::Format::SEDS, Sources::StoringMode::FULL);
+    sources4->set_source(0, {2});
+    sources4->set_source(1, {3});
+    eds4.set_sources_object(sources4);
     assert(eds4.has_sources());
 
     // Cleanup
@@ -541,13 +547,16 @@ void test_load_sources_string() {
     edsparser::EDS eds("{A}{B,C}");
     assert(!eds.has_sources());
 
-    std::string seds_str = "{0}{1}{2}";
-    eds.load_sources(seds_str);
+    // Create Sources object manually
+    auto sources = std::make_shared<Sources>(3, Sources::Format::SEDS, Sources::StoringMode::FULL);
+    sources->set_source(0, {0});
+    sources->set_source(1, {1});
+    sources->set_source(2, {2});
+    eds.set_sources_object(sources);
 
     assert(eds.has_sources());
-    const auto& sources = eds.get_sources();
-    assert(sources.size() == 3);
-    assert(sources[0].count(0) == 1);
+    auto src0 = eds.read_source(0);
+    assert(src0.count(0) == 1);
 
     std::cout << "PASSED\n";
 }

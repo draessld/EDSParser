@@ -169,12 +169,13 @@ void test_merge_with_valid_intersections() {
     assert(merged.cardinality() == 2);
     assert(merged.has_sources());
 
-    const auto& sources = merged.get_sources();
-    assert(sources.size() == 2);
-    assert(sources[0].size() == 1);
-    assert(sources[0].count(2) == 1);  // GT has {2}
-    assert(sources[1].size() == 1);
-    assert(sources[1].count(2) == 1);  // CT has {2}
+    // Check merged sources using read_source()
+    auto src0 = merged.read_source(0);
+    auto src1 = merged.read_source(1);
+    assert(src0.size() == 1);
+    assert(src0.count(2) == 1);  // GT has {2}
+    assert(src1.size() == 1);
+    assert(src1.count(2) == 1);  // CT has {2}
 
     pass();
 }
@@ -195,9 +196,9 @@ void test_merge_with_empty_intersection_filtered() {
     assert(set0.size() == 1);
     assert(set0[0] == "AC");
 
-    const auto& sources = merged.get_sources();
-    assert(sources[0].size() == 1);
-    assert(sources[0].count(1) == 1);
+    auto src0 = merged.read_source(0);
+    assert(src0.size() == 1);
+    assert(src0.count(1) == 1);
 
     pass();
 }
@@ -216,8 +217,8 @@ void test_merge_with_universal_marker() {
     auto set0 = merged.read_symbol(0);
     assert(set0[0] == "AC");
 
-    const auto& sources = merged.get_sources();
-    assert(sources[0].count(1) == 1);  // {0} ∩ {1} = {1}
+    auto src0 = merged.read_source(0);
+    assert(src0.count(1) == 1);  // {0} ∩ {1} = {1}
 
     pass();
 }
@@ -230,9 +231,9 @@ void test_merge_universal_with_universal() {
     EDS eds(std::string("{A}{B}"), std::string("{0}{0}"));
     EDS merged = eds.merge_adjacent(0, 1);
 
-    const auto& sources = merged.get_sources();
-    assert(sources[0].size() == 1);
-    assert(sources[0].count(0) == 1);  // {0} ∩ {0} = {0}
+    auto src0 = merged.read_source(0);
+    assert(src0.size() == 1);
+    assert(src0.count(0) == 1);  // {0} ∩ {0} = {0}
 
     pass();
 }

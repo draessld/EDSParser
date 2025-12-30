@@ -127,7 +127,7 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     if (eds.has_sources()) {
         std::cout << "Sources (pangenome paths):\n";
-        std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources().size()) << "\n";
+        std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources_object()->cardinality()) << "\n";
         std::cout << "  Total paths (genomes):        " << std::setw(12) << format_number(stats.num_paths) << "\n";
         std::cout << "  Max paths per string:         " << std::setw(12) << format_number(stats.max_paths_per_string) << "\n";
         std::cout << "  Avg paths per string:         " << std::setw(12) << std::fixed << std::setprecision(2) << stats.avg_paths_per_string << "\n";

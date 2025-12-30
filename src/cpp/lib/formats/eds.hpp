@@ -2,6 +2,7 @@
 #define EDSPARSER_EDS_HPP
 
 #include "../common.hpp"
+#include "sources.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <filesystem>
+#include <memory>
 
 namespace edsparser {
 
@@ -40,7 +42,7 @@ public:
     };
 
     // Default constructor
-    EDS() : is_empty_(true), mode_(StoringMode::FULL), has_sources_(false) {}
+    EDS() : is_empty_(true), mode_(StoringMode::FULL), sources_(nullptr) {}
 
     // Stream-based constructors
     explicit EDS(std::istream& eds_stream);
@@ -73,7 +75,6 @@ public:
     size_t length() const { return n_; }           // Number of sets
     size_t size() const { return N_; }             // Total characters
     size_t cardinality() const { return m_; }      // Total number of strings
-    bool has_sources() const { return has_sources_; }  // Whether sources are loaded
     StoringMode get_storing_mode() const { return mode_; }  // Get storage mode
 
     // Metadata structure (combines index data and statistics)
@@ -129,13 +130,6 @@ public:
     void print(std::ostream& os = std::cout) const;
     void save(std::ostream& os, OutputFormat format = OutputFormat::FULL) const;
     void save(const std::filesystem::path& path, OutputFormat format = OutputFormat::FULL) const;
-    void save_sources(std::ostream& os) const;  // Save sEDS format
-    void save_sources(const std::filesystem::path& path) const;  // Save sEDS to file
-
-    // Loading methods (sources only - EDS loading is via constructors/static load)
-    void load_sources(std::istream& is);  // Load sources from sEDS stream
-    void load_sources(const std::filesystem::path& path);  // Load sources from sEDS file
-    void load_sources(const std::string& seds_string);  // Load sources from sEDS string
 
     // Pattern generation for benchmarking
     void generate_patterns(std::ostream& os, size_t count, Length pattern_length) const;
@@ -162,7 +156,6 @@ public:
     // Access to internal data
     const std::vector<StringSet>& get_sets() const;  // Throws if METADATA_ONLY mode
     const std::vector<bool>& get_is_degenerate() const { return metadata_.is_degenerate; }
-    const std::vector<std::set<int>>& get_sources() const;  // Throws if METADATA_ONLY mode
 
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
@@ -170,10 +163,17 @@ public:
     std::streampos get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
     Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
 
-    // Source streaming access (works in both modes)
-    std::set<int> read_source(size_t string_id) const;  // Read source set from file or memory
-    void set_source_cache_capacity(size_t capacity);    // Configure LRU cache size
-    void clear_source_cache() const;                    // Clear source cache manually
+    // Source access (delegated to Sources object)
+    bool has_sources() const { return sources_ != nullptr; }
+    std::set<int> read_source(size_t string_id) const;  // Delegates to sources_->read_source()
+
+    // Direct Sources object access (for advanced users)
+    std::shared_ptr<Sources> get_sources_object() const { return sources_; }
+    void set_sources_object(std::shared_ptr<Sources> sources);
+
+    // Source cache management (deprecated - use sources_->set_cache_capacity() directly)
+    void set_source_cache_capacity(size_t capacity);    // Delegates to sources_
+    void clear_source_cache() const;                    // Delegates to sources_
 
 private:
     // Core state
@@ -193,35 +193,16 @@ private:
     std::filesystem::path file_path_;
     mutable std::ifstream stream_;      // Mutable to allow reading in const methods
 
-    // Optional source support
-    bool has_sources_;                           // Whether sources are loaded
-    std::vector<std::set<int>> sources_;         // Path IDs per string (indexed by string ID, only FULL mode)
-
-    // Source streaming support (only if has_sources_ && mode_ == METADATA_ONLY)
-    std::filesystem::path sources_file_path_;
-    mutable std::ifstream sources_stream_;       // Mutable for const methods
-    std::vector<std::streampos> source_base_positions_;  // Index: m × 8 bytes
-
-    // LRU cache for source streaming performance
-    struct SourceCacheEntry {
-        size_t string_id;
-        std::set<int> paths;
-    };
-    mutable std::list<SourceCacheEntry> source_cache_;
-    mutable std::unordered_map<size_t, std::list<SourceCacheEntry>::iterator> source_cache_map_;
-    size_t source_cache_capacity_;  // Default: 10000
+    // Optional source support (delegated to Sources class)
+    std::shared_ptr<Sources> sources_;  // nullptr if no sources loaded
 
     // Helper methods
     void parse(std::istream& is);
-    void parse_sources(std::istream& is);
-    void parse_sources_metadata_only(std::istream& is);  // Build index without loading data
     void calculate_statistics();
-    void calculate_source_statistics();
     std::string normalize_eds_format(const std::string& input) const;
 
     // Streaming helpers
     StringSet read_symbol_from_stream(Position pos) const;
-    std::set<int> read_source_from_stream(size_t string_id) const;  // Source streaming helper
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

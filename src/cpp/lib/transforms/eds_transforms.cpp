@@ -43,6 +43,7 @@ namespace {
         std::vector<Length> merged_string_lengths;  // Length of each string (no actual strings)
         std::vector<std::set<int>> merged_sources;  // Empty if no sources
     };
+    
 
     /**
      * Select independent pairs of adjacent positions to merge in parallel.
@@ -176,28 +177,8 @@ namespace {
                         const std::set<int> sources2 = eds.read_source(global_string_idx2 + j);
                         Length len2 = metadata.string_lengths[global_string_idx2 + j];
 
-                        // Compute intersection with special handling for {0} (universal marker)
-                        std::set<int> intersection;
-                        bool sources1_has_universal = sources1.count(0) > 0;
-                        bool sources2_has_universal = sources2.count(0) > 0;
-
-                        if (sources1_has_universal && sources2_has_universal) {
-                            // {0} ∩ {0} = {0}
-                            intersection.insert(0);
-                        } else if (sources1_has_universal) {
-                            // {0} ∩ {x,y,...} = {x,y,...}
-                            intersection = sources2;
-                        } else if (sources2_has_universal) {
-                            // {x,y,...} ∩ {0} = {x,y,...}
-                            intersection = sources1;
-                        } else {
-                            // Regular set intersection
-                            std::set_intersection(
-                                sources1.begin(), sources1.end(),
-                                sources2.begin(), sources2.end(),
-                                std::inserter(intersection, intersection.begin())
-                            );
-                        }
+                        // Use Sources static helper for intersection
+                        std::set<int> intersection = Sources::intersect_sources(sources1, sources2);
 
                         // Only keep if intersection is non-empty
                         if (!intersection.empty()) {
@@ -278,11 +259,10 @@ namespace {
                 // Extract sources if present
                 if (eds.has_sources()) {
                     size_t merged_size = merged.get_symbol_size(pair.pos1);
-                    const auto& all_sources = merged.get_sources();
                     size_t global_idx = merged.get_metadata().cum_set_sizes[pair.pos1];
                     results[i].merged_sources.resize(merged_size);
                     for (size_t j = 0; j < merged_size; ++j) {
-                        results[i].merged_sources[j] = all_sources[global_idx + j];
+                        results[i].merged_sources[j] = merged.read_source(global_idx + j);
                     }
                 }
             }
@@ -301,11 +281,10 @@ namespace {
                 // Extract sources if present
                 if (eds.has_sources()) {
                     size_t merged_size = merged.get_symbol_size(pair.pos1);
-                    const auto& all_sources = merged.get_sources();
                     size_t global_idx = merged.get_metadata().cum_set_sizes[pair.pos1];
                     results[i].merged_sources.resize(merged_size);
                     for (size_t j = 0; j < merged_size; ++j) {
-                        results[i].merged_sources[j] = all_sources[global_idx + j];
+                        results[i].merged_sources[j] = merged.read_source(global_idx + j);
                     }
                 }
             }
@@ -321,11 +300,10 @@ namespace {
 
                 if (eds.has_sources()) {
                     size_t merged_size = merged.get_symbol_size(pair.pos1);
-                    const auto& all_sources = merged.get_sources();
                     size_t global_idx = merged.get_metadata().cum_set_sizes[pair.pos1];
                     results[i].merged_sources.resize(merged_size);
                     for (size_t j = 0; j < merged_size; ++j) {
-                        results[i].merged_sources[j] = all_sources[global_idx + j];
+                        results[i].merged_sources[j] = merged.read_source(global_idx + j);
                     }
                 }
             }
@@ -361,7 +339,6 @@ namespace {
         std::ostringstream eds_stream;
         std::ostringstream sources_stream;
         bool has_sources = original.has_sources();
-        const auto& all_sources = has_sources ? original.get_sources() : std::vector<std::set<int>>();
 
         for (size_t pos = 0; pos < original.length(); ++pos) {
             if (skip[pos]) {
@@ -409,7 +386,7 @@ namespace {
                     size_t symbol_size = original.get_symbol_size(pos);
                     size_t global_idx = original.get_metadata().cum_set_sizes[pos];
                     for (size_t i = 0; i < symbol_size; ++i) {
-                        const auto& src = all_sources[global_idx + i];
+                        const std::set<int> src = original.read_source(global_idx + i);
                         sources_stream << '{';
                         bool first = true;
                         for (int path_id : src) {
@@ -673,17 +650,14 @@ void eds_to_leds_linear(
     std::filesystem::path current_seds_file = temp_sources_input;
 
     while (iteration < MAX_ITERATIONS) {
-        // Check convergence (metadata-only operation)
-        if (is_leds(eds, context_length)) {
-            break;  // All internal common blocks satisfy l-EDS property
-        }
-
         // Select independent pairs to merge (metadata-only operation)
+        // This checks both l-EDS conditions:
+        // 1. Internal common blocks with length < context_length
+        // 2. Adjacent degenerate symbols (implicit empty common block)
         auto pairs = select_independent_merge_pairs(eds, context_length);
 
         if (pairs.empty()) {
-            // No more pairs to merge, but still not l-EDS
-            // This can happen if degenerate symbols prevent further merging
+            // No violations - EDS satisfies l-EDS property
             break;
         }
 
@@ -826,15 +800,14 @@ void eds_to_leds_cartesian(
     std::filesystem::path current_eds_file = temp_input;
 
     while (iteration < MAX_ITERATIONS) {
-        // Check convergence (metadata-only operation)
-        if (is_leds(eds, context_length)) {
-            break;
-        }
-
         // Select independent pairs to merge (metadata-only operation)
+        // This checks both l-EDS conditions:
+        // 1. Internal common blocks with length < context_length
+        // 2. Adjacent degenerate symbols (implicit empty common block)
         auto pairs = select_independent_merge_pairs(eds, context_length);
 
         if (pairs.empty()) {
+            // No violations - EDS satisfies l-EDS property
             break;
         }
 
@@ -900,48 +873,6 @@ void eds_to_leds_cartesian(
         // Non-fatal: temp cleanup failed, but transformation succeeded
         std::cerr << "Warning: Failed to cleanup temp directory " << temp_dir << ": " << e.what() << "\n";
     }
-}
-
-/**
- * Check if EDS satisfies l-EDS property.
- *
- * An EDS is an l-EDS if:
- * 1. All internal common blocks have length >= l
- * 2. No two adjacent degenerate symbols (implicit empty common block)
- *
- * @param eds The EDS to check
- * @param context_length Minimum context length l
- * @return true if eds is an l-EDS
- */
-bool is_leds(const EDS& eds, Length context_length) {
-    if (context_length == 0) {
-        return true;  // Every EDS is a 0-EDS
-    }
-
-    const auto& is_degenerate = eds.get_is_degenerate();
-
-    // Check all positions
-    for (size_t i = 0; i < eds.length(); ++i) {
-        if (!is_degenerate[i]) {
-            // This is a common block - get its length
-            size_t global_idx = eds.get_metadata().cum_set_sizes[i];
-            Length len = eds.get_string_length(global_idx);
-
-            // Internal common blocks must have length >= context_length
-            // Exception: First and last positions can be shorter
-            if (i > 0 && i < eds.length() - 1 && len < context_length) {
-                return false;
-            }
-        }
-
-        // Check for adjacent degenerate symbols (implicit empty common block)
-        // Note: Edge case exemption applies only to common blocks, not degenerate symbols
-        if (i + 1 < eds.length() && is_degenerate[i] && is_degenerate[i + 1]) {
-            return false;  // Two adjacent degenerate = implicit {} with length 0 < context_length
-        }
-    }
-
-    return true;
 }
 
 } // namespace edsparser

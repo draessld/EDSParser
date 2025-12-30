@@ -50,12 +50,6 @@ void eds_to_leds_cartesian(
     bool compact = true
 );
 
-/**
- * Check if EDS satisfies l-EDS property
- * (all internal common blocks have length >= l)
- */
-bool is_leds(const EDS& eds, Length context_length);
-
 } // namespace edsparser
 
 #endif // EDSPARSER_TRANSFORMS_EDS_TRANSFORMS_HPP

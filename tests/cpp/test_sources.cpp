@@ -1,5 +1,6 @@
 // sEDS (source) parsing tests
 #include "formats/eds.hpp"
+#include "formats/sources.hpp"
 #include <sstream>
 #include <iostream>
 #include <cassert>
@@ -19,34 +20,37 @@ void test_simple_sources() {
     assert(eds.has_sources());
     assert(eds.cardinality() == 6);
 
-    const auto& sources = eds.get_sources();
-    assert(sources.size() == 6);
-
     // str0 "ACGT": {0} = all paths
-    assert(sources[0].size() == 1);
-    assert(sources[0].count(0) == 1);
+    auto src0 = eds.read_source(0);
+    assert(src0.size() == 1);
+    assert(src0.count(0) == 1);
 
     // str1 "A": {1,3}
-    assert(sources[1].size() == 2);
-    assert(sources[1].count(1) == 1);
-    assert(sources[1].count(3) == 1);
+    auto src1 = eds.read_source(1);
+    assert(src1.size() == 2);
+    assert(src1.count(1) == 1);
+    assert(src1.count(3) == 1);
 
     // str2 "ACA": {2}
-    assert(sources[2].size() == 1);
-    assert(sources[2].count(2) == 1);
+    auto src2 = eds.read_source(2);
+    assert(src2.size() == 1);
+    assert(src2.count(2) == 1);
 
     // str3 "CGT": {0} = all paths
-    assert(sources[3].size() == 1);
-    assert(sources[3].count(0) == 1);
+    auto src3 = eds.read_source(3);
+    assert(src3.size() == 1);
+    assert(src3.count(0) == 1);
 
     // str4 "T": {1}
-    assert(sources[4].size() == 1);
-    assert(sources[4].count(1) == 1);
+    auto src4 = eds.read_source(4);
+    assert(src4.size() == 1);
+    assert(src4.count(1) == 1);
 
     // str5 "TG": {2,3}
-    assert(sources[5].size() == 2);
-    assert(sources[5].count(2) == 1);
-    assert(sources[5].count(3) == 1);
+    auto src5 = eds.read_source(5);
+    assert(src5.size() == 2);
+    assert(src5.count(2) == 1);
+    assert(src5.count(3) == 1);
 
     std::cout << "PASSED\n";
 }
@@ -60,19 +64,27 @@ void test_load_sources_separately() {
     assert(!eds.has_sources());
     assert(eds.cardinality() == 5);
 
-    // Now load sources
-    std::stringstream seds_ss("{0}{1}{2}{3}{0}");
-    eds.load_sources(seds_ss);
+    // Now load sources - create Sources object manually
+    auto sources = std::make_shared<Sources>(5, Sources::Format::SEDS, Sources::StoringMode::FULL);
+    sources->set_source(0, {0});  // AC: {0}
+    sources->set_source(1, {1});  // "": {1}
+    sources->set_source(2, {2});  // A: {2}
+    sources->set_source(3, {3});  // T: {3}
+    sources->set_source(4, {0});  // GT: {0}
+    eds.set_sources_object(sources);
 
     assert(eds.has_sources());
-    const auto& sources = eds.get_sources();
-    assert(sources.size() == 5);
+    auto src0 = eds.read_source(0);
+    auto src1 = eds.read_source(1);
+    auto src2 = eds.read_source(2);
+    auto src3 = eds.read_source(3);
+    auto src4 = eds.read_source(4);
 
-    assert(sources[0].count(0) == 1);  // AC: {0}
-    assert(sources[1].count(1) == 1);  // "": {1}
-    assert(sources[2].count(2) == 1);  // A: {2}
-    assert(sources[3].count(3) == 1);  // T: {3}
-    assert(sources[4].count(0) == 1);  // GT: {0}
+    assert(src0.count(0) == 1);  // AC: {0}
+    assert(src1.count(1) == 1);  // "": {1}
+    assert(src2.count(2) == 1);  // A: {2}
+    assert(src3.count(3) == 1);  // T: {3}
+    assert(src4.count(0) == 1);  // GT: {0}
 
     std::cout << "PASSED\n";
 }
@@ -85,18 +97,21 @@ void test_save_sources() {
 
     edsparser::EDS eds(eds_ss, seds_ss);
 
-    // Save sources
-    std::stringstream output;
-    eds.save_sources(output);
+    // Save sources using Sources object
+    std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_seds_save_temp.seds";
+    eds.get_sources_object()->save(temp_path);
 
-    std::string result = output.str();
-    // Remove newline for comparison
-    if (!result.empty() && result.back() == '\n') {
-        result.pop_back();
-    }
+    // Read back to verify
+    std::ifstream ifs(temp_path);
+    std::string result;
+    std::getline(ifs, result);
+    ifs.close();
 
     // Should output: {1}{2}{1,2}
     assert(result == "{1}{2}{1,2}");
+
+    // Clean up
+    std::filesystem::remove(temp_path);
 
     std::cout << "PASSED\n";
 }
@@ -109,11 +124,12 @@ void test_sources_with_whitespace() {
 
     edsparser::EDS eds(eds_ss, seds_ss);
 
-    const auto& sources = eds.get_sources();
-    assert(sources[0].count(1) == 1);
-    assert(sources[1].size() == 2);
-    assert(sources[1].count(2) == 1);
-    assert(sources[1].count(3) == 1);
+    auto src0 = eds.read_source(0);
+    auto src1 = eds.read_source(1);
+    assert(src0.count(1) == 1);
+    assert(src1.size() == 2);
+    assert(src1.count(2) == 1);
+    assert(src1.count(3) == 1);
 
     std::cout << "PASSED\n";
 }
@@ -126,17 +142,18 @@ void test_all_paths_marker() {
 
     edsparser::EDS eds(eds_ss, seds_ss);
 
-    const auto& sources = eds.get_sources();
-
     // str0 "ACGT": {0} stored as literal 0
-    assert(sources[0].size() == 1);
-    assert(sources[0].count(0) == 1);
+    auto src0 = eds.read_source(0);
+    assert(src0.size() == 1);
+    assert(src0.count(0) == 1);
 
     // str1 "A": {1}
-    assert(sources[1].count(1) == 1);
+    auto src1 = eds.read_source(1);
+    assert(src1.count(1) == 1);
 
     // str2 "T": {2}
-    assert(sources[2].count(2) == 1);
+    auto src2 = eds.read_source(2);
+    assert(src2.count(2) == 1);
 
     std::cout << "PASSED\n";
 }
@@ -222,11 +239,16 @@ void test_save_without_sources() {
 
     bool caught = false;
     try {
-        std::stringstream output;
-        eds.save_sources(output);
+        // get_sources_object() returns nullptr when no sources
+        auto sources_obj = eds.get_sources_object();
+        if (!sources_obj) {
+            throw std::runtime_error("No sources loaded");
+        }
+        std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_fail.seds";
+        sources_obj->save(temp_path);
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();
-        caught = (msg.find("no sources") != std::string::npos);
+        caught = (msg.find("o sources") != std::string::npos);  // Matches "No sources" or "no sources"
     }
 
     assert(caught);
@@ -241,22 +263,28 @@ void test_roundtrip() {
 
     edsparser::EDS eds1(eds_ss, seds_ss);
 
-    // Save sources
-    std::stringstream saved;
-    eds1.save_sources(saved);
+    // Save sources to temp file
+    std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_roundtrip_temp.seds";
+    eds1.get_sources_object()->save(temp_path);
 
     // Parse again
     std::stringstream eds_ss2("{ACGT}{A,ACA}{CGT}");
-    edsparser::EDS eds2(eds_ss2, saved);
+    edsparser::EDS eds2(eds_ss2);
 
-    // Compare
-    const auto& sources1 = eds1.get_sources();
-    const auto& sources2 = eds2.get_sources();
+    // Load sources from temp file
+    auto sources2 = Sources::load(temp_path, Sources::StoringMode::FULL);
+    eds2.set_sources_object(sources2);
 
-    assert(sources1.size() == sources2.size());
-    for (size_t i = 0; i < sources1.size(); i++) {
-        assert(sources1[i] == sources2[i]);
+    // Compare - read sources one by one
+    assert(eds1.cardinality() == eds2.cardinality());
+    for (size_t i = 0; i < eds1.cardinality(); i++) {
+        auto src1 = eds1.read_source(i);
+        auto src2 = eds2.read_source(i);
+        assert(src1 == src2);
     }
+
+    // Clean up
+    std::filesystem::remove(temp_path);
 
     std::cout << "PASSED\n";
 }
@@ -269,9 +297,9 @@ void test_save_sources_to_file() {
     std::stringstream seds_ss("{1}{2}{1,2}");
     edsparser::EDS eds(eds_ss, seds_ss);
 
-    // Save to file
+    // Save to file using Sources object
     std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_seds_save.seds";
-    eds.save_sources(temp_path);
+    eds.get_sources_object()->save(temp_path);
 
     // Verify file exists and read it back
     assert(std::filesystem::exists(temp_path));
@@ -302,17 +330,21 @@ void test_load_sources_from_file() {
     ofs << "{0}{1}{2}{3}{0}";
     ofs.close();
 
-    // Load sources from file
-    eds.load_sources(temp_path);
+    // Load sources from file using Sources class
+    auto sources = Sources::load(temp_path, Sources::StoringMode::FULL);
+    eds.set_sources_object(sources);
 
     assert(eds.has_sources());
-    const auto& sources = eds.get_sources();
-    assert(sources.size() == 5);
-    assert(sources[0].count(0) == 1);
-    assert(sources[1].count(1) == 1);
-    assert(sources[2].count(2) == 1);
-    assert(sources[3].count(3) == 1);
-    assert(sources[4].count(0) == 1);
+    auto src0 = eds.read_source(0);
+    auto src1 = eds.read_source(1);
+    auto src2 = eds.read_source(2);
+    auto src3 = eds.read_source(3);
+    auto src4 = eds.read_source(4);
+    assert(src0.count(0) == 1);
+    assert(src1.count(1) == 1);
+    assert(src2.count(2) == 1);
+    assert(src3.count(3) == 1);
+    assert(src4.count(0) == 1);
 
     // Clean up
     std::filesystem::remove(temp_path);
@@ -328,22 +360,22 @@ void test_roundtrip_sources_file() {
     std::stringstream seds_ss("{0}{1,2}{3}{0}");
     edsparser::EDS eds1(eds_ss1, seds_ss);
 
-    // Save sources to file
+    // Save sources to file using Sources object
     std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_seds_roundtrip.seds";
-    eds1.save_sources(temp_path);
+    eds1.get_sources_object()->save(temp_path);
 
     // Create new EDS and load sources from file
     std::stringstream eds_ss2("{ACGT}{A,ACA}{CGT}");
     edsparser::EDS eds2(eds_ss2);
-    eds2.load_sources(temp_path);
+    auto sources2 = Sources::load(temp_path, Sources::StoringMode::FULL);
+    eds2.set_sources_object(sources2);
 
-    // Compare
-    const auto& sources1 = eds1.get_sources();
-    const auto& sources2 = eds2.get_sources();
-
-    assert(sources1.size() == sources2.size());
-    for (size_t i = 0; i < sources1.size(); i++) {
-        assert(sources1[i] == sources2[i]);
+    // Compare - read sources one by one
+    assert(eds1.cardinality() == eds2.cardinality());
+    for (size_t i = 0; i < eds1.cardinality(); i++) {
+        auto src1 = eds1.read_source(i);
+        auto src2 = eds2.read_source(i);
+        assert(src1 == src2);
     }
 
     // Clean up
@@ -362,7 +394,8 @@ void test_load_sources_nonexistent_file() {
 
     bool caught = false;
     try {
-        eds.load_sources(nonexistent);
+        auto sources = Sources::load(nonexistent, Sources::StoringMode::FULL);
+        eds.set_sources_object(sources);
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();
         caught = (msg.find("Failed to open") != std::string::npos);

@@ -12,28 +12,30 @@ namespace edsparser {
 // ================================================================================
 
 // Stream-based constructor (always FULL mode for streams)
-EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
+EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
     parse(eds_stream);
 }
 
 // Stream-based constructor with sources (always FULL mode)
-EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
+EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
     parse(eds_stream);
-    parse_sources(seds_stream);
+    // Load sources from stream
+    sources_ = Sources::from_stream(seds_stream, m_, Sources::Format::SEDS);
 }
 
 // String-based constructor (always FULL mode for strings)
-EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
+EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
     std::stringstream ss(eds_string);
     parse(ss);
 }
 
 // String-based constructor with sources (always FULL mode)
-EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
+EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
     std::stringstream eds_ss(eds_string);
-    std::stringstream seds_ss(seds_string);
     parse(eds_ss);
-    parse_sources(seds_ss);
+    // Load sources from string
+    std::stringstream seds_ss(seds_string);
+    sources_ = Sources::from_stream(seds_ss, m_, Sources::Format::SEDS);
 }
 
 void EDS::parse(std::istream& is) {
@@ -177,8 +179,7 @@ EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
     EDS eds;
     eds.mode_ = mode;
     eds.is_empty_ = false;
-    eds.has_sources_ = false;
-    eds.source_cache_capacity_ = 10000;  // Default cache size
+    eds.sources_ = nullptr;  // No sources by default
 
     // Deprecation warning for FULL mode
     if (mode == StoringMode::FULL) {
@@ -214,8 +215,6 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     EDS eds;
     eds.mode_ = mode;
     eds.is_empty_ = false;
-    eds.has_sources_ = false;
-    eds.source_cache_capacity_ = 10000;  // Default cache size
 
     // Deprecation warning for FULL mode
     if (mode == StoringMode::FULL) {
@@ -224,339 +223,78 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
                   << "         All operations now work with METADATA_ONLY mode.\n";
     }
 
-    // For METADATA_ONLY, save BOTH paths for later streaming
+    // For METADATA_ONLY, save path for later streaming
     if (mode == StoringMode::METADATA_ONLY) {
         eds.file_path_ = eds_path;
-        eds.sources_file_path_ = seds_path;
     }
 
+    // Load EDS
     std::ifstream eds_ifs(eds_path);
     if (!eds_ifs) {
         throw std::runtime_error("Failed to open EDS file: " + eds_path.string());
     }
     eds.parse(eds_ifs);
 
-    std::ifstream seds_ifs(seds_path);
-    if (!seds_ifs) {
-        throw std::runtime_error("Failed to open sEDS file: " + seds_path.string());
-    }
-    eds.parse_sources(seds_ifs);
+    // Load sources using Sources class
+    Sources::StoringMode sources_mode = (mode == StoringMode::FULL)
+        ? Sources::StoringMode::FULL
+        : Sources::StoringMode::METADATA_ONLY;
+    eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS, sources_mode);
 
-    // For METADATA_ONLY, reopen BOTH files and keep streams open
+    // For METADATA_ONLY, reopen EDS file and keep stream open
     if (mode == StoringMode::METADATA_ONLY) {
-        // EDS stream
         eds.stream_.open(eds_path);
         if (!eds.stream_) {
             throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
-        }
-
-        // Sources stream
-        eds.sources_stream_.open(seds_path);
-        if (!eds.sources_stream_) {
-            throw std::runtime_error("Failed to reopen sources file for streaming: " + seds_path.string());
         }
     }
 
     return eds;
 }
 
-// Load sources from sEDS stream
-void EDS::load_sources(std::istream& is) {
-    parse_sources(is);
-}
-
-// Load sources from sEDS file
-void EDS::load_sources(const std::filesystem::path& path) {
-    std::ifstream ifs(path);
-    if (!ifs) {
-        throw std::runtime_error("Failed to open file: " + path.string());
-    }
-    parse_sources(ifs);
-}
-
-// Load sources from sEDS string
-void EDS::load_sources(const std::string& seds_string) {
-    std::stringstream ss(seds_string);
-    parse_sources(ss);
-}
+// ================================================================================
+// SOURCE MANAGEMENT (Deleted - now delegated to Sources class)
+// ================================================================================
+// Note: load_sources(), save_sources(), parse_sources() methods have been removed.
+// Sources are now managed via the Sources class.
+// Use Sources::load() to create a Sources object, then set_sources_object() to attach it.
 
 // ================================================================================
-// SOURCE PARSING
+// (Deleted: parse_sources() and parse_sources_metadata_only() moved to Sources class)
 // ================================================================================
 
-// Parse sEDS format (flattened): {path_ids}{path_ids}...
-// Format: one set of path IDs per string (indexed by string ID 0..m-1)
-// Example: For EDS {ACGT}{A,ACA}{CGT}{T,TG} with 6 strings total:
-//          sEDS is {0}{1,3}{2}{0}{1}{2,3}
-//          where str0→{0}, str1→{1,3}, str2→{2}, str3→{0}, str4→{1}, str5→{2,3}
-void EDS::parse_sources(std::istream& is) {
-    // For METADATA_ONLY mode, build index without loading data
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        parse_sources_metadata_only(is);
-        return;
-    }
+// (Deleted: read_source_from_stream() - now in Sources class)
 
-    // FULL mode: Read entire input into string
-    std::stringstream buffer;
-    buffer << is.rdbuf();
-    std::string input = buffer.str();
-
-    // Remove whitespace
-    input.erase(std::remove_if(input.begin(), input.end(), ::isspace), input.end());
-
-    if (input.empty()) {
-        throw std::runtime_error("sEDS input is empty");
-    }
-
-    // Parse flattened sEDS format: {path_ids}{path_ids}...
-    // One source set per string, ordered by string ID (total = cardinality m)
-    size_t pos = 0;
-    sources_.clear();
-    size_t string_count = 0;
-
-    while (pos < input.length()) {
-        // Expect '{'
-        if (input[pos] != SET_OPEN) {
-            throw std::runtime_error("sEDS: Expected '{' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '{'
-
-        // Parse path IDs for this string
-        std::set<int> path_set;
-        std::string current_number;
-
-        while (pos < input.length() && input[pos] != SET_CLOSE) {
-            if (input[pos] == SET_SEPARATOR) {
-                // End of current path ID
-                if (!current_number.empty()) {
-                    int path_id = std::stoi(current_number);
-                    if (path_id < 0) {
-                        throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-                    }
-                    path_set.insert(path_id);
-                    current_number.clear();
-                }
-                pos++;
-            } else if (std::isdigit(input[pos])) {
-                // Digit, add to current number
-                current_number += input[pos];
-                pos++;
-            } else {
-                throw std::runtime_error("sEDS: Invalid character '" + std::string(1, input[pos]) +
-                                       "' at position " + std::to_string(pos));
-            }
-        }
-
-        // Add last path ID if present
-        if (!current_number.empty()) {
-            int path_id = std::stoi(current_number);
-            if (path_id < 0) {
-                throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-            }
-            path_set.insert(path_id);
-        }
-
-        // Expect '}'
-        if (pos >= input.length() || input[pos] != SET_CLOSE) {
-            throw std::runtime_error("sEDS: Expected '}' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '}'
-
-        // Validate path set is not empty (unless it's an error case we want to catch)
-        if (path_set.empty()) {
-            throw std::runtime_error("sEDS: Empty path set at string " + std::to_string(string_count));
-        }
-
-        // Store source set
-        sources_.push_back(path_set);
-        string_count++;
-    }
-
-    // Validate source count matches cardinality
-    if (sources_.size() != m_) {
-        throw std::runtime_error("sEDS: Source count (" + std::to_string(sources_.size()) +
-                               ") does not match EDS cardinality (" + std::to_string(m_) + ")");
-    }
-
-    has_sources_ = true;
-
-    // Calculate source statistics
-    calculate_source_statistics();
-}
-
-// Parse sEDS in METADATA_ONLY mode: build index without loading data
-void EDS::parse_sources_metadata_only(std::istream& is) {
-    source_base_positions_.clear();
-    source_base_positions_.reserve(m_);  // Pre-allocate for m strings
-
-    std::streampos current_pos = is.tellg();
-    size_t string_count = 0;
-    char ch;
-
-    // Single-pass scan to build index
-    while (is.get(ch)) {
-        if (ch == '{') {
-            // Record starting position of this source set
-            source_base_positions_.push_back(current_pos);
-
-            // Skip until matching '}'
-            int depth = 1;
-            while (depth > 0 && is.get(ch)) {
-                if (ch == '{') depth++;
-                else if (ch == '}') depth--;
-            }
-
-            current_pos = is.tellg();
-            string_count++;
-        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-            throw std::runtime_error("Unexpected character in sEDS file: " +
-                                   std::string(1, ch));
-        } else {
-            current_pos = is.tellg();
-        }
-    }
-
-    // Validate count matches EDS cardinality
-    if (string_count != m_) {
-        throw std::runtime_error("sEDS: Source count (" +
-            std::to_string(string_count) + ") does not match EDS cardinality (" +
-            std::to_string(m_) + ")");
-    }
-
-    has_sources_ = true;
-
-    // Note: Source statistics cannot be calculated without loading actual data
-    // They will be computed on-demand if needed
-}
-
-// ================================================================================
-// SOURCE STREAMING ACCESS
-// ================================================================================
-
-// Read source set from stream (helper for METADATA_ONLY mode)
-std::set<int> EDS::read_source_from_stream(size_t string_id) const {
-    if (!sources_stream_.is_open()) {
-        throw std::runtime_error("Sources file stream not available");
-    }
-
-    // Seek to position
-    sources_stream_.clear();  // Clear error flags
-    sources_stream_.seekg(source_base_positions_[string_id]);
-
-    if (!sources_stream_) {
-        throw std::runtime_error("Failed to seek to source position " +
-                                std::to_string(string_id));
-    }
-
-    // Parse one source set: {path_id1,path_id2,...}
-    std::set<int> result;
-    char ch;
-    std::string current_number;
-
-    // Expect '{'
-    if (!sources_stream_.get(ch) || ch != '{') {
-        throw std::runtime_error("Expected '{' for source set " +
-                                std::to_string(string_id));
-    }
-
-    // Parse path IDs
-    while (sources_stream_.get(ch) && ch != '}') {
-        if (ch == ',') {
-            if (!current_number.empty()) {
-                result.insert(std::stoi(current_number));
-                current_number.clear();
-            }
-        } else if (std::isdigit(static_cast<unsigned char>(ch))) {
-            current_number += ch;
-        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-            throw std::runtime_error("Invalid character in source set: " +
-                                   std::string(1, ch));
-        }
-    }
-
-    // Add last number
-    if (!current_number.empty()) {
-        result.insert(std::stoi(current_number));
-    }
-
-    return result;
-}
-
-// Read source set (works in both FULL and METADATA_ONLY modes)
+// Read source set (delegates to Sources object)
 std::set<int> EDS::read_source(size_t string_id) const {
-    // Validation
-    if (!has_sources_) {
+    if (!sources_) {
         throw std::runtime_error("No sources loaded");
     }
-    if (string_id >= m_) {
-        throw std::out_of_range("String ID " + std::to_string(string_id) +
-                               " out of range (m=" + std::to_string(m_) + ")");
-    }
-
-    // FULL mode: return directly from vector
-    if (mode_ == StoringMode::FULL) {
-        return sources_[string_id];
-    }
-
-    // METADATA_ONLY mode: check cache first
-    auto cache_it = source_cache_map_.find(string_id);
-    if (cache_it != source_cache_map_.end()) {
-        // Cache hit: move to front of LRU list
-        source_cache_.splice(source_cache_.begin(), source_cache_, cache_it->second);
-        return cache_it->second->paths;
-    }
-
-    // Cache miss: read from file
-    std::set<int> paths = read_source_from_stream(string_id);
-
-    // Add to cache
-    if (source_cache_capacity_ > 0) {
-        // Evict if cache full
-        if (source_cache_.size() >= source_cache_capacity_) {
-            size_t evict_id = source_cache_.back().string_id;
-            source_cache_map_.erase(evict_id);
-            source_cache_.pop_back();
-        }
-
-        // Insert at front (most recently used)
-        source_cache_.push_front({string_id, paths});
-        source_cache_map_[string_id] = source_cache_.begin();
-    }
-
-    return paths;
+    return sources_->read_source(string_id);
 }
 
-// Configure source cache capacity
+// Configure source cache capacity (delegates to Sources)
 void EDS::set_source_cache_capacity(size_t capacity) {
-    source_cache_capacity_ = capacity;
-    if (source_cache_.size() > capacity) {
-        // Trim cache to new size
-        while (source_cache_.size() > capacity) {
-            size_t evict_id = source_cache_.back().string_id;
-            source_cache_map_.erase(evict_id);
-            source_cache_.pop_back();
-        }
+    if (sources_) {
+        sources_->set_cache_capacity(capacity);
     }
 }
 
-// Clear source cache manually
+// Clear source cache manually (delegates to Sources)
 void EDS::clear_source_cache() const {
-    source_cache_.clear();
-    source_cache_map_.clear();
+    if (sources_) {
+        sources_->clear_cache();
+    }
 }
 
-// Get sources vector (FULL mode only, for backward compatibility)
-const std::vector<std::set<int>>& EDS::get_sources() const {
-    if (!has_sources_) {
-        throw std::runtime_error("No sources loaded");
+// Set sources object
+void EDS::set_sources_object(std::shared_ptr<Sources> sources) {
+    // Validate cardinality matches if both EDS and sources are non-empty
+    if (sources && !is_empty_ && sources->cardinality() != m_) {
+        throw std::invalid_argument("Sources cardinality (" + std::to_string(sources->cardinality()) +
+                                  ") does not match EDS cardinality (" + std::to_string(m_) + ")");
     }
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot access sources vector in METADATA_ONLY mode. "
-            "Use read_source(string_id) for on-demand access, or load with StoringMode::FULL"
-        );
-    }
-    return sources_;
+    sources_ = sources;
 }
 
 // ================================================================================
@@ -674,41 +412,7 @@ void EDS::calculate_statistics() {
     }
 }
 
-void EDS::calculate_source_statistics() {
-    // Initialize source statistics
-    metadata_.num_paths = 0;
-    metadata_.max_paths_per_string = 0;
-    metadata_.avg_paths_per_string = 0.0;
-
-    if (!has_sources_ || sources_.empty()) {
-        return;
-    }
-
-    // Track all unique path IDs
-    std::set<int> all_paths;
-    size_t total_paths = 0;
-
-    for (const auto& source_set : sources_) {
-        // Track max paths in any single string
-        if (source_set.size() > metadata_.max_paths_per_string) {
-            metadata_.max_paths_per_string = source_set.size();
-        }
-
-        // Accumulate all unique paths
-        for (int path_id : source_set) {
-            all_paths.insert(path_id);
-        }
-
-        // Count total for average
-        total_paths += source_set.size();
-    }
-
-    // Calculate statistics
-    metadata_.num_paths = all_paths.size();
-    metadata_.avg_paths_per_string = sources_.size() > 0
-        ? static_cast<double>(total_paths) / sources_.size()
-        : 0.0;
-}
+// (Deleted: calculate_source_statistics() - now in Sources class)
 
 EDS::Statistics EDS::get_statistics() const {
     // Return Statistics struct from Metadata (for backward compatibility)
@@ -753,8 +457,8 @@ void EDS::print_statistics(std::ostream& os) const {
     os << "  Common characters:            " << stats.num_common_chars << "\n";
     os << "  Empty strings:                " << stats.num_empty_strings << "\n";
     os << "\n";
-    if (has_sources_) {
-        os << "Sources: Loaded (" << sources_.size() << " strings with source info)\n";
+    if (sources_) {
+        os << "Sources: Loaded (" << sources_->cardinality() << " strings with source info)\n";
     } else {
         os << "Sources: Not loaded\n";
     }
@@ -833,37 +537,11 @@ void EDS::save(const std::filesystem::path& path, OutputFormat format) const {
     save(ofs, format);
 }
 
-void EDS::save_sources(std::ostream& os) const {
-    if (!has_sources_) {
-        throw std::runtime_error("Cannot save sources: no sources loaded");
-    }
-
-    // Output sEDS format (flattened): {path_ids}{path_ids}...
-    // One set per string, ordered by string ID
-    for (size_t i = 0; i < sources_.size(); i++) {
-        os << "{";
-        bool first = true;
-        for (int path_id : sources_[i]) {
-            if (!first) os << ",";
-            os << path_id;
-            first = false;
-        }
-        os << "}";
-    }
-    os << "\n";
-}
+// (Deleted: save_sources() methods - now in Sources class via sources_->save())
 
 // ================================================================================
 // PATTERN GENERATION & EXTRACTION
 // ================================================================================
-
-void EDS::save_sources(const std::filesystem::path& path) const {
-    std::ofstream ofs(path);
-    if (!ofs) {
-        throw std::runtime_error("Failed to open file for writing: " + path.string());
-    }
-    save_sources(ofs);
-}
 
 void EDS::generate_patterns(std::ostream& os, size_t count, Length pattern_length) const {
     if (is_empty_ || n_ == 0) {
@@ -1188,7 +866,7 @@ bool EDS::check_position(Position common_pos,
     }
 
     // Source validation: check if path intersection is non-empty
-    if (has_sources_) {
+    if (sources_) {
         std::set<int> path_intersection;
         try {
             path_intersection = calculate_path_intersection(
@@ -1491,7 +1169,7 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
                                                const std::vector<int>& degenerate_strings,
                                                Length pattern_length) const {
     // If no sources loaded, return universal set {0}
-    if (!has_sources_) {
+    if (!sources_) {
         return {0};
     }
 
@@ -1550,14 +1228,14 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
         }
 
         // Get source set for this string
-        if (global_string_idx >= sources_.size()) {
+        if (global_string_idx >= sources_->cardinality()) {
             throw std::runtime_error(
                 "String ID " + std::to_string(global_string_idx) +
-                " out of range for sources (size: " + std::to_string(sources_.size()) + ")"
+                " out of range for sources (size: " + std::to_string(sources_->cardinality()) + ")"
             );
         }
 
-        const std::set<int>& current_sources = sources_[global_string_idx];
+        const std::set<int> current_sources = sources_->read_source(global_string_idx);
 
         // Compute intersection
         if (first) {
@@ -1643,7 +1321,7 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
     std::vector<std::set<int>> merged_sources;
     std::vector<Length> merged_string_lengths;
 
-    if (!has_sources_) {
+    if (!sources_) {
         // CARTESIAN merge: size is product
         merged_size = set1_size * set2_size;
 
@@ -1656,55 +1334,29 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
             }
         }
     } else {
-        // LINEAR merge: only count valid combinations (non-empty intersection)
+        // LINEAR merge: Use Sources::merge_adjacent_sources()
+        merged_sources = sources_->merge_adjacent_sources(
+            global_string_idx1, set1_size,
+            global_string_idx2, set2_size
+        );
+        merged_size = merged_sources.size();
+
+        // Calculate string lengths for merged combinations
+        merged_string_lengths.reserve(merged_size);
         for (size_t i = 0; i < set1_size; ++i) {
-            const std::set<int>& sources1 = sources_[global_string_idx1 + i];
             Length len1 = metadata_.string_lengths[global_string_idx1 + i];
+            const std::set<int> sources1 = sources_->read_source(global_string_idx1 + i);
 
             for (size_t j = 0; j < set2_size; ++j) {
-                const std::set<int>& sources2 = sources_[global_string_idx2 + j];
                 Length len2 = metadata_.string_lengths[global_string_idx2 + j];
+                const std::set<int> sources2 = sources_->read_source(global_string_idx2 + j);
 
-                // Compute intersection with special handling for {0}
-                std::set<int> intersection;
-                bool sources1_has_universal = sources1.count(0) > 0;
-                bool sources2_has_universal = sources2.count(0) > 0;
-
-                if (sources1_has_universal && sources2_has_universal) {
-                    // {0} ∩ {0} = {0}
-                    intersection.insert(0);
-                } else if (sources1_has_universal) {
-                    // {0} ∩ {x,y,...} = {x,y,...}
-                    intersection = sources2;
-                } else if (sources2_has_universal) {
-                    // {x,y,...} ∩ {0} = {x,y,...}
-                    intersection = sources1;
-                } else {
-                    // Regular set intersection
-                    std::set_intersection(
-                        sources1.begin(), sources1.end(),
-                        sources2.begin(), sources2.end(),
-                        std::inserter(intersection, intersection.begin())
-                    );
-                }
-
-                // Only keep if intersection is non-empty
+                // Use static helper from Sources class
+                std::set<int> intersection = Sources::intersect_sources(sources1, sources2);
                 if (!intersection.empty()) {
-                    merged_sources.push_back(intersection);
                     merged_string_lengths.push_back(len1 + len2);
                 }
             }
-        }
-
-        merged_size = merged_sources.size();
-
-        // Validation: merged set must not be empty
-        if (merged_size == 0) {
-            throw std::runtime_error(
-                "Merging positions " + std::to_string(pos1) + " and " +
-                std::to_string(pos2) + " results in empty set "
-                "(no valid source intersections)"
-            );
         }
     }
 
@@ -1713,9 +1365,9 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
     EDS result;
     result.is_empty_ = false;
     result.mode_ = mode_;
-    result.has_sources_ = has_sources_;
     result.file_path_ = file_path_;
     result.n_ = n_ - 1;  // One less position after merge
+    // Note: sources will be set later if needed
 
     // ===== BUILD NEW METADATA =====
 
@@ -1782,20 +1434,24 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
 
     // ===== BUILD SOURCES (if needed) =====
 
-    if (has_sources_) {
-        result.sources_.clear();
+    if (sources_) {
+        // Create new Sources object with merged cardinality
+        result.sources_ = std::make_shared<Sources>(result.m_, Sources::Format::SEDS, Sources::StoringMode::FULL);
+
+        // Build sources by copying and merging
+        size_t result_idx = 0;
+        size_t source_idx = 0;
 
         // Copy sources before pos1
-        size_t source_idx = 0;
         for (size_t i = 0; i < pos1; ++i) {
             for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_.push_back(sources_[source_idx++]);
+                result.sources_->set_source(result_idx++, sources_->read_source(source_idx++));
             }
         }
 
         // Add merged sources
         for (const auto& src : merged_sources) {
-            result.sources_.push_back(src);
+            result.sources_->set_source(result_idx++, src);
         }
 
         // Skip sources for pos1 and pos2
@@ -1804,7 +1460,7 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
         // Copy sources after pos2
         for (size_t i = pos2 + 1; i < n_; ++i) {
             for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_.push_back(sources_[source_idx++]);
+                result.sources_->set_source(result_idx++, sources_->read_source(source_idx++));
             }
         }
     }
@@ -1824,7 +1480,7 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
         const StringSet& set1 = sets_[pos1];
         const StringSet& set2 = sets_[pos2];
 
-        if (!has_sources_) {
+        if (!sources_) {
             // CARTESIAN: all combinations
             for (const auto& str1 : set1) {
                 for (const auto& str2 : set2) {
@@ -1835,8 +1491,8 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
             // LINEAR: only valid combinations (same logic as metadata calculation)
             for (size_t i = 0; i < set1.size(); ++i) {
                 for (size_t j = 0; j < set2.size(); ++j) {
-                    const std::set<int>& sources1 = sources_[global_string_idx1 + i];
-                    const std::set<int>& sources2 = sources_[global_string_idx2 + j];
+                    const std::set<int> sources1 = sources_->read_source(global_string_idx1 + i);
+                    const std::set<int> sources2 = sources_->read_source(global_string_idx2 + j);
 
                     // Compute intersection
                     std::set<int> intersection;
@@ -1876,9 +1532,7 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
 
     // Recalculate statistics
     result.calculate_statistics();
-    if (has_sources_) {
-        result.calculate_source_statistics();
-    }
+    // Note: Source statistics are now managed by the Sources class itself
 
     return result;
 }
