@@ -13,23 +13,13 @@ static const char SET_SEPARATOR = ',';
 // CONSTRUCTION AND DESTRUCTION
 // ================================================================================
 
-Sources::Sources(size_t cardinality, Format format, StoringMode mode)
+Sources::Sources(size_t cardinality, Format format)
     : cardinality_(cardinality)
     , format_(format)
-    , mode_(mode)
     , cache_capacity_(10000)  // Default cache size
-    , has_statistics_(false)
-    , num_paths_(0)
-    , max_paths_per_string_(0)
-    , avg_paths_per_string_(0.0)
 {
     if (cardinality == 0) {
         throw std::invalid_argument("Sources: Cardinality must be > 0");
-    }
-
-    // Pre-allocate in FULL mode
-    if (mode_ == StoringMode::FULL) {
-        sources_.reserve(cardinality_);
     }
 }
 
@@ -43,8 +33,6 @@ Sources::~Sources() {
 Sources::Sources(Sources&& other) noexcept
     : cardinality_(other.cardinality_)
     , format_(other.format_)
-    , mode_(other.mode_)
-    , sources_(std::move(other.sources_))
     , file_path_(std::move(other.file_path_))
     , stream_(std::move(other.stream_))
     , base_positions_(std::move(other.base_positions_))
@@ -52,10 +40,6 @@ Sources::Sources(Sources&& other) noexcept
     , cache_(std::move(other.cache_))
     , cache_map_(std::move(other.cache_map_))
     , cache_capacity_(other.cache_capacity_)
-    , has_statistics_(other.has_statistics_)
-    , num_paths_(other.num_paths_)
-    , max_paths_per_string_(other.max_paths_per_string_)
-    , avg_paths_per_string_(other.avg_paths_per_string_)
 {
 }
 
@@ -63,8 +47,6 @@ Sources& Sources::operator=(Sources&& other) noexcept {
     if (this != &other) {
         cardinality_ = other.cardinality_;
         format_ = other.format_;
-        mode_ = other.mode_;
-        sources_ = std::move(other.sources_);
         file_path_ = std::move(other.file_path_);
         stream_ = std::move(other.stream_);
         base_positions_ = std::move(other.base_positions_);
@@ -72,10 +54,6 @@ Sources& Sources::operator=(Sources&& other) noexcept {
         cache_ = std::move(other.cache_);
         cache_map_ = std::move(other.cache_map_);
         cache_capacity_ = other.cache_capacity_;
-        has_statistics_ = other.has_statistics_;
-        num_paths_ = other.num_paths_;
-        max_paths_per_string_ = other.max_paths_per_string_;
-        avg_paths_per_string_ = other.avg_paths_per_string_;
     }
     return *this;
 }
@@ -85,7 +63,7 @@ Sources& Sources::operator=(Sources&& other) noexcept {
 // ================================================================================
 
 std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
-                                         Format format, StoringMode mode) {
+                                         Format format) {
     // Validate file exists
     if (!std::filesystem::exists(path)) {
         throw std::runtime_error("Sources file does not exist: " + path.string());
@@ -119,7 +97,7 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
     }
 
     // Create Sources object
-    auto sources = std::make_shared<Sources>(cardinality, format, mode);
+    auto sources = std::make_shared<Sources>(cardinality, format);
     sources->file_path_ = path;
 
     // Open file for parsing
@@ -128,60 +106,28 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
         throw std::runtime_error("Failed to open sources file: " + path.string());
     }
 
-    // Parse based on format
+    // Parse based on format (builds index only)
     switch (format) {
         case Format::SEDS:
-            if (mode == StoringMode::FULL) {
-                sources->parse_seds(stream);
-            } else {
-                sources->parse_seds_metadata_only(stream);
-                // Keep stream open for METADATA_ONLY mode
-                sources->stream_ = std::move(stream);
-            }
+            sources->parse_seds(stream);
+            // Keep stream open for on-demand reading
+            sources->stream_ = std::move(stream);
             break;
 
         case Format::EDZ:
-            throw std::runtime_error("EDZ format not yet implemented (Phase 2)");
+            throw std::runtime_error("EDZ format not yet implemented");
 
         case Format::EDZ_COMPRESSED:
-            throw std::runtime_error("EDZ_COMPRESSED format not yet implemented (Phase 3)");
+            throw std::runtime_error("EDZ_COMPRESSED format not yet implemented");
     }
 
     return sources;
 }
 
-std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
-                                         StoringMode mode) {
+std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path) {
     // Auto-detect format from file extension
     Format format = detect_format(path);
-    return load(path, format, mode);
-}
-
-std::shared_ptr<Sources> Sources::from_stream(std::istream& is, size_t cardinality,
-                                                Format format) {
-    // Create Sources object in FULL mode (stream-based loading always uses FULL)
-    auto sources = std::make_shared<Sources>(cardinality, format, StoringMode::FULL);
-
-    // Parse based on format
-    if (format == Format::SEDS) {
-        sources->parse_seds(is);
-    } else if (format == Format::EDZ) {
-        sources->parse_edz(is);
-    } else if (format == Format::EDZ_COMPRESSED) {
-        sources->parse_edz_compressed(is);
-    }
-
-    // Verify cardinality matches
-    if (sources->sources_.size() != cardinality) {
-        throw std::runtime_error("Source cardinality mismatch: expected " +
-                                 std::to_string(cardinality) + ", got " +
-                                 std::to_string(sources->sources_.size()));
-    }
-
-    // Calculate statistics (only in FULL mode)
-    sources->calculate_statistics();
-
-    return sources;
+    return load(path, format);
 }
 
 // ================================================================================
@@ -233,92 +179,6 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
 // ================================================================================
 
 void Sources::parse_seds(std::istream& is) {
-    // Read entire input into string
-    std::stringstream buffer;
-    buffer << is.rdbuf();
-    std::string input = buffer.str();
-
-    // Remove whitespace
-    input.erase(std::remove_if(input.begin(), input.end(), ::isspace), input.end());
-
-    if (input.empty()) {
-        throw std::runtime_error("sEDS input is empty");
-    }
-
-    // Parse flattened sEDS format: {path_ids}{path_ids}...
-    size_t pos = 0;
-    sources_.clear();
-    size_t string_count = 0;
-
-    while (pos < input.length()) {
-        // Expect '{'
-        if (input[pos] != SET_OPEN) {
-            throw std::runtime_error("sEDS: Expected '{' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '{'
-
-        // Parse path IDs for this string
-        std::set<int> path_set;
-        std::string current_number;
-
-        while (pos < input.length() && input[pos] != SET_CLOSE) {
-            if (input[pos] == SET_SEPARATOR) {
-                // End of current path ID
-                if (!current_number.empty()) {
-                    int path_id = std::stoi(current_number);
-                    if (path_id < 0) {
-                        throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-                    }
-                    path_set.insert(path_id);
-                    current_number.clear();
-                }
-                pos++;
-            } else if (std::isdigit(input[pos])) {
-                // Digit, add to current number
-                current_number += input[pos];
-                pos++;
-            } else {
-                throw std::runtime_error("sEDS: Invalid character '" + std::string(1, input[pos]) +
-                                       "' at position " + std::to_string(pos));
-            }
-        }
-
-        // Add last path ID if present
-        if (!current_number.empty()) {
-            int path_id = std::stoi(current_number);
-            if (path_id < 0) {
-                throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-            }
-            path_set.insert(path_id);
-        }
-
-        // Expect '}'
-        if (pos >= input.length() || input[pos] != SET_CLOSE) {
-            throw std::runtime_error("sEDS: Expected '}' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '}'
-
-        // Validate path set is not empty
-        if (path_set.empty()) {
-            throw std::runtime_error("sEDS: Empty path set at string " + std::to_string(string_count));
-        }
-
-        // Store source set
-        sources_.push_back(path_set);
-        string_count++;
-    }
-
-    // Validate source count matches cardinality
-    if (sources_.size() != cardinality_) {
-        throw std::runtime_error("sEDS: Source count (" + std::to_string(sources_.size()) +
-                               ") does not match cardinality (" + std::to_string(cardinality_) + ")");
-    }
-
-    // Calculate statistics
-    calculate_statistics();
-}
-
-void Sources::parse_seds_metadata_only(std::istream& is) {
     base_positions_.clear();
     base_positions_.reserve(cardinality_);
 
@@ -355,28 +215,18 @@ void Sources::parse_seds_metadata_only(std::istream& is) {
             std::to_string(string_count) + ") does not match cardinality (" +
             std::to_string(cardinality_) + ")");
     }
-
-    // Note: Statistics cannot be calculated without loading actual data
 }
 
 // ================================================================================
-// PARSING - BINARY FORMATS (Placeholders for Phase 2 & 3)
+// PARSING - BINARY FORMATS (Placeholders)
 // ================================================================================
 
 void Sources::parse_edz(std::istream& is) {
-    throw std::runtime_error("EDZ format parsing not yet implemented (Phase 2)");
-}
-
-void Sources::parse_edz_metadata_only(std::istream& is) {
-    throw std::runtime_error("EDZ metadata-only parsing not yet implemented (Phase 2)");
+    throw std::runtime_error("EDZ format parsing not yet implemented");
 }
 
 void Sources::parse_edz_compressed(std::istream& is) {
-    throw std::runtime_error("EDZ_COMPRESSED format parsing not yet implemented (Phase 3)");
-}
-
-void Sources::parse_edz_compressed_metadata_only(std::istream& is) {
-    throw std::runtime_error("EDZ_COMPRESSED metadata-only parsing not yet implemented (Phase 3)");
+    throw std::runtime_error("EDZ_COMPRESSED format parsing not yet implemented");
 }
 
 // ================================================================================
@@ -450,12 +300,7 @@ std::set<int> Sources::read_source(size_t string_id) const {
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
     }
 
-    // FULL mode: return directly from vector
-    if (mode_ == StoringMode::FULL) {
-        return sources_[string_id];
-    }
-
-    // METADATA_ONLY mode: check cache first
+    // Check cache first
     auto cache_it = cache_map_.find(string_id);
     if (cache_it != cache_map_.end()) {
         // Cache hit: move to front of LRU list
@@ -481,31 +326,6 @@ std::set<int> Sources::read_source(size_t string_id) const {
     add_to_cache(string_id, paths);
 
     return paths;
-}
-
-void Sources::set_source(size_t string_id, const std::set<int>& paths) {
-    if (string_id >= cardinality_) {
-        throw std::out_of_range("String ID " + std::to_string(string_id) +
-                               " out of range (cardinality=" + std::to_string(cardinality_) + ")");
-    }
-
-    if (mode_ != StoringMode::FULL) {
-        throw std::runtime_error("set_source() only available in FULL mode");
-    }
-
-    if (paths.empty()) {
-        throw std::invalid_argument("Cannot set empty path set");
-    }
-
-    // Ensure vector is sized correctly
-    if (sources_.size() < cardinality_) {
-        sources_.resize(cardinality_);
-    }
-
-    sources_[string_id] = paths;
-
-    // Invalidate statistics
-    has_statistics_ = false;
 }
 
 // ================================================================================
@@ -597,31 +417,17 @@ void Sources::save_seds(const std::filesystem::path& path) const {
         throw std::runtime_error("Failed to open file for writing: " + path.string());
     }
 
-    if (mode_ == StoringMode::FULL) {
-        // Write from sources_ vector
-        for (const auto& source_set : sources_) {
-            os << SET_OPEN;
-            bool first = true;
-            for (int path_id : source_set) {
-                if (!first) os << SET_SEPARATOR;
-                os << path_id;
-                first = false;
-            }
-            os << SET_CLOSE;
+    // Read sources on-demand and write
+    for (size_t i = 0; i < cardinality_; i++) {
+        std::set<int> paths = read_source(i);
+        os << SET_OPEN;
+        bool first = true;
+        for (int path_id : paths) {
+            if (!first) os << SET_SEPARATOR;
+            os << path_id;
+            first = false;
         }
-    } else {
-        // Read and copy from stream
-        for (size_t i = 0; i < cardinality_; i++) {
-            std::set<int> paths = read_source(i);
-            os << SET_OPEN;
-            bool first = true;
-            for (int path_id : paths) {
-                if (!first) os << SET_SEPARATOR;
-                os << path_id;
-                first = false;
-            }
-            os << SET_CLOSE;
-        }
+        os << SET_CLOSE;
     }
 
     os << '\n';  // Trailing newline
@@ -634,66 +440,6 @@ void Sources::save_edz(const std::filesystem::path& path) const {
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {
     throw std::runtime_error("EDZ_COMPRESSED format saving not yet implemented (Phase 3)");
-}
-
-// ================================================================================
-// STATISTICS
-// ================================================================================
-
-void Sources::calculate_statistics() {
-    if (mode_ != StoringMode::FULL) {
-        throw std::runtime_error("Statistics calculation requires FULL mode");
-    }
-
-    if (sources_.empty()) {
-        has_statistics_ = false;
-        return;
-    }
-
-    // Track all unique path IDs
-    std::set<int> all_paths;
-    size_t total_paths = 0;
-    max_paths_per_string_ = 0;
-
-    for (const auto& source_set : sources_) {
-        // Track max paths in any single string
-        if (source_set.size() > max_paths_per_string_) {
-            max_paths_per_string_ = source_set.size();
-        }
-
-        // Accumulate all unique paths
-        for (int path_id : source_set) {
-            all_paths.insert(path_id);
-        }
-
-        // Count total for average
-        total_paths += source_set.size();
-    }
-
-    num_paths_ = all_paths.size();
-    avg_paths_per_string_ = static_cast<double>(total_paths) / sources_.size();
-    has_statistics_ = true;
-}
-
-size_t Sources::num_paths() const {
-    if (!has_statistics_) {
-        throw std::runtime_error("Statistics not available (requires FULL mode with loaded data)");
-    }
-    return num_paths_;
-}
-
-size_t Sources::max_paths_per_string() const {
-    if (!has_statistics_) {
-        throw std::runtime_error("Statistics not available (requires FULL mode with loaded data)");
-    }
-    return max_paths_per_string_;
-}
-
-double Sources::avg_paths_per_string() const {
-    if (!has_statistics_) {
-        throw std::runtime_error("Statistics not available (requires FULL mode with loaded data)");
-    }
-    return avg_paths_per_string_;
 }
 
 // ================================================================================

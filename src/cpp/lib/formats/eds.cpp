@@ -11,31 +11,15 @@ namespace edsparser {
 // CONSTRUCTORS & PARSING
 // ================================================================================
 
-// Stream-based constructor (always FULL mode for streams)
-EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
+// Stream-based constructor (EDS only, no sources)
+EDS::EDS(std::istream& eds_stream) : is_empty_(false), sources_(nullptr) {
     parse(eds_stream);
 }
 
-// Stream-based constructor with sources (always FULL mode)
-EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
-    parse(eds_stream);
-    // Load sources from stream
-    sources_ = Sources::from_stream(seds_stream, m_, Sources::Format::SEDS);
-}
-
-// String-based constructor (always FULL mode for strings)
-EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
+// String-based constructor (EDS only, no sources)
+EDS::EDS(const std::string& eds_string) : is_empty_(false), sources_(nullptr) {
     std::stringstream ss(eds_string);
     parse(ss);
-}
-
-// String-based constructor with sources (always FULL mode)
-EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), sources_(nullptr) {
-    std::stringstream eds_ss(eds_string);
-    parse(eds_ss);
-    // Load sources from string
-    std::stringstream seds_ss(seds_string);
-    sources_ = Sources::from_stream(seds_ss, m_, Sources::Format::SEDS);
 }
 
 void EDS::parse(std::istream& is) {
@@ -97,11 +81,6 @@ void EDS::parse(std::istream& is) {
                 N_ += str_len;
                 symbol_size++;
 
-                // Only store string if FULL mode
-                if (mode_ == StoringMode::FULL) {
-                    current_set.push_back(current_string);
-                }
-
                 current_string.clear();
                 pos++;
             } else {
@@ -116,10 +95,6 @@ void EDS::parse(std::istream& is) {
         metadata_.string_lengths.push_back(str_len);
         N_ += str_len;
         symbol_size++;
-
-        if (mode_ == StoringMode::FULL) {
-            current_set.push_back(current_string);
-        }
 
         // Expect '}'
         if (pos >= input.length() || input[pos] != SET_CLOSE) {
@@ -136,11 +111,6 @@ void EDS::parse(std::istream& is) {
         metadata_.symbol_sizes.push_back(symbol_size);
         metadata_.cum_set_sizes.push_back(m_);  // Cumulative count before adding this set
         metadata_.is_degenerate.push_back(symbol_size > 1);
-
-        // Store full data if FULL mode
-        if (mode_ == StoringMode::FULL) {
-            sets_.push_back(current_set);
-        }
 
         m_ += symbol_size;
         n_++;
@@ -165,33 +135,16 @@ EDS EDS::from_string(const std::string& eds_string) {
     return EDS(eds_string);
 }
 
-// Convenience factory for string-based construction with sources
-EDS EDS::from_string(const std::string& eds_string, const std::string& seds_string) {
-    return EDS(eds_string, seds_string);
-}
-
 // ================================================================================
 // FILE LOADERS
 // ================================================================================
 
-// Load EDS from file (with optional StoringMode)
-EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
+// Load EDS from file (uses streaming for memory efficiency)
+EDS EDS::load(const std::filesystem::path& path) {
     EDS eds;
-    eds.mode_ = mode;
     eds.is_empty_ = false;
     eds.sources_ = nullptr;  // No sources by default
-
-    // Deprecation warning for FULL mode
-    if (mode == StoringMode::FULL) {
-        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
-                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
-                  << "         All operations now work with METADATA_ONLY mode.\n";
-    }
-
-    // For METADATA_ONLY, save path for later streaming
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.file_path_ = path;
-    }
+    eds.file_path_ = path;
 
     std::ifstream ifs(path);
     if (!ifs) {
@@ -199,34 +152,20 @@ EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
     }
     eds.parse(ifs);
 
-    // For METADATA_ONLY, reopen file and keep stream open
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.stream_.open(path);
-        if (!eds.stream_) {
-            throw std::runtime_error("Failed to reopen file for streaming: " + path.string());
-        }
+    // Reopen file and keep stream open for on-demand reading
+    eds.stream_.open(path);
+    if (!eds.stream_) {
+        throw std::runtime_error("Failed to reopen file for streaming: " + path.string());
     }
 
     return eds;
 }
 
-// Load EDS from file with sources from file (with optional StoringMode)
-EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path, StoringMode mode) {
+// Load EDS from file with sources from file (uses streaming for memory efficiency)
+EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path) {
     EDS eds;
-    eds.mode_ = mode;
     eds.is_empty_ = false;
-
-    // Deprecation warning for FULL mode
-    if (mode == StoringMode::FULL) {
-        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
-                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
-                  << "         All operations now work with METADATA_ONLY mode.\n";
-    }
-
-    // For METADATA_ONLY, save path for later streaming
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.file_path_ = eds_path;
-    }
+    eds.file_path_ = eds_path;
 
     // Load EDS
     std::ifstream eds_ifs(eds_path);
@@ -235,18 +174,13 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     }
     eds.parse(eds_ifs);
 
-    // Load sources using Sources class
-    Sources::StoringMode sources_mode = (mode == StoringMode::FULL)
-        ? Sources::StoringMode::FULL
-        : Sources::StoringMode::METADATA_ONLY;
-    eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS, sources_mode);
+    // Load sources using Sources class (always streaming)
+    eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS);
 
-    // For METADATA_ONLY, reopen EDS file and keep stream open
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.stream_.open(eds_path);
-        if (!eds.stream_) {
-            throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
-        }
+    // Reopen EDS file and keep stream open for on-demand reading
+    eds.stream_.open(eds_path);
+    if (!eds.stream_) {
+        throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
     }
 
     return eds;
@@ -310,9 +244,6 @@ void EDS::calculate_statistics() {
         metadata_.num_common_chars = 0;
         metadata_.total_change_size = 0;
         metadata_.num_empty_strings = 0;
-        metadata_.num_paths = 0;
-        metadata_.max_paths_per_string = 0;
-        metadata_.avg_paths_per_string = 0.0;
         metadata_.cum_common_positions.clear();
         metadata_.cum_degenerate_counts.clear();
         return;
@@ -424,9 +355,6 @@ EDS::Statistics EDS::get_statistics() const {
     stats.num_common_chars = metadata_.num_common_chars;
     stats.total_change_size = metadata_.total_change_size;
     stats.num_empty_strings = metadata_.num_empty_strings;
-    stats.num_paths = metadata_.num_paths;
-    stats.max_paths_per_string = metadata_.max_paths_per_string;
-    stats.avg_paths_per_string = metadata_.avg_paths_per_string;
     return stats;
 }
 
@@ -747,14 +675,9 @@ std::string EDS::normalize_eds_format(const std::string& input) const {
     return result;
 }
 
-// Read symbol from stream (for METADATA_ONLY mode)
+// Read symbol from stream (on-demand reading)
 StringSet EDS::read_symbol_from_stream(Position pos) const {
-    if (mode_ == StoringMode::FULL) {
-        // In FULL mode, return directly from sets_
-        return sets_[pos];
-    }
-
-    // METADATA_ONLY mode: stream from file
+    // Stream from file
     if (!stream_.is_open()) {
         throw std::runtime_error("File stream not available for reading symbol");
     }
@@ -805,15 +728,12 @@ StringSet EDS::read_symbol(Position pos) const {
 // POSITION CHECKING & VALIDATION
 // ================================================================================
 
-// get_sets() with error checking
+// get_sets() - deprecated (streaming mode only)
 const std::vector<StringSet>& EDS::get_sets() const {
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot access sets in METADATA_ONLY mode. "
-            "Use read_symbol(pos) for on-demand access, or load with StoringMode::FULL"
-        );
-    }
-    return sets_;
+    throw std::runtime_error(
+        "Direct access to sets is not supported in streaming mode. "
+        "Use read_symbol(pos) for on-demand access"
+    );
 }
 
 // Check if pattern occurs at position with given degenerate string choices
@@ -884,21 +804,14 @@ bool EDS::check_position(Position common_pos,
         }
     }
 
-    // Reconstruct string based on storage mode
+    // Reconstruct string from file
     String reconstructed;
 
     try {
-        if (mode_ == StoringMode::FULL) {
-            reconstructed = reconstruct_from_memory(
-                start_symbol, offset_in_symbol,
-                degenerate_strings, pattern.length()
-            );
-        } else {
-            reconstructed = reconstruct_from_file(
-                start_symbol, offset_in_symbol,
-                degenerate_strings, pattern.length()
-            );
-        }
+        reconstructed = reconstruct_from_file(
+            start_symbol, offset_in_symbol,
+            degenerate_strings, pattern.length()
+        );
     } catch (const std::exception&) {
         // If reconstruction fails (e.g., validation errors),
         // let the exception propagate
@@ -1364,10 +1277,9 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
 
     EDS result;
     result.is_empty_ = false;
-    result.mode_ = mode_;
     result.file_path_ = file_path_;
     result.n_ = n_ - 1;  // One less position after merge
-    // Note: sources will be set later if needed
+    // Note: sources not supported in merge_adjacent (would require file-based approach)
 
     // ===== BUILD NEW METADATA =====
 
@@ -1434,99 +1346,18 @@ EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
 
     // ===== BUILD SOURCES (if needed) =====
 
+    // TODO: Source building in merge_adjacent needs to be reimplemented with file-based approach
+    // since we no longer support in-memory source construction
     if (sources_) {
-        // Create new Sources object with merged cardinality
-        result.sources_ = std::make_shared<Sources>(result.m_, Sources::Format::SEDS, Sources::StoringMode::FULL);
-
-        // Build sources by copying and merging
-        size_t result_idx = 0;
-        size_t source_idx = 0;
-
-        // Copy sources before pos1
-        for (size_t i = 0; i < pos1; ++i) {
-            for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_->set_source(result_idx++, sources_->read_source(source_idx++));
-            }
-        }
-
-        // Add merged sources
-        for (const auto& src : merged_sources) {
-            result.sources_->set_source(result_idx++, src);
-        }
-
-        // Skip sources for pos1 and pos2
-        source_idx = metadata_.cum_set_sizes[pos2] + metadata_.symbol_sizes[pos2];
-
-        // Copy sources after pos2
-        for (size_t i = pos2 + 1; i < n_; ++i) {
-            for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_->set_source(result_idx++, sources_->read_source(source_idx++));
-            }
-        }
+        throw std::runtime_error(
+            "merge_adjacent with sources is not yet supported in streaming mode. "
+            "This requires a file-based implementation to be added."
+        );
     }
 
-    // ===== BUILD SETS (FULL mode only) =====
-
-    if (mode_ == StoringMode::FULL) {
-        result.sets_.clear();
-
-        // Copy sets before pos1
-        for (size_t i = 0; i < pos1; ++i) {
-            result.sets_.push_back(sets_[i]);
-        }
-
-        // Build merged set
-        StringSet merged_set;
-        const StringSet& set1 = sets_[pos1];
-        const StringSet& set2 = sets_[pos2];
-
-        if (!sources_) {
-            // CARTESIAN: all combinations
-            for (const auto& str1 : set1) {
-                for (const auto& str2 : set2) {
-                    merged_set.push_back(str1 + str2);
-                }
-            }
-        } else {
-            // LINEAR: only valid combinations (same logic as metadata calculation)
-            for (size_t i = 0; i < set1.size(); ++i) {
-                for (size_t j = 0; j < set2.size(); ++j) {
-                    const std::set<int> sources1 = sources_->read_source(global_string_idx1 + i);
-                    const std::set<int> sources2 = sources_->read_source(global_string_idx2 + j);
-
-                    // Compute intersection
-                    std::set<int> intersection;
-                    bool sources1_has_universal = sources1.count(0) > 0;
-                    bool sources2_has_universal = sources2.count(0) > 0;
-
-                    if (sources1_has_universal && sources2_has_universal) {
-                        intersection.insert(0);
-                    } else if (sources1_has_universal) {
-                        intersection = sources2;
-                    } else if (sources2_has_universal) {
-                        intersection = sources1;
-                    } else {
-                        std::set_intersection(
-                            sources1.begin(), sources1.end(),
-                            sources2.begin(), sources2.end(),
-                            std::inserter(intersection, intersection.begin())
-                        );
-                    }
-
-                    if (!intersection.empty()) {
-                        merged_set.push_back(set1[i] + set2[j]);
-                    }
-                }
-            }
-        }
-
-        result.sets_.push_back(merged_set);
-
-        // Copy sets after pos2
-        for (size_t i = pos2 + 1; i < n_; ++i) {
-            result.sets_.push_back(sets_[i]);
-        }
-    }
+    // Note: String sets are not stored in memory (streaming mode only)
+    // They will be read on-demand via read_symbol()
+    // The merged result metadata has already been built above
 
     // ===== FINALIZE =====
 

@@ -401,12 +401,32 @@ namespace {
         }
 
         // Construct new EDS
+        // Note: With streaming-only architecture, we need to write to temp files
         std::string eds_str = eds_stream.str();
 
-
         if (has_sources) {
-            std::string sources_str = sources_stream.str();
-            return EDS(eds_str, sources_str);
+            // Write to temp files and load (streaming mode requires file paths)
+            std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "edsparser_merge";
+            std::filesystem::create_directories(temp_dir);
+
+            std::filesystem::path temp_eds = temp_dir / ("merge_" + std::to_string(std::rand()) + ".eds");
+            std::filesystem::path temp_seds = temp_dir / ("merge_" + std::to_string(std::rand()) + ".seds");
+
+            std::ofstream eds_out(temp_eds);
+            eds_out << eds_str;
+            eds_out.close();
+
+            std::ofstream seds_out(temp_seds);
+            seds_out << sources_stream.str();
+            seds_out.close();
+
+            EDS result = EDS::load(temp_eds, temp_seds);
+
+            // Clean up temp files
+            std::filesystem::remove(temp_eds);
+            std::filesystem::remove(temp_seds);
+
+            return result;
         } else {
             return EDS(eds_str);
         }
@@ -638,8 +658,8 @@ void eds_to_leds_linear(
 
     // Load as METADATA_ONLY (only ~100MB for 100GB file!)
     EDS eds = has_sources
-        ? EDS::load(temp_input, temp_sources_input, EDS::StoringMode::METADATA_ONLY)
-        : EDS::load(temp_input, EDS::StoringMode::METADATA_ONLY);
+        ? EDS::load(temp_input, temp_sources_input)
+        : EDS::load(temp_input);
 
     // Iterative merging until convergence
     size_t iteration = 0;
@@ -709,8 +729,8 @@ void eds_to_leds_linear(
         // Replace EDS with temp file (still METADATA_ONLY mode)
         // This keeps memory footprint constant across iterations
         eds = has_sources
-            ? EDS::load(temp_eds_out, temp_seds_out, EDS::StoringMode::METADATA_ONLY)
-            : EDS::load(temp_eds_out, EDS::StoringMode::METADATA_ONLY);
+            ? EDS::load(temp_eds_out, temp_seds_out)
+            : EDS::load(temp_eds_out);
 
         // Update file pointers for cleanup
         current_eds_file = temp_eds_out;
@@ -786,7 +806,7 @@ void eds_to_leds_cartesian(
     }
 
     // Load as METADATA_ONLY (only ~100MB for 100GB file!)
-    EDS eds = EDS::load(temp_input, EDS::StoringMode::METADATA_ONLY);
+    EDS eds = EDS::load(temp_input);
 
     if (eds.has_sources()) {
         throw std::invalid_argument("Cartesian mode cannot be used with source files");
@@ -845,7 +865,7 @@ void eds_to_leds_cartesian(
 
         // Replace EDS with temp file (still METADATA_ONLY mode)
         // This keeps memory footprint constant across iterations
-        eds = EDS::load(temp_eds_out, EDS::StoringMode::METADATA_ONLY);
+        eds = EDS::load(temp_eds_out);
 
         // Update file pointer for cleanup
         current_eds_file = temp_eds_out;

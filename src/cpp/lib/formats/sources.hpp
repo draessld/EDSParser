@@ -14,32 +14,25 @@
 /**
  * Sources class - Manages provenance/source tracking for EDS strings
  *
- * Supports multiple formats:
- * - SEDS: Text format {path_ids}{path_ids}...
- * - EDZ: Binary format with varint encoding
- * - EDZ_COMPRESSED: Binary format with zstd compression
+ * Uses streaming architecture with LRU cache for memory-efficient access.
+ * Sources are streamed from disk on-demand rather than loaded into RAM.
  *
- * Storage modes:
- * - FULL: All sources loaded into RAM
- * - METADATA_ONLY: Sources streamed from disk with LRU cache
+ * Supports multiple formats:
+ * - SEDS: Text format {path_ids}{path_ids}... (currently implemented)
+ * - EDZ: Binary format with varint encoding (future)
+ * - EDZ_COMPRESSED: Binary format with zstd compression (future)
  */
 class Sources {
 public:
-    // Enums
+    // Format enum
     enum class Format {
         SEDS,             // Text format (default, backward compatible)
-        EDZ,              // Binary format with varint encoding
-        EDZ_COMPRESSED    // Binary format with zstd block compression
-    };
-
-    enum class StoringMode {
-        FULL,            // All sources in RAM
-        METADATA_ONLY    // Streaming with LRU cache
+        EDZ,              // Binary format with varint encoding (not yet implemented)
+        EDZ_COMPRESSED    // Binary format with zstd block compression (not yet implemented)
     };
 
     // Construction
-    Sources(size_t cardinality, Format format = Format::SEDS,
-            StoringMode mode = StoringMode::METADATA_ONLY);
+    explicit Sources(size_t cardinality, Format format = Format::SEDS);
 
     // Destructor
     ~Sources();
@@ -52,18 +45,13 @@ public:
     Sources(Sources&&) noexcept;
     Sources& operator=(Sources&&) noexcept;
 
-    // I/O
-    static std::shared_ptr<Sources> load(const std::filesystem::path& path,
-                                          Format format, StoringMode mode);
-    static std::shared_ptr<Sources> load(const std::filesystem::path& path,
-                                          StoringMode mode = StoringMode::METADATA_ONLY);  // Auto-detect format
-    static std::shared_ptr<Sources> from_stream(std::istream& is, size_t cardinality,
-                                                 Format format = Format::SEDS);  // Create from stream (FULL mode only)
+    // I/O - File-based loading only (streaming requires file paths)
+    static std::shared_ptr<Sources> load(const std::filesystem::path& path, Format format);
+    static std::shared_ptr<Sources> load(const std::filesystem::path& path);  // Auto-detect format
     void save(const std::filesystem::path& path) const;
 
-    // Access
+    // Access (always uses streaming with cache)
     std::set<int> read_source(size_t string_id) const;
-    void set_source(size_t string_id, const std::set<int>& paths);
 
     // Static helpers for source merging
     /**
@@ -104,15 +92,8 @@ public:
     // Query
     size_t cardinality() const { return cardinality_; }
     Format get_format() const { return format_; }
-    StoringMode get_mode() const { return mode_; }
 
-    // Statistics (only available in FULL mode)
-    size_t num_paths() const;
-    size_t max_paths_per_string() const;
-    double avg_paths_per_string() const;
-    bool has_statistics() const { return has_statistics_; }
-
-    // Cache management (for METADATA_ONLY mode)
+    // Cache management
     void set_cache_capacity(size_t capacity);
     void clear_cache();
 
@@ -123,12 +104,8 @@ private:
     // Core data
     size_t cardinality_;                    // Number of strings (m)
     Format format_;
-    StoringMode mode_;
 
-    // FULL mode: all sources in RAM
-    std::vector<std::set<int>> sources_;
-
-    // METADATA_ONLY mode: streaming + index
+    // Streaming support
     std::filesystem::path file_path_;
     mutable std::ifstream stream_;
 
@@ -136,7 +113,7 @@ private:
     std::vector<std::streampos> base_positions_;           // For .seds: file position per source
     std::vector<std::pair<uint64_t, uint32_t>> binary_index_;  // For .edz: (offset, size) per source
 
-    // LRU cache for METADATA_ONLY mode
+    // LRU cache
     struct CacheEntry {
         size_t string_id;
         std::set<int> paths;
@@ -145,19 +122,10 @@ private:
     mutable std::unordered_map<size_t, std::list<CacheEntry>::iterator> cache_map_;
     size_t cache_capacity_;                 // Default: 10000
 
-    // Statistics (only calculated in FULL mode)
-    bool has_statistics_;
-    size_t num_paths_;
-    size_t max_paths_per_string_;
-    double avg_paths_per_string_;
-
-    // Format-specific parsing
+    // Format-specific parsing (builds index only)
     void parse_seds(std::istream& is);
-    void parse_seds_metadata_only(std::istream& is);
     void parse_edz(std::istream& is);
-    void parse_edz_metadata_only(std::istream& is);
     void parse_edz_compressed(std::istream& is);
-    void parse_edz_compressed_metadata_only(std::istream& is);
 
     // Format-specific streaming
     std::set<int> read_from_seds(size_t string_id) const;
@@ -168,9 +136,6 @@ private:
     void save_seds(const std::filesystem::path& path) const;
     void save_edz(const std::filesystem::path& path) const;
     void save_edz_compressed(const std::filesystem::path& path) const;
-
-    // Statistics calculation
-    void calculate_statistics();
 
     // Helper: Add to cache
     void add_to_cache(size_t string_id, const std::set<int>& paths) const;

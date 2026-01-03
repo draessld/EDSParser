@@ -23,18 +23,11 @@ namespace edsparser {
  * Compact format (optional): str1{str2,str3}str4 (brackets only on degenerate symbols)
  * Empty strings are represented as empty entries between commas.
  *
- * Storage modes:
- * - FULL: All strings loaded into RAM (default, backward compatible)
- * - METADATA_ONLY: Only metadata/index loaded, strings streamed on-demand (memory-efficient)
+ * Uses streaming architecture with metadata/index for memory-efficient access.
+ * Strings are read on-demand from disk rather than loaded into RAM.
  */
 class EDS {
 public:
-    // Storage mode options
-    enum class StoringMode {
-        FULL,           // All strings in RAM (default)
-        METADATA_ONLY   // Only metadata, stream strings on-demand
-    };
-
     // Output format options
     enum class OutputFormat {
         FULL,     // Always use brackets: {ACGT}{A,ACA}{CGT}
@@ -42,23 +35,20 @@ public:
     };
 
     // Default constructor
-    EDS() : is_empty_(true), mode_(StoringMode::FULL), sources_(nullptr) {}
+    EDS() : is_empty_(true), sources_(nullptr) {}
 
-    // Stream-based constructors
+    // Stream-based constructor (EDS only, no sources support)
     explicit EDS(std::istream& eds_stream);
-    EDS(std::istream& eds_stream, std::istream& seds_stream);
 
-    // String-based constructors (for convenience - wraps streams internally)
+    // String-based constructor (EDS only, for convenience - wraps streams internally)
     explicit EDS(const std::string& eds_string);
-    EDS(const std::string& eds_string, const std::string& seds_string);
 
-    // File-based loaders (with optional StoringMode for memory efficiency)
-    static EDS load(const std::filesystem::path& path, StoringMode mode = StoringMode::FULL);
-    static EDS load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path, StoringMode mode = StoringMode::FULL);
+    // File-based loaders (always uses streaming for memory efficiency)
+    static EDS load(const std::filesystem::path& path);
+    static EDS load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path);
 
     // Convenience factory for string construction
     static EDS from_string(const std::string& eds_string);
-    static EDS from_string(const std::string& eds_string, const std::string& seds_string);
 
     // Destructor
     ~EDS() = default;
@@ -75,7 +65,6 @@ public:
     size_t length() const { return n_; }           // Number of sets
     size_t size() const { return N_; }             // Total characters
     size_t cardinality() const { return m_; }      // Total number of strings
-    StoringMode get_storing_mode() const { return mode_; }  // Get storage mode
 
     // Metadata structure (combines index data and statistics)
     // This is the core of memory-efficient streaming EDS
@@ -96,11 +85,6 @@ public:
         size_t total_change_size;         // Total chars in degenerate symbols
         size_t num_empty_strings;         // Count of empty string alternatives
 
-        // Source statistics (only meaningful if sources are loaded)
-        size_t num_paths;                 // Total number of distinct path IDs
-        size_t max_paths_per_string;      // Maximum paths in any single string
-        double avg_paths_per_string;      // Average paths per string
-
         // Position checking support (computed from index data)
         std::vector<Position> cum_common_positions;   // Cumulative common chars before each symbol (n+1 entries)
         std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
@@ -115,11 +99,6 @@ public:
         size_t num_common_chars;
         size_t total_change_size;
         size_t num_empty_strings;
-
-        // Source statistics
-        size_t num_paths;
-        size_t max_paths_per_string;
-        double avg_paths_per_string;
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
@@ -181,7 +160,6 @@ private:
     size_t n_;                          // Number of sets
     size_t N_;                          // Total size (characters)
     size_t m_;                          // Cardinality (number of strings in all sets)
-    StoringMode mode_;                  // Storage mode
 
     // Metadata (always present, contains index + statistics)
     Metadata metadata_;
