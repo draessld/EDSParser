@@ -5,15 +5,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Default configuration
 DATASET_NAME=""
 INPUT_FORMAT=""
 INPUT_DIR=""
@@ -24,50 +17,13 @@ GENERATE_STATISTICS=true
 REFERENCE_FASTA=""  # Required for VCF input
 THREADS=1  # Number of parallel jobs
 USE_SCREEN=false  # Run each file in its own screen session
-
-# Tool paths
-MSA2EDS_TOOL="msa2eds"
-VCF2EDS_TOOL="vcf2eds"
-EDS2LEDS_TOOL="eds2leds"
-
-# Statistics tracking
+MSA2EDS_TOOL=""
+VCF2EDS_TOOL=""
+EDS2LEDS_TOOL=""
 STATS_FILE=""
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 declare -a FAILED_FILES
-
-# Helper functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-resolve_dataset_path() {
-    local input="$1"
-
-    # Check if input is an absolute path
-    if [[ "$input" == /* ]]; then
-        echo "$input"
-    # Check if input is a relative path (contains /)
-    elif [[ "$input" == */* ]]; then
-        # Convert to absolute path
-        echo "$(cd "$(dirname "$input")" 2>/dev/null && pwd)/$(basename "$input")"
-    else
-        # Treat as dataset name, use datasets/ prefix
-        echo "datasets/$input"
-    fi
-}
 
 show_help() {
     cat << EOF
@@ -194,30 +150,130 @@ detect_input_format() {
 }
 
 check_tools() {
-    log_info "Checking for required tools..."
+    log_info "Locating required tools..."
+
+    local tool_found=true
+    local build_dir="$SCRIPT_DIR/../build/src/cpp/tools"
 
     case "$INPUT_FORMAT" in
         msa)
-            if ! command -v "$MSA2EDS_TOOL" &> /dev/null; then
-                log_error "Tool '$MSA2EDS_TOOL' not found"
-                exit 1
+            MSA2EDS_TOOL=$(command -v msa2eds || echo "$build_dir/msa2eds")
+            if [[ ! -x "$MSA2EDS_TOOL" ]]; then
+                log_error "Tool 'msa2eds' not found or not executable."
+                tool_found=false
             fi
-            log_success "Found $MSA2EDS_TOOL: $(which $MSA2EDS_TOOL)"
             ;;
         vcf)
-            if ! command -v "$VCF2EDS_TOOL" &> /dev/null; then
-                log_error "Tool '$VCF2EDS_TOOL' not found"
-                exit 1
+            VCF2EDS_TOOL=$(command -v vcf2eds || echo "$build_dir/vcf2eds")
+            if [[ ! -x "$VCF2EDS_TOOL" ]]; then
+                log_error "Tool 'vcf2eds' not found or not executable."
+                tool_found=false
             fi
-            log_success "Found $VCF2EDS_TOOL: $(which $VCF2EDS_TOOL)"
 
             # If reference is explicitly provided, validate it exists
             if [[ -n "$REFERENCE_FASTA" ]] && [[ ! -f "$REFERENCE_FASTA" ]]; then
                 log_error "Reference FASTA not found: $REFERENCE_FASTA"
-                exit 1
+                tool_found=false
             fi
+            ;;
+    esac
 
-            # Note: If reference is not provided, it will be auto-detected per-file
+    EDS2LEDS_TOOL=$(command -v eds2leds || echo "$build_dir/eds2leds")
+    if [[ ! -x "$EDS2LEDS_TOOL" ]]; then
+        log_error "Tool 'eds2leds' not found or not executable."
+        tool_found=false
+    fi
+
+    if [[ "$tool_found" == "false" ]]; then
+        log_error "Please run ./INSTALL.sh from the project root."
+        exit 1
+    fi
+
+    log_success "All required tools located."
+
+    if [[ "$INPUT_FORMAT" == "vcf" ]]; then
+        if [[ -n "$REFERENCE_FASTA" ]]; then
+            log_info "Using explicit reference: $REFERENCE_FASTA"
+        else
+            log_info "Reference will be auto-detected for each VCF file"
+        fi
+    fi
+
+    # Check for screen if --screen is enabled
+    if [[ "$USE_SCREEN" == "true" ]]; then
+        if ! command -v screen &> /dev/null; then
+            log_error "screen command not found. Install screen or remove --screen flag."
+            exit 1
+        fi
+        log_success "Found screen: $(which screen)"
+        log_info "Each file will run in its own screen session"
+    fi
+
+    # Log parallel processing mode if threads > 1
+    if [[ $THREADS -gt 1 ]]; then
+        if [[ "$USE_SCREEN" == "true" ]]; then
+            log_warning "--threads ignored when --screen is enabled"
+        else
+            log_info "Using $THREADS parallel jobs (native bash)"
+        fi
+    fi
+}
+
+create_directories() {
+    local dataset_path="$1"
+
+    log_info "Creating output directories..."
+
+    if [[ "$INPUT_FORMAT" != "eds" ]]; then
+        mkdir -p "$dataset_path/eds"
+    fi
+
+    for l in "${LENGTH_VALUES[@]}"; do
+        mkdir -p "$dataset_path/${l}_leds"
+    done
+
+    log_success "Output directories created"
+}
+
+get_file_size() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0"
+    else
+        echo "0"
+    fi
+}
+
+transform_to_eds() {
+    local input_file="$1"
+    local dataset_path="$2"
+    local basename
+    basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|fasta)$//')
+    local eds_output="$dataset_path/eds/${basename}.eds"
+    local seds_output="$dataset_path/eds/${basename}.seds"
+    local log_output="$dataset_path/eds/${basename}.eds.log"
+
+    # Skip if exists
+    if [[ -f "$eds_output" ]] && [[ "$FORCE_OVERWRITE" == "false" ]]; then
+        log_warning "Skipping $basename.eds (already exists)"
+        return 0
+    fi
+
+    log_info "Transforming $basename → EDS..."
+
+    local start_time=$SECONDS
+
+    case "$INPUT_FORMAT" in
+        msa)
+            "$MSA2EDS_TOOL" \
+                --input "$input_file" \
+                --output "$eds_output" \
+                --sources "$seds_output" \
+                > "$log_output" 2>&1
+            ;;
+        vcf)
+            # Auto-detect reference if not provided
+            local reference_file="$REFERENCE_FASTA"
             if [[ -n "$REFERENCE_FASTA" ]]; then
                 log_info "Using explicit reference: $REFERENCE_FASTA"
             else
@@ -334,7 +390,7 @@ transform_to_eds() {
                 fi
             fi
 
-            $VCF2EDS_TOOL \
+            "$VCF2EDS_TOOL" \
                 --input "$input_file" \
                 --reference "$reference_file" \
                 --output "$eds_output" \
@@ -363,7 +419,8 @@ transform_to_leds() {
     local eds_file="$1"
     local l_value="$2"
     local dataset_path="$3"
-    local basename=$(basename "$eds_file" .eds)
+    local basename
+    basename=$(basename "$eds_file" .eds)
     local leds_dir="$dataset_path/${l_value}_leds"
     local leds_output="$leds_dir/${basename}.leds"
     local seds_input="$dataset_path/eds/${basename}.seds"
@@ -383,14 +440,14 @@ transform_to_leds() {
     # Use eds2leds for EDS → l-EDS transformation
     # Method is auto-detected: linear (with sources) or cartesian (without sources)
     if [[ -f "$seds_input" ]]; then
-        $EDS2LEDS_TOOL \
+        "$EDS2LEDS_TOOL" \
             --input "$eds_file" \
             --sources "$seds_input" \
             --output "$leds_output" \
             --context-length "$l_value" \
             > "$log_output" 2>&1
     else
-        $EDS2LEDS_TOOL \
+        "$EDS2LEDS_TOOL" \
             --input "$eds_file" \
             --output "$leds_output" \
             --context-length "$l_value" \
@@ -423,7 +480,8 @@ transform_to_leds() {
 launch_in_screen() {
     local input_file="$1"
     local dataset_path="$2"
-    local basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
+    local basename
+    basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
     local session_name="eds-transform-${basename}"
 
     # Create a temporary wrapper script to run in screen
@@ -498,7 +556,8 @@ EOF_WRAPPER
 process_file() {
     local input_file="$1"
     local dataset_path="$2"
-    local basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
+    local basename
+    basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
 
     echo ""
     log_info "================================================"
@@ -603,7 +662,8 @@ main() {
     fi
 
     # Resolve dataset path (supports both names and paths)
-    local dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    local dataset_path
+    dataset_path=$(resolve_dataset_path "$DATASET_NAME")
 
     if [[ ! -d "$dataset_path" ]]; then
         log_error "Dataset not found: $dataset_path"
@@ -657,7 +717,8 @@ main() {
         eds) extension="eds" ;;
     esac
 
-    local input_files=("$input_path"/$FILE_PATTERN.$extension)
+    local input_files
+    input_files=("$input_path"/$FILE_PATTERN.$extension)
     local total_files=${#input_files[@]}
 
     if [[ $total_files -eq 0 ]] || [[ ! -f "${input_files[0]}" ]]; then
@@ -670,10 +731,12 @@ main() {
     # Process files (screen sessions, parallel, or sequential)
     if [[ "$USE_SCREEN" == "true" ]]; then
         # Launch each file in its own screen session
-        local screen_sessions=()
+        local screen_sessions
+        screen_sessions=()
         for input_file in "${input_files[@]}"; do
             if [[ -f "$input_file" ]]; then
-                local basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
+                local basename
+                basename=$(basename "$input_file" | sed -E 's/\.(msa|vcf|eds|fasta)$//')
                 launch_in_screen "$input_file" "$dataset_path"
                 screen_sessions+=("eds-transform-${basename}")
             fi

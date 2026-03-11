@@ -17,112 +17,182 @@ EDS::EDS(std::istream& eds_stream) : is_empty_(false), sources_(nullptr) {
 }
 
 // String-based constructor (EDS only, no sources)
+// Uses std::istringstream to avoid temp file I/O
 EDS::EDS(const std::string& eds_string) : is_empty_(false), sources_(nullptr) {
-    std::stringstream ss(eds_string);
-    parse(ss);
+    // Normalize the input string
+    std::string normalized = normalize_eds_format(eds_string);
+    // Remove whitespace
+    normalized.erase(std::remove_if(normalized.begin(), normalized.end(), ::isspace), normalized.end());
+    
+    // Use a string stream for in-memory parsing
+    std::istringstream iss(normalized);
+    // Parse metadata
+    parse(iss);
+    // Note: read_symbol() will not work for objects created from a string,
+    // as there is no persistent stream. This constructor is for in-memory representation.
 }
 
 void EDS::parse(std::istream& is) {
-    // Read entire input into string for easier parsing
-    std::stringstream buffer;
-    buffer << is.rdbuf();
-    std::string input = buffer.str();
-
-    // Remove whitespace
-    input.erase(std::remove_if(input.begin(), input.end(), ::isspace), input.end());
-
-    if (input.empty()) {
-        is_empty_ = true;
-        n_ = 0;
-        N_ = 0;
-        m_ = 0;
-        return;
-    }
-
-    // Normalize compact format to full bracketed format
-    // This allows both "ACGT{A,ACA}CGT" and "{ACGT}{A,ACA}{CGT}" to work
-    input = normalize_eds_format(input);
-
-    // Parse EDS format: {str1,str2,...}{str3}{str4,str5}...
-    size_t pos = 0;
-    n_ = 0;      // Number of sets
-    N_ = 0;      // Total characters
-    m_ = 0;      // Cardinality (total strings)
+    // Streaming parser: builds an index without loading file content into memory.
+    // Handles both compact (ACGT{A,C}) and full ({ACGT}{A,C}) formats.
+    // Uses a byte offset counter instead of tellg() to avoid per-character virtual calls.
 
     // Clear all data structures
-    sets_.clear();
     metadata_.base_positions.clear();
     metadata_.symbol_sizes.clear();
     metadata_.string_lengths.clear();
     metadata_.cum_set_sizes.clear();
     metadata_.is_degenerate.clear();
 
-    while (pos < input.length()) {
-        // Record starting position of this symbol
-        std::streampos symbol_start = static_cast<std::streampos>(pos);
-        metadata_.base_positions.push_back(symbol_start);
+    n_ = 0;
+    N_ = 0;
+    m_ = 0;
 
-        // Expect '{'
-        if (input[pos] != SET_OPEN) {
-            throw std::runtime_error("Expected '{' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '{'
+    // Running statistics accumulated inline (avoids a separate calculate_statistics() pass)
+    metadata_.num_degenerate_symbols = 0;
+    metadata_.num_common_chars = 0;
+    metadata_.total_change_size = 0;
+    metadata_.num_empty_strings = 0;
+    metadata_.min_context_length = UINT32_MAX;
+    metadata_.max_context_length = 0;
+    size_t total_context_length = 0;
+    size_t num_context_blocks = 0;
 
-        // Parse strings within this set
-        StringSet current_set;
-        std::string current_string;
+    // Cumulative arrays built incrementally (push one entry per symbol)
+    metadata_.cum_common_positions.clear();
+    metadata_.cum_degenerate_counts.clear();
+    metadata_.cum_common_positions.push_back(0);  // cum_common_positions[0] = 0
+    metadata_.cum_degenerate_counts.push_back(0); // cum_degenerate_counts[0] = 0
+    Position cumulative_common = 0;
+    int cumulative_degenerate = 0;
+
+    auto process_token = [&](const std::string& token, bool is_bracketed) {
+        if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
+
         size_t symbol_size = 0;
-
-        while (pos < input.length() && input[pos] != SET_CLOSE) {
-            if (input[pos] == SET_SEPARATOR) {
-                // End of current string
-                Length str_len = current_string.length();
-                metadata_.string_lengths.push_back(str_len);
-                N_ += str_len;
-                symbol_size++;
-
-                current_string.clear();
-                pos++;
+        if (is_bracketed) {
+            // Manual comma scan instead of stringstream — no heap allocation per segment
+            if (token.empty()) {
+                // Empty set {} means one empty string ""
+                metadata_.string_lengths.push_back(0);
+                symbol_size = 1;
+                metadata_.num_empty_strings++;
             } else {
-                // Regular character, add to current string
-                current_string += input[pos];
-                pos++;
+                size_t start = 0;
+                for (size_t pos = 0; pos <= token.size(); ++pos) {
+                    if (pos == token.size() || token[pos] == SET_SEPARATOR) {
+                        size_t len = pos - start;
+                        metadata_.string_lengths.push_back(len);
+                        N_ += len;
+                        if (len == 0) metadata_.num_empty_strings++;
+                        symbol_size++;
+                        start = pos + 1;
+                    }
+                }
             }
+        } else {
+            size_t len = token.length();
+            metadata_.string_lengths.push_back(len);
+            N_ += len;
+            if (len == 0) metadata_.num_empty_strings++;
+            symbol_size = 1;
         }
 
-        // Add last string in set (could be empty)
-        Length str_len = current_string.length();
-        metadata_.string_lengths.push_back(str_len);
-        N_ += str_len;
-        symbol_size++;
-
-        // Expect '}'
-        if (pos >= input.length() || input[pos] != SET_CLOSE) {
-            throw std::runtime_error("Expected '}' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '}'
-
-        // Validate set is not empty
-        if (symbol_size == 0) {
-            throw std::runtime_error("Empty set at position " + std::to_string(pos));
-        }
-
-        // Store metadata
+        bool is_deg = (symbol_size > 1);
         metadata_.symbol_sizes.push_back(symbol_size);
-        metadata_.cum_set_sizes.push_back(m_);  // Cumulative count before adding this set
-        metadata_.is_degenerate.push_back(symbol_size > 1);
+        metadata_.cum_set_sizes.push_back(m_);
+        metadata_.is_degenerate.push_back(is_deg);
+
+        // Update running statistics
+        if (is_deg) {
+            metadata_.num_degenerate_symbols++;
+            metadata_.total_change_size += (symbol_size - 1);
+            cumulative_degenerate += static_cast<int>(symbol_size);
+        } else {
+            // Non-degenerate: this is a context block
+            Length ctx_len = metadata_.string_lengths[m_]; // first (and only) string
+            metadata_.num_common_chars += ctx_len;
+            if (ctx_len < metadata_.min_context_length) metadata_.min_context_length = ctx_len;
+            if (ctx_len > metadata_.max_context_length) metadata_.max_context_length = ctx_len;
+            total_context_length += ctx_len;
+            num_context_blocks++;
+            cumulative_common += ctx_len;
+        }
+
+        // Cumulative arrays: push value after this symbol
+        metadata_.cum_common_positions.push_back(cumulative_common);
+        metadata_.cum_degenerate_counts.push_back(cumulative_degenerate);
 
         m_ += symbol_size;
         n_++;
+    };
+
+    char ch;
+    std::string current_token;
+    size_t byte_offset = 0;
+
+    // Consume leading whitespace manually (track byte offset)
+    while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
+        is.get(ch);
+        byte_offset++;
     }
 
-    // Validate we parsed something
+    while (is.peek() != EOF) {
+        if (is.peek() == SET_OPEN) {
+            // Flush any accumulated non-bracketed token
+            if (!current_token.empty()) {
+                process_token(current_token, false);
+                current_token.clear();
+            }
+
+            // Record position of '{', then consume it
+            metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
+            is.get(ch); // consume '{'
+            byte_offset++;
+
+            std::string bracketed_content;
+            std::getline(is, bracketed_content, SET_CLOSE);
+            if (!is) throw std::runtime_error("Unmatched '{' in EDS stream.");
+            byte_offset += bracketed_content.size() + 1; // +1 for the consumed '}'
+
+            process_token(bracketed_content, true);
+        } else {
+            if (current_token.empty()) {
+                metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
+            }
+            is.get(ch);
+            byte_offset++;
+            current_token += ch;
+        }
+
+        if (is.peek() == SET_OPEN || is.peek() == EOF ||
+            std::isspace(static_cast<unsigned char>(is.peek()))) {
+            if (!current_token.empty()) {
+                process_token(current_token, false);
+                current_token.clear();
+            }
+            // Consume whitespace manually
+            while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
+                is.get(ch);
+                byte_offset++;
+            }
+        }
+    }
+
     if (n_ == 0) {
         is_empty_ = true;
+        metadata_.min_context_length = 0;
+        metadata_.max_context_length = 0;
+        metadata_.avg_context_length = 0.0;
     } else {
         is_empty_ = false;
-        // Calculate statistics from metadata
-        calculate_statistics();
+        // Finalize statistics
+        if (metadata_.min_context_length == UINT32_MAX) {
+            metadata_.min_context_length = 0;
+        }
+        metadata_.avg_context_length = (num_context_blocks > 0)
+            ? static_cast<double>(total_context_length) / num_context_blocks
+            : 0.0;
     }
 }
 
@@ -152,11 +222,10 @@ EDS EDS::load(const std::filesystem::path& path) {
     }
     eds.parse(ifs);
 
-    // Reopen file and keep stream open for on-demand reading
-    eds.stream_.open(path);
-    if (!eds.stream_) {
-        throw std::runtime_error("Failed to reopen file for streaming: " + path.string());
-    }
+    // Reuse the already-open stream (seek to beginning) instead of reopening
+    ifs.clear();
+    ifs.seekg(0);
+    eds.stream_ = std::move(ifs);
 
     return eds;
 }
@@ -177,11 +246,10 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     // Load sources using Sources class (always streaming)
     eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS);
 
-    // Reopen EDS file and keep stream open for on-demand reading
-    eds.stream_.open(eds_path);
-    if (!eds.stream_) {
-        throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
-    }
+    // Reuse the already-open stream (seek to beginning) instead of reopening
+    eds_ifs.clear();
+    eds_ifs.seekg(0);
+    eds.stream_ = std::move(eds_ifs);
 
     return eds;
 }
@@ -1195,177 +1263,6 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
     }
 
     return intersection;
-}
-
-// ================================================================================
-// MERGING OPERATIONS
-// ================================================================================
-
-// Merge two adjacent symbols (degenerate or non-degenerate)
-EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
-    // ===== VALIDATION =====
-
-    // Validation: positions must be adjacent
-    if (pos2 != pos1 + 1) {
-        throw std::invalid_argument(
-            "Positions must be adjacent: pos2 (" + std::to_string(pos2) +
-            ") must equal pos1 + 1 (" + std::to_string(pos1 + 1) + ")"
-        );
-    }
-
-    // Validation: both positions must be within bounds
-    if (pos1 >= n_ || pos2 >= n_) {
-        throw std::out_of_range(
-            "Position out of range: pos1=" + std::to_string(pos1) +
-            ", pos2=" + std::to_string(pos2) + ", n=" + std::to_string(n_)
-        );
-    }
-
-    // ===== CALCULATE MERGED METADATA =====
-
-    // Get source indices for the two symbols
-    size_t global_string_idx1 = metadata_.cum_set_sizes[pos1];
-    size_t global_string_idx2 = metadata_.cum_set_sizes[pos2];
-    size_t set1_size = metadata_.symbol_sizes[pos1];
-    size_t set2_size = metadata_.symbol_sizes[pos2];
-
-    // Calculate merged symbol size and prepare merged data
-    size_t merged_size;
-    std::vector<std::set<int>> merged_sources;
-    std::vector<Length> merged_string_lengths;
-
-    if (!sources_) {
-        // CARTESIAN merge: size is product
-        merged_size = set1_size * set2_size;
-
-        // Calculate string lengths for all combinations
-        for (size_t i = 0; i < set1_size; ++i) {
-            Length len1 = metadata_.string_lengths[global_string_idx1 + i];
-            for (size_t j = 0; j < set2_size; ++j) {
-                Length len2 = metadata_.string_lengths[global_string_idx2 + j];
-                merged_string_lengths.push_back(len1 + len2);
-            }
-        }
-    } else {
-        // LINEAR merge: Use Sources::merge_adjacent_sources()
-        merged_sources = sources_->merge_adjacent_sources(
-            global_string_idx1, set1_size,
-            global_string_idx2, set2_size
-        );
-        merged_size = merged_sources.size();
-
-        // Calculate string lengths for merged combinations
-        merged_string_lengths.reserve(merged_size);
-        for (size_t i = 0; i < set1_size; ++i) {
-            Length len1 = metadata_.string_lengths[global_string_idx1 + i];
-            const std::set<int> sources1 = sources_->read_source(global_string_idx1 + i);
-
-            for (size_t j = 0; j < set2_size; ++j) {
-                Length len2 = metadata_.string_lengths[global_string_idx2 + j];
-                const std::set<int> sources2 = sources_->read_source(global_string_idx2 + j);
-
-                // Use static helper from Sources class
-                std::set<int> intersection = Sources::intersect_sources(sources1, sources2);
-                if (!intersection.empty()) {
-                    merged_string_lengths.push_back(len1 + len2);
-                }
-            }
-        }
-    }
-
-    // ===== BUILD NEW EDS =====
-
-    EDS result;
-    result.is_empty_ = false;
-    result.file_path_ = file_path_;
-    result.n_ = n_ - 1;  // One less position after merge
-    // Note: sources not supported in merge_adjacent (would require file-based approach)
-
-    // ===== BUILD NEW METADATA =====
-
-    result.metadata_.base_positions.clear();
-    result.metadata_.symbol_sizes.clear();
-    result.metadata_.string_lengths.clear();
-    result.metadata_.cum_set_sizes.clear();
-    result.metadata_.is_degenerate.clear();
-
-    size_t current_string_idx = 0;
-
-    // Copy metadata for positions before pos1
-    for (size_t i = 0; i < pos1; ++i) {
-        result.metadata_.base_positions.push_back(metadata_.base_positions[i]);
-        result.metadata_.symbol_sizes.push_back(metadata_.symbol_sizes[i]);
-        result.metadata_.is_degenerate.push_back(metadata_.is_degenerate[i]);
-        result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-        // Copy string lengths for this symbol
-        for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-            result.metadata_.string_lengths.push_back(
-                metadata_.string_lengths[metadata_.cum_set_sizes[i] + j]
-            );
-        }
-
-        current_string_idx += metadata_.symbol_sizes[i];
-    }
-
-    // Add merged position metadata
-    result.metadata_.base_positions.push_back(metadata_.base_positions[pos1]);
-    result.metadata_.symbol_sizes.push_back(merged_size);
-    result.metadata_.is_degenerate.push_back(merged_size > 1);  // Degenerate if > 1 alternative
-    result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-    // Add merged string lengths
-    for (Length len : merged_string_lengths) {
-        result.metadata_.string_lengths.push_back(len);
-    }
-    current_string_idx += merged_size;
-
-    // Copy metadata for positions after pos2
-    for (size_t i = pos2 + 1; i < n_; ++i) {
-        result.metadata_.base_positions.push_back(metadata_.base_positions[i]);
-        result.metadata_.symbol_sizes.push_back(metadata_.symbol_sizes[i]);
-        result.metadata_.is_degenerate.push_back(metadata_.is_degenerate[i]);
-        result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-        // Copy string lengths for this symbol
-        for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-            result.metadata_.string_lengths.push_back(
-                metadata_.string_lengths[metadata_.cum_set_sizes[i] + j]
-            );
-        }
-
-        current_string_idx += metadata_.symbol_sizes[i];
-    }
-
-    // Calculate result cardinality and size
-    result.m_ = current_string_idx;
-    result.N_ = 0;
-    for (Length len : result.metadata_.string_lengths) {
-        result.N_ += len;
-    }
-
-    // ===== BUILD SOURCES (if needed) =====
-
-    // TODO: Source building in merge_adjacent needs to be reimplemented with file-based approach
-    // since we no longer support in-memory source construction
-    if (sources_) {
-        throw std::runtime_error(
-            "merge_adjacent with sources is not yet supported in streaming mode. "
-            "This requires a file-based implementation to be added."
-        );
-    }
-
-    // Note: String sets are not stored in memory (streaming mode only)
-    // They will be read on-demand via read_symbol()
-    // The merged result metadata has already been built above
-
-    // ===== FINALIZE =====
-
-    // Recalculate statistics
-    result.calculate_statistics();
-    // Note: Source statistics are now managed by the Sources class itself
-
-    return result;
 }
 
 } // namespace edsparser

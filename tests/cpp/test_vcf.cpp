@@ -13,6 +13,34 @@ namespace fs = std::filesystem;
 // Test data paths
 const std::string DATA_DIR = "data/vcf/";
 
+// Helper function to load EDS from stringstreams (writes to temp files)
+EDS load_eds_from_streams(std::stringstream& eds_ss, std::stringstream& seds_ss) {
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto eds_path = temp_dir / "test_eds_vcf.tmp";
+    auto seds_path = temp_dir / "test_seds_vcf.tmp";
+
+    // Write EDS stream to file
+    {
+        std::ofstream eds_file(eds_path);
+        eds_file << eds_ss.str();
+    }
+
+    // Write SEDS stream to file
+    {
+        std::ofstream seds_file(seds_path);
+        seds_file << seds_ss.str();
+    }
+
+    // Load and return
+    auto eds = EDS::load(eds_path, seds_path);
+
+    // Clean up temp files
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(seds_path);
+
+    return eds;
+}
+
 /**
  * Test 1: Basic VCF parsing with small.vcf
  * Expected: EDS with SNPs, indels, multi-allelic sites
@@ -86,7 +114,7 @@ void test_eds_construction() {
     // Construct EDS object
     std::stringstream eds_ss(eds_str);
     std::stringstream seds_ss(seds_str);
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
 
     // Verify EDS has sources
     assert(eds.has_sources() && "EDS should have sources loaded");
@@ -126,7 +154,7 @@ void test_vcf_to_leds() {
     // Construct l-EDS object
     std::stringstream leds_ss(leds_str);
     std::stringstream seds_ss(seds_str);
-    EDS leds(leds_ss, seds_ss);
+    EDS leds = load_eds_from_streams(leds_ss, seds_ss);
 
     // Note: is_leds check is done in transforms module, we just verify non-empty
     assert(!leds.empty() && "l-EDS should not be empty");
@@ -387,7 +415,7 @@ void test_cnv_handling() {
     // Parse the EDS to verify specific CNV transformations
     std::stringstream eds_ss(eds_str);
     std::stringstream seds_ss(seds_str);
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
 
     // Verify EDS was created successfully
     assert(eds.length() > 0 && "EDS should have symbols");
@@ -527,6 +555,62 @@ void test_multiallelic_cnv_inv() {
     std::cout << "  PASS" << std::endl;
 }
 
+/**
+ * Test 11: VCF with only headers
+ * Expected: The output EDS should be the plain reference sequence.
+ */
+void test_header_only_vcf() {
+    std::cout << "Test 11: VCF with only headers..." << std::endl;
+
+    std::string ref_content = ">chr1\nACGTACGTACGT";
+    std::string vcf_content = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
+
+    std::stringstream ref_stream(ref_content);
+    std::stringstream vcf_stream(vcf_content);
+
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_stream, ref_stream);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    // Expected EDS should be the reference sequence in a single symbol
+    assert(eds_str == "{ACGTACGTACGT}" && "EDS should match reference sequence");
+    assert(seds_str == "{0}" && "sEDS should be universal path");
+
+    std::cout << "  PASS" << std::endl;
+}
+
+/**
+ * Test 12: Variant spanning a block boundary
+ * Tests the carryover logic in block-based processing.
+ */
+void test_variant_across_block_boundary() {
+    std::cout << "Test 12: Variant spanning a block boundary..." << std::endl;
+
+    std::string ref_content = ">chr1\nACGTACGTACGTACGTACGT"; // 20 bases
+    // Variant at pos 8, ref length 5 (spans from 8 to 12)
+    // Block size of 10 means block boundary is after pos 10.
+    std::string vcf_content = "##fileformat=VCFv4.2\n"
+                              "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+                              "chr1\t8\t.\tCGTAC\tA\t.\tPASS\t.\n";
+
+    std::stringstream ref_stream(ref_content);
+    std::stringstream vcf_stream(vcf_content);
+
+    size_t block_size = 10;
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf_stream, ref_stream, &stats, block_size);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    // The variant should be processed correctly, resulting in a degenerate symbol.
+    // Expected: {ACGTACG}{CGTAC,A}{GTACGT}
+    bool found_variant = (eds_str.find("{CGTAC,A}") != std::string::npos);
+    assert(found_variant && "Variant spanning block boundary was not processed correctly");
+    assert(stats.processed_variants == 1 && "Should have processed exactly one variant");
+
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -541,6 +625,8 @@ int main() {
         // test_cnv_handling();  // DISABLED: requires in-memory source construction
         test_inversion_handling();
         test_multiallelic_cnv_inv();
+        test_header_only_vcf();
+        test_variant_across_block_boundary();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

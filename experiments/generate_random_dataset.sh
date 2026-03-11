@@ -5,15 +5,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Default parameters
 DATASET_NAME=""
 NUM_FILES=10
 REF_SIZE_MB=1
@@ -26,31 +19,11 @@ ALPHABET="ACGT"
 MIN_CONTEXT=0
 SEED=""
 FORCE_OVERWRITE=false
-
-# Tool paths
-GENRANDOMEDS_TOOL="genrandomeds"
-
-# Statistics
+THREADS=1
+GENRANDOMEDS_TOOL=""
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 declare -a FAILED_FILES
-
-# Helper functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
 
 show_help() {
     cat << EOF
@@ -79,6 +52,7 @@ VARIANT PARAMETERS:
 
 OTHER OPTIONS:
   --seed N                Random seed for first file (incremented for each file)
+  --threads N             Number of parallel jobs to run (default: 1)
   --force                 Overwrite existing files
   -h, --help              Show this help message
 
@@ -135,36 +109,20 @@ EOF
 }
 
 check_tool() {
-    local tool="$1"
-    if ! command -v "$tool" &> /dev/null; then
-        # Try to find in build directory
-        local build_tool="../build/tools/$tool"
-        if [[ -x "$build_tool" ]]; then
-            log_warning "Tool '$tool' not installed, using build version"
-            # Update tool paths to use build directory
-            if [[ "$tool" == "genrandomeds" ]]; then
-                GENRANDOMEDS_TOOL="$build_tool"
-            elif [[ "$tool" == "eds2leds" ]]; then
-                EDS2LEDS_TOOL="$build_tool"
-            fi
-            return 0
-        fi
+    log_info "Locating required tools..."
+    local build_dir="$SCRIPT_DIR/../build/src/cpp/tools"
 
-        log_error "Tool '$tool' not found in PATH or build directory"
-        log_error "Please run one of the following:"
-        log_error "  1. Install: cd .. && ./INSTALL.sh"
-        log_error "  2. Build: cd ../build && make install"
-        return 1
+    GENRANDOMEDS_TOOL=$(command -v genrandomeds || echo "$build_dir/genrandomeds")
+
+    if [[ ! -x "$GENRANDOMEDS_TOOL" ]]; then
+        log_error "Tool 'genrandomeds' not found or not executable."
+        log_error "Please run ./INSTALL.sh from the project root."
+        exit 1
     fi
-    return 0
 }
 
 check_tools() {
-    log_info "Checking for required tools..."
-
-    if ! check_tool "$GENRANDOMEDS_TOOL"; then
-        exit 1
-    fi
+    check_tool
 
     log_success "All required tools found"
 }
@@ -174,7 +132,8 @@ generate_single_eds() {
     local seed_value="$2"
     local file_idx="$3"
 
-    local basename=$(basename "$output_file" .eds)
+    local basename
+    basename=$(basename "$output_file" .eds)
 
     # Skip if exists and not forcing overwrite
     if [[ -f "$output_file" ]] && [[ "$FORCE_OVERWRITE" == "false" ]]; then
@@ -187,7 +146,8 @@ generate_single_eds() {
     local start_time=$SECONDS
 
     # Build genrandomeds command
-    local cmd="$GENRANDOMEDS_TOOL"
+    local cmd
+    cmd="$GENRANDOMEDS_TOOL"
     cmd+=" --output \"$output_file\""
     cmd+=" --ref-size-mb $REF_SIZE_MB"
     cmd+=" --variability $VARIABILITY"
@@ -200,7 +160,8 @@ generate_single_eds() {
     cmd+=" --seed $seed_value"
 
     # Execute with output to log file
-    local log_file="${output_file}.log"
+    local log_file
+    log_file="${output_file}.log"
     if eval "$cmd" > "$log_file" 2>&1; then
         local elapsed=$((SECONDS - start_time))
         log_success "Generated $basename (${elapsed}s)"
@@ -215,6 +176,8 @@ generate_single_eds() {
         return 1
     fi
 }
+
+export -f generate_single_eds log_info log_success log_warning log_error
 
 
 print_summary() {
@@ -261,22 +224,6 @@ get_display_name() {
     fi
 }
 
-resolve_dataset_path() {
-    local input="$1"
-
-    # Check if input is an absolute path
-    if [[ "$input" == /* ]]; then
-        echo "$input"
-    # Check if input is a relative path (contains /)
-    elif [[ "$input" == */* ]]; then
-        # Convert to absolute path
-        echo "$(cd "$(dirname "$input")" 2>/dev/null && pwd)/$(basename "$input")"
-    else
-        # Treat as dataset name, use datasets/ prefix
-        echo "datasets/$input"
-    fi
-}
-
 main() {
     # Validate required arguments
     if [[ -z "$DATASET_NAME" ]]; then
@@ -287,8 +234,10 @@ main() {
     fi
 
     # Resolve dataset path (supports both names and paths)
-    local dataset_path=$(resolve_dataset_path "$DATASET_NAME")
-    local eds_dir="${dataset_path}/eds"
+    dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    export dataset_path
+    local eds_dir
+    eds_dir="${dataset_path}/eds"
 
     mkdir -p "$eds_dir"
 
@@ -303,6 +252,7 @@ main() {
     log_info "Number of files: $NUM_FILES"
     log_info "Reference size: $REF_SIZE_MB MB per file"
     log_info "Variability: $(echo "$VARIABILITY * 100" | bc)%"
+    log_info "Parallel jobs: $THREADS"
     echo ""
 
     # Check tools
@@ -313,12 +263,27 @@ main() {
     log_info "Generating EDS files"
     log_info "================================================"
 
+    # Export variables for parallel execution
+    export GENRANDOMEDS_TOOL FORCE_OVERWRITE REF_SIZE_MB VARIABILITY
+    export MIN_ALTERNATIVES MAX_ALTERNATIVES VARIANT_LENGTH_MAX SNP_RATIO
+    export ALPHABET MIN_CONTEXT
+
     # Generate EDS files
-    for ((i=0; i<NUM_FILES; i++)); do
-        local output_file="${eds_dir}/file_${i}.eds"
-        local seed_value=$((SEED + i))
-        generate_single_eds "$output_file" "$seed_value" "$i"
-    done
+    # Create a sequence of numbers for xargs
+    seq 0 $((NUM_FILES - 1)) | xargs -n 1 -P "$THREADS" -I {} \
+        bash -c '
+            i={}
+            output_file="'"$eds_dir"'/file_${i}.eds"
+            seed_value=$(('"$SEED"' + i))
+            generate_single_eds "$output_file" "$seed_value" "$i"
+        '
+
+    # The old sequential way:
+    # for ((i=0; i<NUM_FILES; i++)); do
+    #     local output_file="${eds_dir}/file_${i}.eds"
+    #     local seed_value=$((SEED + i))
+    #     generate_single_eds "$output_file" "$seed_value" "$i"
+    # done
 
     echo ""
 
@@ -371,6 +336,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --seed)
             SEED="$2"
+            shift 2
+            ;;
+        --threads)
+            THREADS="$2"
             shift 2
             ;;
         --force)

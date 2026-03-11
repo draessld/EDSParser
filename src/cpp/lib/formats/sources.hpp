@@ -53,6 +53,11 @@ public:
     // Access (always uses streaming with cache)
     std::set<int> read_source(size_t string_id) const;
 
+    // Fast reference access — avoids the copy on cache hit.
+    // The reference is stable for the duration of the call unless the caller
+    // triggers further cache mutations (safe for tight loops that read, then act).
+    const std::set<int>& read_source_ref(size_t string_id) const;
+
     // Static helpers for source merging
     /**
      * Compute source set intersection when merging two string alternatives.
@@ -137,8 +142,8 @@ private:
     void save_edz(const std::filesystem::path& path) const;
     void save_edz_compressed(const std::filesystem::path& path) const;
 
-    // Helper: Add to cache
-    void add_to_cache(size_t string_id, const std::set<int>& paths) const;
+    // Helper: Add to cache (takes by value to enable move)
+    void add_to_cache(size_t string_id, std::set<int> paths) const;
 };
 
 #endif // SOURCES_HPP

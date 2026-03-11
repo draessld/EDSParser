@@ -3,15 +3,18 @@
 # Create library from source files
 set(LIB_SOURCES
     common.cpp
+    memory_monitor.cpp
     formats/eds.cpp
     formats/sources.cpp
     transforms/eds_transforms.cpp
+    transforms/eds_complexity.cpp
     transforms/msa_transforms.cpp
     transforms/vcf_transforms.cpp
 )
 
 set(LIB_HEADERS
     common.hpp
+    memory_monitor.hpp
     formats/eds.hpp
     formats/sources.hpp
     transforms/eds_transforms.hpp
@@ -47,7 +50,7 @@ install(TARGETS edsparser_lib
 )
 
 # Install headers with directory structure preserved
-install(FILES common.hpp
+install(FILES common.hpp memory_monitor.hpp
     DESTINATION include/edsparser
 )
 

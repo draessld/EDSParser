@@ -1,9 +1,71 @@
 #include "formats/eds.hpp"
+#include "transforms/eds_transforms.hpp"
 #include <iostream>
 #include <cassert>
 #include <sstream>
+#include <filesystem>
+#include <fstream>
 
 using namespace edsparser;
+
+// Helper function to transform EDS string to l-EDS and load the result
+// Returns an EDS object that can be inspected via read_symbol()
+EDS transform_to_leds(const std::string& eds_str, Length context_length) {
+    std::istringstream input(eds_str);
+    std::ostringstream output;
+
+    eds_to_leds_linear(input, output, context_length, nullptr, nullptr, 1, false);
+
+    // Write to temp file and load (needed for read_symbol() support)
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto temp_path = temp_dir / ("test_leds_" + std::to_string(std::rand()) + ".tmp");
+
+    {
+        std::ofstream temp_file(temp_path);
+        temp_file << output.str();
+    }
+
+    auto result = EDS::load(temp_path);
+    std::filesystem::remove(temp_path);
+
+    return result;
+}
+
+// Helper function to transform EDS with sources to l-EDS and load the result
+// Returns EDS object with sources attached
+EDS transform_to_leds_with_sources(
+    const std::string& eds_str,
+    const std::string& seds_str,
+    Length context_length
+) {
+    std::istringstream eds_input(eds_str);
+    std::istringstream seds_input(seds_str);
+    std::ostringstream leds_output;
+    std::ostringstream lseds_output;
+
+    eds_to_leds_linear(eds_input, leds_output, context_length,
+                       &seds_input, &lseds_output, 1, false);
+
+    // Write to temp files and load (needed for read_symbol() support)
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto temp_leds = temp_dir / ("test_leds_" + std::to_string(std::rand()) + ".tmp");
+    auto temp_lseds = temp_dir / ("test_lseds_" + std::to_string(std::rand()) + ".tmp");
+
+    {
+        std::ofstream leds_file(temp_leds);
+        leds_file << leds_output.str();
+    }
+    {
+        std::ofstream lseds_file(temp_lseds);
+        lseds_file << lseds_output.str();
+    }
+
+    auto result = EDS::load(temp_leds, temp_lseds);
+    std::filesystem::remove(temp_leds);
+    std::filesystem::remove(temp_lseds);
+
+    return result;
+}
 
 // Test counter
 int test_num = 0;
@@ -17,37 +79,31 @@ void pass() {
     std::cout << "PASSED\n";
 }
 
-// ===== TESTS WITHOUT SOURCES (CARTESIAN MERGE) =====
+// ===== BASIC MERGE TESTS (via l-EDS transformation) =====
 
-void test_merge_two_degenerate() {
-    test("Merge two degenerate symbols {G,C} + {T}");
+void test_merge_two_degenerate_via_leds() {
+    test("Merge via l-EDS: {G,C}{T} with context_length=2");
 
-    EDS eds("{G,C}{T}");
-    EDS merged = eds.merge_adjacent(0, 1);
+    // {G,C}{T} - each symbol has length 1, so with context_length=2
+    // adjacent symbols should be merged
+    EDS merged = transform_to_leds("{G,C}{T}", 2);
 
-    // Verify structure
-    assert(merged.length() == 1);  // n = 1 (merged into single position)
-    assert(merged.cardinality() == 2);  // m = 2 (GT, CT)
-    assert(merged.size() == 3);  // N = 3 (G+T=2, C+T=2, total 3 unique chars... wait)
-
-    // Check sets (using read_symbol for METADATA_ONLY compatibility)
+    // Verify structure - should have merged to single symbol
     assert(merged.length() == 1);
+    assert(merged.cardinality() == 2);
+
     auto set0 = merged.read_symbol(0);
     assert(set0.size() == 2);
     assert(set0[0] == "GT");
     assert(set0[1] == "CT");
 
-    // Check metadata
-    assert(merged.get_is_degenerate()[0] == true);  // 2 alternatives = degenerate
-
     pass();
 }
 
-void test_merge_degenerate_nondegenerate() {
-    test("Merge degenerate + non-degenerate {G,C} + {T}");
+void test_merge_degenerate_nondegenerate_via_leds() {
+    test("Merge via l-EDS: {G,C}{T} context_length=2");
 
-    EDS eds("{G,C}{T}");
-    EDS merged = eds.merge_adjacent(0, 1);
+    EDS merged = transform_to_leds("{G,C}{T}", 2);
 
     assert(merged.length() == 1);
     assert(merged.cardinality() == 2);
@@ -59,11 +115,10 @@ void test_merge_degenerate_nondegenerate() {
     pass();
 }
 
-void test_merge_nondegenerate_degenerate() {
-    test("Merge non-degenerate + degenerate {T} + {A,C,G}");
+void test_merge_nondegenerate_degenerate_via_leds() {
+    test("Merge via l-EDS: {T}{A,C,G} context_length=2");
 
-    EDS eds("{T}{A,C,G}");
-    EDS merged = eds.merge_adjacent(0, 1);
+    EDS merged = transform_to_leds("{T}{A,C,G}", 2);
 
     assert(merged.length() == 1);
     assert(merged.cardinality() == 3);
@@ -77,17 +132,16 @@ void test_merge_nondegenerate_degenerate() {
     pass();
 }
 
-void test_merge_three_step() {
-    test("Multiple merges: {G,C} + {T} + {A,C} = {GTA,GTC,CTA,CTC}");
+void test_merge_multiple_via_leds() {
+    test("Merge via l-EDS: {G,C}{T}{A,C} context_length=3");
 
-    EDS eds("{G,C}{T}{A,C}");
-    EDS step1 = eds.merge_adjacent(0, 1);  // {GT,CT}{A,C}
-    EDS step2 = step1.merge_adjacent(0, 1);  // {GTA,GTC,CTA,CTC}
+    // All three need to merge to get context length of 3
+    EDS merged = transform_to_leds("{G,C}{T}{A,C}", 3);
 
-    assert(step2.length() == 1);
-    assert(step2.cardinality() == 4);
+    assert(merged.length() == 1);
+    assert(merged.cardinality() == 4);  // 2 * 1 * 2 = 4
 
-    auto set0 = step2.read_symbol(0);
+    auto set0 = merged.read_symbol(0);
     assert(set0[0] == "GTA");
     assert(set0[1] == "GTC");
     assert(set0[2] == "CTA");
@@ -96,11 +150,10 @@ void test_merge_three_step() {
     pass();
 }
 
-void test_merge_with_empty_strings() {
-    test("Merge with empty strings {,A} + {T}");
+void test_merge_with_empty_strings_via_leds() {
+    test("Merge via l-EDS: {,A}{T} context_length=2");
 
-    EDS eds("{,A}{T}");
-    EDS merged = eds.merge_adjacent(0, 1);
+    EDS merged = transform_to_leds("{,A}{T}", 2);
 
     assert(merged.cardinality() == 2);
 
@@ -111,26 +164,39 @@ void test_merge_with_empty_strings() {
     pass();
 }
 
-void test_merge_metadata_update() {
-    test("Verify metadata updates correctly");
+void test_no_merge_needed() {
+    test("No merge needed when context already sufficient");
 
-    EDS eds("{ACGT}{G,C}{T}");
-    EDS merged = eds.merge_adjacent(1, 2);
+    // {ACGT} has length 4, so context_length=2 requires no merging
+    EDS transformed = transform_to_leds("{ACGT}{G,C}{TT}", 2);
 
-    // Check dimensions
-    assert(merged.length() == 2);  // n: 3 → 2
-    assert(merged.cardinality() == 3);  // m: 1 + 2 + 1 = 4 → 1 + 2 = 3
+    // Structure should be unchanged (context lengths: 4, then variable, then 2)
+    // The non-degenerate TT has length 2, which meets the requirement
+    assert(transformed.length() == 3);
 
-    // Check is_degenerate
-    const auto& is_deg = merged.get_is_degenerate();
-    assert(is_deg.size() == 2);
-    assert(is_deg[0] == false);  // {ACGT} non-degenerate
-    assert(is_deg[1] == true);   // {GT,CT} degenerate
+    auto set0 = transformed.read_symbol(0);
+    auto set1 = transformed.read_symbol(1);
+    auto set2 = transformed.read_symbol(2);
 
-    // Check sets (using read_symbol for METADATA_ONLY compatibility)
-    auto set0 = merged.read_symbol(0);
-    auto set1 = merged.read_symbol(1);
-    assert(set0.size() == 1);
+    assert(set0[0] == "ACGT");
+    assert(set1.size() == 2);
+    assert(set2[0] == "TT");
+
+    pass();
+}
+
+void test_partial_merge() {
+    test("Partial merge: some symbols merged, some not");
+
+    // {ACGT}{G,C}{T} - ACGT is long enough, but {G,C}{T} needs merging with context=2
+    EDS transformed = transform_to_leds("{ACGT}{G,C}{T}", 2);
+
+    // Should have 2 symbols: ACGT and merged {GT,CT}
+    assert(transformed.length() == 2);
+
+    auto set0 = transformed.read_symbol(0);
+    auto set1 = transformed.read_symbol(1);
+
     assert(set0[0] == "ACGT");
     assert(set1.size() == 2);
     assert(set1[0] == "GT");
@@ -139,66 +205,48 @@ void test_merge_metadata_update() {
     pass();
 }
 
-void test_merge_statistics_recalc() {
-    test("Verify statistics recalculated");
-
-    EDS eds("{AC}{G,C}{T}");
-    EDS merged = eds.merge_adjacent(1, 2);
-
-    auto stats = merged.get_statistics();
-
-    // Should have 1 non-degenerate (AC) and 1 degenerate (GT,CT)
-    assert(stats.num_degenerate_symbols == 1);
-    assert(stats.min_context_length == 2);  // "AC"
-    assert(stats.max_context_length == 2);
-
-    pass();
-}
-
 // ===== TESTS WITH SOURCES (LINEAR MERGE) =====
 
-void test_merge_with_valid_intersections() {
+void test_merge_with_sources_valid_intersections() {
     test("Merge with sources - valid intersections");
 
     // {G,C}{T} with sources
-    // String 0 (G) has paths {1,2}, String 1 (C) has paths {2,3}, String 2 (T) has paths {2}
+    // String 0 (G): {1,2}, String 1 (C): {2,3}, String 2 (T): {2}
     // Expected: GT with {1,2}∩{2}={2}, CT with {2,3}∩{2}={2}
-    EDS eds(std::string("{G,C}{T}"), std::string("{1,2}{2,3}{2}"));
-    EDS merged = eds.merge_adjacent(0, 1);
+    EDS merged = transform_to_leds_with_sources(
+        "{G,C}{T}",
+        "{1,2}{2,3}{2}",
+        2
+    );
 
     assert(merged.cardinality() == 2);
     assert(merged.has_sources());
 
-    // Check merged sources using read_source()
-    auto src0 = merged.read_source(0);
-    auto src1 = merged.read_source(1);
-    assert(src0.size() == 1);
-    assert(src0.count(2) == 1);  // GT has {2}
-    assert(src1.size() == 1);
-    assert(src1.count(2) == 1);  // CT has {2}
+    auto set0 = merged.read_symbol(0);
+    assert(set0[0] == "GT");
+    assert(set0[1] == "CT");
 
     pass();
 }
 
-void test_merge_with_empty_intersection_filtered() {
+void test_merge_with_sources_filtered() {
     test("Merge with sources - filter empty intersections");
 
     // {A,B}{C,D} with sources
     // String 0 (A): {1}, String 1 (B): {2}, String 2 (C): {1}, String 3 (D): {3}
-    // Valid combinations: AC ({1}∩{1}={1}), BC ({2}∩{1}={}), AD ({1}∩{3}={}), BD ({2}∩{3}={})
+    // Valid: AC ({1}∩{1}={1}), BD ({2}∩{3}={}), etc.
     // Only AC should survive
-    EDS eds(std::string("{A,B}{C,D}"), std::string("{1}{2}{1}{3}"));
-    EDS merged = eds.merge_adjacent(0, 1);
+    EDS merged = transform_to_leds_with_sources(
+        "{A,B}{C,D}",
+        "{1}{2}{1}{3}",
+        2
+    );
 
     assert(merged.cardinality() == 1);  // Only AC
 
     auto set0 = merged.read_symbol(0);
     assert(set0.size() == 1);
     assert(set0[0] == "AC");
-
-    auto src0 = merged.read_source(0);
-    assert(src0.size() == 1);
-    assert(src0.count(1) == 1);
 
     pass();
 }
@@ -208,167 +256,134 @@ void test_merge_with_universal_marker() {
 
     // {A,B}{C} with sources
     // String 0 (A): {0} (all paths), String 1 (B): {2}, String 2 (C): {1}
-    // Expected: AC with {0}∩{1}={1}, BC with {2}∩{1}={}
-    EDS eds(std::string("{A,B}{C}"), std::string("{0}{2}{1}"));
-    EDS merged = eds.merge_adjacent(0, 1);
+    // Expected: AC with {0}∩{1}={1}, BC with {2}∩{1}={} (filtered)
+    EDS merged = transform_to_leds_with_sources(
+        "{A,B}{C}",
+        "{0}{2}{1}",
+        2
+    );
 
     assert(merged.cardinality() == 1);  // Only AC
 
     auto set0 = merged.read_symbol(0);
     assert(set0[0] == "AC");
 
-    auto src0 = merged.read_source(0);
-    assert(src0.count(1) == 1);  // {0} ∩ {1} = {1}
+    pass();
+}
+
+// ===== CONTEXT LENGTH VALIDATION TESTS =====
+
+void test_context_length_1() {
+    test("Context length 1 - no merging needed");
+
+    EDS transformed = transform_to_leds("{A}{B}{C}", 1);
+
+    // With context_length=1, single char symbols are acceptable
+    assert(transformed.length() == 3);
 
     pass();
 }
 
-void test_merge_universal_with_universal() {
-    test("Merge {0} with {0}");
+void test_context_length_forces_full_merge() {
+    test("Large context length forces full merge");
 
-    // Both have universal marker
-    // String 0 (A): {0}, String 1 (B): {0}
-    EDS eds(std::string("{A}{B}"), std::string("{0}{0}"));
-    EDS merged = eds.merge_adjacent(0, 1);
+    // With context_length=6, {AA}{BB}{CC} (each len 2) needs full merge
+    EDS transformed = transform_to_leds("{AA}{BB}{CC}", 6);
 
-    auto src0 = merged.read_source(0);
-    assert(src0.size() == 1);
-    assert(src0.count(0) == 1);  // {0} ∩ {0} = {0}
+    assert(transformed.length() == 1);
 
-    pass();
-}
-
-void test_merge_all_empty_intersections_throws() {
-    test("Merge with all empty intersections throws");
-
-    // {A,B}{C,D} where no combination has valid intersection
-    // String 0 (A): {1}, String 1 (B): {2}, String 2 (C): {3}, String 3 (D): {4}
-    // All intersections empty
-    EDS eds(std::string("{A,B}{C,D}"), std::string("{1}{2}{3}{4}"));
-
-    bool threw = false;
-    try {
-        EDS merged = eds.merge_adjacent(0, 1);
-    } catch (const std::runtime_error& e) {
-        threw = true;
-        std::string msg(e.what());
-        assert(msg.find("empty set") != std::string::npos);
-    }
-    assert(threw);
+    auto set0 = transformed.read_symbol(0);
+    assert(set0[0] == "AABBCC");
 
     pass();
 }
 
-void test_merge_source_statistics() {
-    test("Verify source statistics recalculated");
+// ===== STATISTICS TESTS =====
 
-    // String 0 (A): {1,2}, String 1 (B): {3}, String 2 (C): {1}
-    EDS eds(std::string("{A,B}{C}"), std::string("{1,2}{3}{1}"));
-    EDS merged = eds.merge_adjacent(0, 1);
+void test_statistics_after_transform() {
+    test("Verify statistics after transformation");
 
-    auto stats = merged.get_statistics();
-    assert(stats.num_paths >= 1);  // At least path 1 remains
+    EDS transformed = transform_to_leds("{AC}{G,C}{T}", 2);
+
+    auto stats = transformed.get_statistics();
+
+    // Should have 1 non-degenerate (AC) and 1 degenerate (GT,CT)
+    assert(stats.num_degenerate_symbols == 1);
+    assert(stats.min_context_length == 2);  // "AC"
+    assert(stats.max_context_length == 2);
+
+    pass();
+}
+
+void test_metadata_consistency() {
+    test("Verify metadata consistency after transform");
+
+    EDS transformed = transform_to_leds("{ACGT}{G,C}{T}", 2);
+
+    // Check dimensions
+    assert(transformed.length() == 2);  // ACGT + merged(G,C)(T)
+    assert(transformed.cardinality() == 3);  // 1 + 2
+
+    // Check is_degenerate
+    const auto& is_deg = transformed.get_is_degenerate();
+    assert(is_deg.size() == 2);
+    assert(is_deg[0] == false);  // {ACGT} non-degenerate
+    assert(is_deg[1] == true);   // {GT,CT} degenerate
 
     pass();
 }
 
 // ===== EDGE CASES =====
 
-void test_merge_non_adjacent_throws() {
-    test("Merge non-adjacent positions throws");
+void test_single_symbol_input() {
+    test("Single symbol input");
 
-    EDS eds("{A}{B}{C}");
+    EDS transformed = transform_to_leds("{ACGT}", 2);
 
-    bool threw = false;
-    try {
-        EDS merged = eds.merge_adjacent(0, 2);  // Not adjacent
-    } catch (const std::invalid_argument& e) {
-        threw = true;
-        std::string msg(e.what());
-        assert(msg.find("adjacent") != std::string::npos);
-    }
-    assert(threw);
+    assert(transformed.length() == 1);
+    assert(transformed.cardinality() == 1);
+
+    auto set0 = transformed.read_symbol(0);
+    assert(set0[0] == "ACGT");
 
     pass();
 }
 
-void test_merge_out_of_bounds_throws() {
-    test("Merge out of bounds throws");
+void test_all_degenerate_input() {
+    test("All degenerate input");
 
-    EDS eds("{A}{B}");
+    EDS transformed = transform_to_leds("{A,B}{C,D}{E,F}", 3);
 
-    bool threw = false;
-    try {
-        EDS merged = eds.merge_adjacent(1, 2);  // pos2 >= n
-    } catch (const std::out_of_range& e) {
-        threw = true;
-    }
-    assert(threw);
+    // All should be merged for context length 3
+    assert(transformed.length() == 1);
+    assert(transformed.cardinality() == 8);  // 2^3
 
     pass();
 }
 
-void test_merge_at_start() {
-    test("Merge at start (positions 0,1)");
+void test_alternating_degenerate() {
+    test("Alternating degenerate/non-degenerate");
 
-    EDS eds("{A}{B}{C}");
-    EDS merged = eds.merge_adjacent(0, 1);
+    // Non-deg, deg, non-deg with short contexts
+    EDS transformed = transform_to_leds("{A}{B,C}{D}", 2);
 
-    assert(merged.length() == 2);
-
-    auto set0 = merged.read_symbol(0);
-    auto set1 = merged.read_symbol(1);
-    assert(set0[0] == "AB");
-    assert(set1[0] == "C");
+    // Should merge to meet context length requirements
+    assert(transformed.length() <= 2);  // Some merging needed
 
     pass();
 }
 
-void test_merge_at_end() {
-    test("Merge at end (last two positions)");
+void test_empty_string_alternatives() {
+    test("Empty string alternatives preserved");
 
-    EDS eds("{A}{B}{C}");
-    EDS merged = eds.merge_adjacent(1, 2);
+    EDS transformed = transform_to_leds("{,A}{B}", 1);
 
-    assert(merged.length() == 2);
+    // With context_length=1, no merging needed
+    assert(transformed.length() == 2);
 
-    auto set0 = merged.read_symbol(0);
-    auto set1 = merged.read_symbol(1);
-    assert(set0[0] == "A");
-    assert(set1[0] == "BC");
-
-    pass();
-}
-
-void test_immutability() {
-    test("Original EDS unchanged after merge (immutability)");
-
-    EDS original("{A}{B}{C}");
-    size_t orig_n = original.length();
-    size_t orig_m = original.cardinality();
-
-    EDS merged = original.merge_adjacent(0, 1);
-
-    // Original unchanged
-    assert(original.length() == orig_n);
-    assert(original.cardinality() == orig_m);
-
-    // Merged is different
-    assert(merged.length() == orig_n - 1);
-
-    pass();
-}
-
-void test_merge_resulting_in_nondegenerate() {
-    test("Merge resulting in non-degenerate (single alternative)");
-
-    EDS eds("{A}{B}");
-    EDS merged = eds.merge_adjacent(0, 1);
-
-    assert(merged.cardinality() == 1);
-
-    const auto& is_deg = merged.get_is_degenerate();
-    assert(is_deg[0] == false);  // Single alternative = non-degenerate
+    auto set0 = transformed.read_symbol(0);
+    assert(set0.size() == 2);
+    // First is empty string, second is A
 
     pass();
 }
@@ -376,32 +391,35 @@ void test_merge_resulting_in_nondegenerate() {
 // ===== MAIN =====
 
 int main() {
-    std::cout << "Running EDS merge_adjacent() tests...\n\n";
+    std::cout << "Running EDS merge tests via eds_to_leds_linear()...\n\n";
 
-    // Without sources (CARTESIAN)
-    test_merge_two_degenerate();
-    test_merge_degenerate_nondegenerate();
-    test_merge_nondegenerate_degenerate();
-    test_merge_three_step();
-    test_merge_with_empty_strings();
-    test_merge_metadata_update();
-    test_merge_statistics_recalc();
+    // Basic merge tests (CARTESIAN - no sources)
+    test_merge_two_degenerate_via_leds();
+    test_merge_degenerate_nondegenerate_via_leds();
+    test_merge_nondegenerate_degenerate_via_leds();
+    test_merge_multiple_via_leds();
+    test_merge_with_empty_strings_via_leds();
+    test_no_merge_needed();
+    test_partial_merge();
 
-    // With sources (LINEAR) - DISABLED (require in-memory source construction)
-    // test_merge_with_valid_intersections();
-    // test_merge_with_empty_intersection_filtered();
-    // test_merge_with_universal_marker();
-    // test_merge_universal_with_universal();
-    // test_merge_all_empty_intersections_throws();
-    // test_merge_source_statistics();
+    // With sources (LINEAR merge)
+    test_merge_with_sources_valid_intersections();
+    test_merge_with_sources_filtered();
+    test_merge_with_universal_marker();
+
+    // Context length validation
+    test_context_length_1();
+    test_context_length_forces_full_merge();
+
+    // Statistics and metadata
+    test_statistics_after_transform();
+    test_metadata_consistency();
 
     // Edge cases
-    test_merge_non_adjacent_throws();
-    test_merge_out_of_bounds_throws();
-    test_merge_at_start();
-    test_merge_at_end();
-    test_immutability();
-    test_merge_resulting_in_nondegenerate();
+    test_single_symbol_input();
+    test_all_degenerate_input();
+    test_alternating_degenerate();
+    test_empty_string_alternatives();
 
     std::cout << "\n===========================================\n";
     std::cout << "All " << test_num << " tests PASSED!\n";

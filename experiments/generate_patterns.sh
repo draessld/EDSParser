@@ -5,15 +5,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Default parameters
 DATASET_NAME=""
 INPUT_DIR="eds"
 INPUT_DIRS=()
@@ -23,47 +16,11 @@ PATTERN_LENGTH=10
 PATTERN_COUNTS=()
 PATTERN_LENGTHS=()
 FORCE_OVERWRITE=false
-
-# Tool path
-GENPATTERNS_TOOL="edsparser-genpatterns"
-
-# Statistics
+THREADS=1
+GENPATTERNS_TOOL=""
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 declare -a FAILED_FILES
-
-# Helper functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-resolve_dataset_path() {
-    local input="$1"
-
-    # Check if input is an absolute path
-    if [[ "$input" == /* ]]; then
-        echo "$input"
-    # Check if input is a relative path (contains /)
-    elif [[ "$input" == */* ]]; then
-        # Convert to absolute path
-        echo "$(cd "$(dirname "$input")" 2>/dev/null && pwd)/$(basename "$input")"
-    else
-        # Treat as dataset name, use datasets/ prefix
-        echo "datasets/$input"
-    fi
-}
 
 show_help() {
     cat << EOF
@@ -82,6 +39,7 @@ OPTIONS:
   --length L              Pattern length (default: 10)
   --counts N1,N2,...      Multiple counts (comma-separated, e.g., "100,500,1000")
   --lengths L1,L2,...     Multiple lengths (comma-separated, e.g., "10,20,30")
+  --threads N             Number of parallel jobs to run (default: 1)
   --force                 Overwrite existing pattern files
   -h, --help              Show this help message
 
@@ -134,24 +92,26 @@ EOF
 }
 
 check_tool() {
-    log_info "Checking for edsparser-genpatterns tool..."
+    log_info "Locating required tools..."
+    local build_dir="$SCRIPT_DIR/../build/src/cpp/tools"
 
-    if ! command -v "$GENPATTERNS_TOOL" &> /dev/null; then
-        log_error "Tool '$GENPATTERNS_TOOL' not found"
-        log_error "Please run INSTALL.sh or ensure tools are installed"
+    GENPATTERNS_TOOL=$(command -v edsparser-genpatterns || echo "$build_dir/edsparser-genpatterns")
+
+    if [[ ! -x "$GENPATTERNS_TOOL" ]]; then
+        log_error "Tool 'edsparser-genpatterns' not found or not executable."
+        log_error "Please run ./INSTALL.sh from the project root."
         exit 1
     fi
 
-    log_success "Found $GENPATTERNS_TOOL: $(which $GENPATTERNS_TOOL)"
+    log_success "Found edsparser-genpatterns: $GENPATTERNS_TOOL"
 }
 
 generate_patterns() {
     local eds_file="$1"
-    local dataset_path="$2"
     local input_dir_name="$3"
     local count="$4"
     local length="$5"
-    local basename=$(basename "$eds_file" | sed -E 's/\.(eds|leds)$//')
+    local basename=$(basename "$eds_file" .eds | basename -s .leds)
 
     # Create pattern folder inside the input directory: <input_dir>/patterns_<count>_<length>/
     local input_dir_path="${dataset_path}/${input_dir_name}"
@@ -172,7 +132,7 @@ generate_patterns() {
     local start_time=$SECONDS
 
     # Generate patterns
-    if $GENPATTERNS_TOOL \
+    if "$GENPATTERNS_TOOL" \
         --input "$eds_file" \
         --output "$output_file" \
         --count "$count" \
@@ -180,7 +140,7 @@ generate_patterns() {
         > /dev/null 2>&1; then
 
         local elapsed=$((SECONDS - start_time))
-        local pattern_count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
+        local pattern_count=$(wc -l < "$output_file" | xargs)
 
         log_success "Generated $pattern_count patterns for $basename (count=$count, length=$length) (${elapsed}s)"
         ((SUCCESS_COUNT++))
@@ -192,6 +152,9 @@ generate_patterns() {
         return 1
     fi
 }
+
+# Export function for parallel execution
+export -f generate_patterns log_info log_success log_warning log_error
 
 print_summary() {
     local total_combinations="$1"
@@ -224,7 +187,8 @@ main() {
     fi
 
     # Resolve dataset path (supports both names and paths)
-    local dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    export dataset_path
 
     if [[ ! -d "$dataset_path" ]]; then
         log_error "Dataset not found: $dataset_path"
@@ -232,7 +196,8 @@ main() {
     fi
 
     # Setup input directories array
-    local input_dirs_to_process=()
+    local input_dirs_to_process
+    input_dirs_to_process=()
 
     if [[ ${#INPUT_DIRS[@]} -gt 0 ]]; then
         input_dirs_to_process=("${INPUT_DIRS[@]}")
@@ -274,6 +239,7 @@ main() {
     log_info "Pattern counts: ${counts_to_process[*]}"
     log_info "Pattern lengths: ${lengths_to_process[*]}"
     log_info "Total combinations: $total_combinations"
+    log_info "Parallel jobs: $THREADS"
     log_info "File pattern: $FILE_PATTERN"
     echo ""
 
@@ -285,8 +251,10 @@ main() {
         local input_path="$dataset_path/$input_dir"
 
         # Find EDS/l-EDS files
-        local eds_files=("$input_path"/$FILE_PATTERN.eds "$input_path"/$FILE_PATTERN.leds)
-        local found_files=()
+        local eds_files
+        eds_files=("$input_path"/$FILE_PATTERN.eds "$input_path"/$FILE_PATTERN.leds)
+        local found_files
+        found_files=()
 
         for file in "${eds_files[@]}"; do
             if [[ -f "$file" ]]; then
@@ -304,12 +272,21 @@ main() {
 
         for count in "${counts_to_process[@]}"; do
             for length in "${lengths_to_process[@]}"; do
-                log_info "  Combination: count=$count, length=$length"
+                log_info "  Combination: dir=$input_dir, count=$count, length=$length"
+
+                # Export variables needed by the parallel function
+                export FORCE_OVERWRITE
+                export GENPATTERNS_TOOL
 
                 # Process each file with this count/length combination
-                for eds_file in "${found_files[@]}"; do
-                    generate_patterns "$eds_file" "$dataset_path" "$input_dir" "$count" "$length"
-                done
+                # Use xargs for simple and effective parallelization
+                printf "%s\n" "${found_files[@]}" | xargs -n 1 -P "$THREADS" -I {} \
+                    bash -c "generate_patterns \"{}\" \"$input_dir\" \"$count\" \"$length\""
+
+                # The old sequential way:
+                # for eds_file in "${found_files[@]}"; do
+                #     generate_patterns "$eds_file" "$input_dir" "$count" "$length"
+                # done
 
                 echo ""
             done
@@ -353,6 +330,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --lengths)
             IFS=',' read -ra PATTERN_LENGTHS <<< "$2"
+            shift 2
+            ;;
+        --threads)
+            THREADS="$2"
             shift 2
             ;;
         --force)

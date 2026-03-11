@@ -18,9 +18,7 @@ Sources::Sources(size_t cardinality, Format format)
     , format_(format)
     , cache_capacity_(10000)  // Default cache size
 {
-    if (cardinality == 0) {
-        throw std::invalid_argument("Sources: Cardinality must be > 0");
-    }
+    // cardinality==0 is allowed as a sentinel for auto-detect during load()
 }
 
 Sources::~Sources() {
@@ -69,57 +67,29 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
         throw std::runtime_error("Sources file does not exist: " + path.string());
     }
 
-    // Open file to determine cardinality (quick scan)
-    std::ifstream temp_stream(path);
-    if (!temp_stream.is_open()) {
-        throw std::runtime_error("Failed to open sources file: " + path.string());
-    }
-
-    // Count sets to determine cardinality
-    size_t cardinality = 0;
-    if (format == Format::SEDS) {
-        // Count '{' occurrences
-        char ch;
-        while (temp_stream.get(ch)) {
-            if (ch == SET_OPEN) {
-                cardinality++;
-            }
-        }
-    } else {
-        // For binary formats, read cardinality from header
+    if (format != Format::SEDS) {
         throw std::runtime_error("Binary formats (.edz) not yet implemented");
     }
 
-    temp_stream.close();
-
-    if (cardinality == 0) {
-        throw std::runtime_error("Sources file contains no source sets");
-    }
-
-    // Create Sources object
-    auto sources = std::make_shared<Sources>(cardinality, format);
-    sources->file_path_ = path;
-
-    // Open file for parsing
+    // Open file once — parse_seds() will build index and set cardinality_ in one pass
     std::ifstream stream(path);
     if (!stream.is_open()) {
         throw std::runtime_error("Failed to open sources file: " + path.string());
     }
 
-    // Parse based on format (builds index only)
-    switch (format) {
-        case Format::SEDS:
-            sources->parse_seds(stream);
-            // Keep stream open for on-demand reading
-            sources->stream_ = std::move(stream);
-            break;
+    // Create Sources with cardinality=0 sentinel (parse_seds() will fill it)
+    auto sources = std::make_shared<Sources>(0, format);
+    sources->file_path_ = path;
 
-        case Format::EDZ:
-            throw std::runtime_error("EDZ format not yet implemented");
+    // Parse: builds index + sets cardinality_ in one pass
+    sources->parse_seds(stream);
 
-        case Format::EDZ_COMPRESSED:
-            throw std::runtime_error("EDZ_COMPRESSED format not yet implemented");
+    if (sources->cardinality_ == 0) {
+        throw std::runtime_error("Sources file contains no source sets");
     }
+
+    // Keep stream open for on-demand reading
+    sources->stream_ = std::move(stream);
 
     return sources;
 }
@@ -180,37 +150,42 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
 
 void Sources::parse_seds(std::istream& is) {
     base_positions_.clear();
-    base_positions_.reserve(cardinality_);
+    if (cardinality_ > 0) {
+        base_positions_.reserve(cardinality_);
+    }
 
-    std::streampos current_pos = is.tellg();
+    // Use a byte offset counter instead of tellg() to avoid virtual call overhead
+    size_t byte_offset = 0;
     size_t string_count = 0;
     char ch;
 
     // Single-pass scan to build index
     while (is.get(ch)) {
+        byte_offset++;
         if (ch == SET_OPEN) {
-            // Record starting position of this source set
-            base_positions_.push_back(current_pos);
+            // Record starting position of this source set (points to '{')
+            base_positions_.push_back(static_cast<std::streampos>(byte_offset - 1));
 
             // Skip until matching '}'
             int depth = 1;
             while (depth > 0 && is.get(ch)) {
+                byte_offset++;
                 if (ch == SET_OPEN) depth++;
                 else if (ch == SET_CLOSE) depth--;
             }
 
-            current_pos = is.tellg();
             string_count++;
         } else if (!std::isspace(static_cast<unsigned char>(ch))) {
             throw std::runtime_error("Unexpected character in sEDS file: " +
                                    std::string(1, ch));
-        } else {
-            current_pos = is.tellg();
         }
+        // whitespace: byte_offset already incremented, continue
     }
 
-    // Validate count matches cardinality
-    if (string_count != cardinality_) {
+    if (cardinality_ == 0) {
+        // Auto-detect mode: set cardinality from parsed count
+        cardinality_ = string_count;
+    } else if (string_count != cardinality_) {
         throw std::runtime_error("sEDS: Source count (" +
             std::to_string(string_count) + ") does not match cardinality (" +
             std::to_string(cardinality_) + ")");
@@ -250,7 +225,6 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
     // Parse one source set: {path_id1,path_id2,...}
     std::set<int> result;
     char ch;
-    std::string current_number;
 
     // Expect '{'
     if (!stream_.get(ch) || ch != SET_OPEN) {
@@ -258,15 +232,16 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
                                 std::to_string(string_id));
     }
 
-    // Parse path IDs
+    // Parse path IDs using integer accumulation (no heap allocation)
+    int current_number = -1;
     while (stream_.get(ch) && ch != SET_CLOSE) {
         if (ch == SET_SEPARATOR) {
-            if (!current_number.empty()) {
-                result.insert(std::stoi(current_number));
-                current_number.clear();
+            if (current_number >= 0) {
+                result.insert(current_number);
+                current_number = -1;
             }
         } else if (std::isdigit(static_cast<unsigned char>(ch))) {
-            current_number += ch;
+            current_number = (current_number < 0 ? 0 : current_number * 10) + (ch - '0');
         } else if (!std::isspace(static_cast<unsigned char>(ch))) {
             throw std::runtime_error("Invalid character in source set: " +
                                    std::string(1, ch));
@@ -274,8 +249,8 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
     }
 
     // Add last number
-    if (!current_number.empty()) {
-        result.insert(std::stoi(current_number));
+    if (current_number >= 0) {
+        result.insert(current_number);
     }
 
     return result;
@@ -328,6 +303,36 @@ std::set<int> Sources::read_source(size_t string_id) const {
     return paths;
 }
 
+const std::set<int>& Sources::read_source_ref(size_t string_id) const {
+    if (string_id >= cardinality_) {
+        throw std::out_of_range("String ID " + std::to_string(string_id) +
+                               " out of range (cardinality=" + std::to_string(cardinality_) + ")");
+    }
+
+    // Cache hit: move to front and return reference (splice is iterator-stable)
+    auto cache_it = cache_map_.find(string_id);
+    if (cache_it != cache_map_.end()) {
+        cache_.splice(cache_.begin(), cache_, cache_it->second);
+        return cache_it->second->paths;
+    }
+
+    // Cache miss: read from file, add to cache, return reference to cached entry
+    std::set<int> paths;
+    switch (format_) {
+        case Format::SEDS:
+            paths = read_from_seds(string_id);
+            break;
+        case Format::EDZ:
+            paths = read_from_edz(string_id);
+            break;
+        case Format::EDZ_COMPRESSED:
+            paths = read_from_edz_compressed(string_id);
+            break;
+    }
+    add_to_cache(string_id, std::move(paths));
+    return cache_.front().paths;
+}
+
 // ================================================================================
 // SOURCE MERGING
 // ================================================================================
@@ -367,11 +372,12 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
     std::vector<std::set<int>> merged_sources;
 
     // Compute all valid combinations (LINEAR merge: filter by intersection)
+    // Use read_source_ref() to avoid copies on cache hits in this tight loop
     for (size_t i = 0; i < symbol1_size; ++i) {
-        const std::set<int> sources1 = read_source(symbol1_start + i);
+        const std::set<int>& sources1 = read_source_ref(symbol1_start + i);
 
         for (size_t j = 0; j < symbol2_size; ++j) {
-            const std::set<int> sources2 = read_source(symbol2_start + j);
+            const std::set<int>& sources2 = read_source_ref(symbol2_start + j);
 
             // Use static helper for intersection
             std::set<int> intersection = intersect_sources(sources1, sources2);
@@ -417,17 +423,29 @@ void Sources::save_seds(const std::filesystem::path& path) const {
         throw std::runtime_error("Failed to open file for writing: " + path.string());
     }
 
-    // Read sources on-demand and write
+    // Read sources on-demand and write, batching each set into a string buffer
+    std::string buf;
+    buf.reserve(64);
     for (size_t i = 0; i < cardinality_; i++) {
-        std::set<int> paths = read_source(i);
-        os << SET_OPEN;
+        const std::set<int>& paths = read_source_ref(i);
+        buf.clear();
+        buf += SET_OPEN;
         bool first = true;
         for (int path_id : paths) {
-            if (!first) os << SET_SEPARATOR;
-            os << path_id;
+            if (!first) buf += SET_SEPARATOR;
+            // Fast integer-to-string without heap allocation
+            char tmp[12];
+            int n = path_id, len = 0;
+            if (n == 0) { tmp[len++] = '0'; }
+            else {
+                while (n > 0) { tmp[len++] = '0' + (n % 10); n /= 10; }
+                std::reverse(tmp, tmp + len);
+            }
+            buf.append(tmp, len);
             first = false;
         }
-        os << SET_CLOSE;
+        buf += SET_CLOSE;
+        os.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     }
 
     os << '\n';  // Trailing newline
@@ -446,7 +464,7 @@ void Sources::save_edz_compressed(const std::filesystem::path& path) const {
 // CACHE MANAGEMENT
 // ================================================================================
 
-void Sources::add_to_cache(size_t string_id, const std::set<int>& paths) const {
+void Sources::add_to_cache(size_t string_id, std::set<int> paths) const {
     if (cache_capacity_ == 0) {
         return;  // Caching disabled
     }
@@ -458,8 +476,8 @@ void Sources::add_to_cache(size_t string_id, const std::set<int>& paths) const {
         cache_.pop_back();
     }
 
-    // Add to front of list (most recently used)
-    cache_.push_front({string_id, paths});
+    // Add to front of list (most recently used), moving paths to avoid copy
+    cache_.push_front({string_id, std::move(paths)});
     cache_map_[string_id] = cache_.begin();
 }
 

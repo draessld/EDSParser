@@ -112,75 +112,29 @@ std::vector<size_t> generate_variant_positions(
 }
 
 /**
- * Generate path choices ensuring every alternative is used at least once
+ * Build source sets where every string in every symbol carries all paths.
  *
- * Returns a vector where path_choices[path_id][variant_idx] = alternative_idx
- */
-std::vector<std::vector<size_t>> generate_path_choices(
-    size_t num_paths,
-    const std::vector<size_t>& num_alternatives_per_variant,
-    std::mt19937& gen
-) {
-    std::vector<std::vector<size_t>> path_choices(num_paths);
-
-    // Initialize all paths
-    for (auto& path : path_choices) {
-        path.resize(num_alternatives_per_variant.size());
-    }
-
-    // For each variant position
-    for (size_t var_idx = 0; var_idx < num_alternatives_per_variant.size(); ++var_idx) {
-        size_t num_alts = num_alternatives_per_variant[var_idx];
-
-        // Phase 1: Round-robin assignment to ensure every alternative is used
-        for (size_t alt_idx = 0; alt_idx < num_alts; ++alt_idx) {
-            size_t path_id = alt_idx % num_paths;
-            path_choices[path_id][var_idx] = alt_idx;
-        }
-
-        // Phase 2: Fill remaining paths with random choices
-        // Only paths beyond num_alts need assignment
-        std::uniform_int_distribution<size_t> dist(0, num_alts - 1);
-        for (size_t path_id = num_alts; path_id < num_paths; ++path_id) {
-            path_choices[path_id][var_idx] = dist(gen);
-        }
-    }
-
-    return path_choices;
-}
-
-/**
- * Build source sets from path choices
+ * For degenerate symbols: every alternative gets all path IDs.
+ * This guarantees that merging any two adjacent symbols always produces
+ * a non-empty source intersection (all_paths ∩ all_paths = all_paths).
  *
  * Returns a vector of sets where sources[string_idx] = set of path IDs
  */
 std::vector<std::set<int>> build_source_sets(
     const std::vector<SymbolMetadata>& symbols,
-    const std::vector<std::vector<size_t>>& path_choices,
     size_t num_paths
 ) {
     std::vector<std::set<int>> sources;
-    size_t variant_idx = 0;
+
+    std::set<int> all_paths;
+    for (size_t path_id = 1; path_id <= num_paths; ++path_id) {
+        all_paths.insert(static_cast<int>(path_id));
+    }
 
     for (const auto& symbol : symbols) {
-        if (symbol.is_degenerate) {
-            // For each alternative at this degenerate position
-            for (size_t alt_idx = 0; alt_idx < symbol.num_alternatives; ++alt_idx) {
-                std::set<int> path_set;
-
-                // Find all paths that chose this alternative
-                for (size_t path_id = 0; path_id < num_paths; ++path_id) {
-                    if (path_choices[path_id][variant_idx] == alt_idx) {
-                        path_set.insert(path_id + 1); // 1-indexed path IDs
-                    }
-                }
-
-                sources.push_back(path_set);
-            }
-            variant_idx++;
-        } else {
-            // Non-degenerate symbol: universal path {0}
-            sources.push_back({0});
+        // Every string (degenerate or not) carries all paths
+        for (size_t alt_idx = 0; alt_idx < symbol.num_alternatives; ++alt_idx) {
+            sources.push_back(all_paths);
         }
     }
 
@@ -477,21 +431,9 @@ int main(int argc, char** argv) {
             num_paths
         );
 
-        // Collect number of alternatives for each variant
-        std::vector<size_t> num_alternatives_per_variant;
-        for (const auto& symbol : symbols) {
-            if (symbol.is_degenerate) {
-                num_alternatives_per_variant.push_back(symbol.num_alternatives);
-            }
-        }
-
-        // Generate path choices
+        // Build source sets (all paths on every string)
         std::cerr << "Generating source paths...\n";
-        std::mt19937 gen(seed + 1); // Use slightly different seed for path generation
-        auto path_choices = generate_path_choices(num_paths, num_alternatives_per_variant, gen);
-
-        // Build source sets
-        auto sources = build_source_sets(symbols, path_choices, num_paths);
+        auto sources = build_source_sets(symbols, num_paths);
 
         // Write EDS file
         std::cerr << "Writing to file: " << output_file << "\n";

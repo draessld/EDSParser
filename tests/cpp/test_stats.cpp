@@ -9,6 +9,34 @@
 
 using namespace edsparser;
 
+// Helper function to load EDS from stringstreams (writes to temp files)
+EDS load_eds_from_streams(std::stringstream& eds_ss, std::stringstream& seds_ss) {
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto eds_path = temp_dir / "test_eds.tmp";
+    auto seds_path = temp_dir / "test_seds.tmp";
+
+    // Write EDS stream to file
+    {
+        std::ofstream eds_file(eds_path);
+        eds_file << eds_ss.str();
+    }
+
+    // Write SEDS stream to file
+    {
+        std::ofstream seds_file(seds_path);
+        seds_file << seds_ss.str();
+    }
+
+    // Load and return
+    auto eds = EDS::load(eds_path, seds_path);
+
+    // Clean up temp files
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(seds_path);
+
+    return eds;
+}
+
 void test_basic_statistics() {
     std::cout << "Test 1: Basic statistics calculation... ";
 
@@ -77,8 +105,8 @@ void test_metadata_statistics() {
         ofs << "{AAAA}{G,GG}{TTTT}{C,CC}";
     }
 
-    // Load in METADATA_ONLY mode
-    EDS eds = EDS::load(temp_file, EDS::StoringMode::METADATA_ONLY);
+    // Load (always uses METADATA_ONLY mode)
+    EDS eds = EDS::load(temp_file);
     auto stats = eds.get_statistics();
 
     // Context lengths: AAAA (4), TTTT (4) -> min=4, max=4, avg=4.0
@@ -102,7 +130,7 @@ void test_source_statistics_basic() {
     std::stringstream eds_ss("{ACGT}{A,ACA}{CGT}{T,TG}");
     std::stringstream seds_ss("{0}{1,3}{2}{4,5}{6}{7}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto stats = eds.get_statistics();
 
     // 8 distinct paths: 0, 1, 2, 3, 4, 5, 6, 7
@@ -124,7 +152,7 @@ void test_source_statistics_all_universal() {
     std::stringstream eds_ss("{AC}{GT}");
     std::stringstream seds_ss("{0}{0}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto stats = eds.get_statistics();
 
     // Only path 0 is used
@@ -142,7 +170,7 @@ void test_source_statistics_single_string_multi_paths() {
     std::stringstream eds_ss("{ACGT}");
     std::stringstream seds_ss("{1,2,3,4,5}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto stats = eds.get_statistics();
 
     assert(stats.num_paths == 5);
@@ -167,8 +195,8 @@ void test_source_statistics_file_mode() {
         seds_ofs << "{0}{1,2}{3}{4,5}";
     }
 
-    // Load with sources in FULL mode
-    EDS eds = EDS::load(eds_file, seds_file, EDS::StoringMode::FULL);
+    // Load with sources (always uses METADATA_ONLY mode)
+    EDS eds = EDS::load(eds_file, seds_file);
     auto stats = eds.get_statistics();
 
     // Paths: 0, 1, 2, 3, 4, 5 = 6 distinct paths
@@ -209,7 +237,7 @@ void test_metadata_preservation() {
     std::stringstream eds_ss("{ACGT}{A,T}{GGG}");
     std::stringstream seds_ss("{0}{1,2}{3}{4}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto metadata = eds.get_metadata();
 
     // Check all fields exist and are accessible
@@ -236,7 +264,7 @@ void test_large_path_numbers() {
     std::stringstream eds_ss("{A}{T}");
     std::stringstream seds_ss("{100,200,300}{400,500}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto stats = eds.get_statistics();
 
     // 5 distinct paths: 100, 200, 300, 400, 500
@@ -256,7 +284,7 @@ void test_single_path_coverage() {
     std::stringstream eds_ss("{A}{T}{G}");
     std::stringstream seds_ss("{1}{1,2}{1}");
 
-    EDS eds(eds_ss, seds_ss);
+    EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto stats = eds.get_statistics();
 
     // Only 2 distinct paths even though path 1 appears 3 times
