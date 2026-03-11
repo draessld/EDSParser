@@ -154,22 +154,23 @@ void Sources::parse_seds(std::istream& is) {
         base_positions_.reserve(cardinality_);
     }
 
-    // Use a byte offset counter instead of tellg() to avoid virtual call overhead
-    size_t byte_offset = 0;
     size_t string_count = 0;
     char ch;
 
-    // Single-pass scan to build index
-    while (is.get(ch)) {
-        byte_offset++;
+    // Single-pass scan to build index.
+    // Record position using tellg() BEFORE consuming '{' so the stored
+    // streampos values are valid for seekg() calls in read_from_seds().
+    while (is) {
+        std::streampos pos_before = is.tellg();
+        if (!is.get(ch)) break;
+
         if (ch == SET_OPEN) {
-            // Record starting position of this source set (points to '{')
-            base_positions_.push_back(static_cast<std::streampos>(byte_offset - 1));
+            // Record the position of '{' (obtained from tellg before consuming)
+            base_positions_.push_back(pos_before);
 
             // Skip until matching '}'
             int depth = 1;
             while (depth > 0 && is.get(ch)) {
-                byte_offset++;
                 if (ch == SET_OPEN) depth++;
                 else if (ch == SET_CLOSE) depth--;
             }
@@ -179,7 +180,6 @@ void Sources::parse_seds(std::istream& is) {
             throw std::runtime_error("Unexpected character in sEDS file: " +
                                    std::string(1, ch));
         }
-        // whitespace: byte_offset already incremented, continue
     }
 
     if (cardinality_ == 0) {

@@ -73,6 +73,40 @@ size_t estimate_metadata_memory(size_t m, size_t n) {
     return total + overhead;
 }
 
+// Source path statistics
+struct SourceStats {
+    size_t num_paths = 0;
+    size_t max_paths_per_string = 0;
+    double avg_paths_per_string = 0.0;
+};
+
+SourceStats compute_source_stats(const EDS& eds) {
+    SourceStats result;
+    if (!eds.has_sources()) return result;
+
+    auto sources = eds.get_sources_object();
+    size_t cardinality = sources->cardinality();
+    if (cardinality == 0) return result;
+
+    std::set<int> all_paths;
+    size_t total_set_size = 0;
+
+    for (size_t i = 0; i < cardinality; ++i) {
+        auto paths = sources->read_source(i);
+        // {0} is the universal marker — treat it as a single counted element
+        all_paths.insert(paths.begin(), paths.end());
+        if (paths.size() > result.max_paths_per_string)
+            result.max_paths_per_string = paths.size();
+        total_set_size += paths.size();
+    }
+
+    // Exclude universal marker 0 from path count (it means "all paths", not a real genome ID)
+    all_paths.erase(0);
+    result.num_paths = all_paths.size();
+    result.avg_paths_per_string = static_cast<double>(total_set_size) / cardinality;
+    return result;
+}
+
 // Print statistics in standard format
 void print_standard(const EDS& eds, const std::filesystem::path& input_file, bool verbose, bool has_sources_file) {
     auto stats = eds.get_statistics();
@@ -126,9 +160,12 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     }
 
     if (eds.has_sources()) {
+        auto src_stats = compute_source_stats(eds);
         std::cout << "Sources (pangenome paths):\n";
         std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources_object()->cardinality()) << "\n";
-        std::cout << "  Mode: Streaming (loaded from file)\n";
+        std::cout << "  Total paths (genomes):        " << std::setw(12) << format_number(src_stats.num_paths) << "\n";
+        std::cout << "  Max paths per string:         " << std::setw(12) << format_number(src_stats.max_paths_per_string) << "\n";
+        std::cout << "  Avg paths per string:         " << std::setw(12) << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
         std::cout << "\n";
     } else if (has_sources_file) {
         std::cout << "Sources: File provided but parsing failed\n";
@@ -170,7 +207,7 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "  \"file\": {\n";
     std::cout << "    \"path\": \"" << input_file.string() << "\",\n";
     std::cout << "    \"size_bytes\": " << file_size << ",\n";
-    std::cout << "    \"storage_mode\": \"STREAMING\"\n";
+    std::cout << "    \"storage_mode\": \"METADATA_ONLY\"\n";
     std::cout << "  },\n";
     std::cout << "  \"structure\": {\n";
     std::cout << "    \"n_symbols\": " << eds.length() << ",\n";
@@ -196,9 +233,13 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"estimated_full_mb\": " << std::fixed << std::setprecision(1) << (full_mem / 1024.0 / 1024.0) << ",\n";
     std::cout << "    \"reduction_factor\": " << std::fixed << std::setprecision(1) << reduction_factor << "\n";
     std::cout << "  },\n";
+    auto src_stats = compute_source_stats(eds);
     std::cout << "  \"sources\": {\n";
     std::cout << "    \"loaded\": " << (eds.has_sources() ? "true" : "false") << ",\n";
-    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << "\n";
+    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << ",\n";
+    std::cout << "    \"num_paths\": " << src_stats.num_paths << ",\n";
+    std::cout << "    \"max_paths_per_string\": " << src_stats.max_paths_per_string << ",\n";
+    std::cout << "    \"avg_paths_per_string\": " << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
     std::cout << "  },\n";
     std::cout << "  \"recommendations\": {\n";
     std::cout << "    \"needs_transformation\": " << (stats.min_context_length < 5 ? "true" : "false") << ",\n";

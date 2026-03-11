@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
             ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
-            ("block-size,b", po::value<size_t>(&block_size)->default_value(1000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)");
+            ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

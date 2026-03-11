@@ -63,34 +63,6 @@ bool file_exists_with_content(const fs::path& path) {
     return fs::exists(path) && fs::file_size(path) > 0;
 }
 
-// Find tools directory
-bool find_tools() {
-    // Try common locations (handle various CWD scenarios)
-    std::vector<std::string> paths = {
-        "./tools",            // From build directory
-        "../tools",           // From build/src
-        "../../tools",        // From build/src/cpp
-        "./build/tools",      // From project root
-        "../build/tools",
-        "../../build/tools"
-    };
-
-    for (const auto& p : paths) {
-        std::string tool_path = p + "/edsparser-stats";
-        if (fs::exists(tool_path)) {
-            TOOLS_DIR = p;
-            return true;
-        }
-    }
-
-    // Debug: print current directory
-    std::cerr << "Current directory: " << fs::current_path() << "\n";
-    std::cerr << "Checked paths: ";
-    for (const auto& p : paths) std::cerr << p << " ";
-    std::cerr << "\n";
-    return false;
-}
-
 // Create temp directory for test outputs
 fs::path create_temp_dir() {
     auto temp = fs::temp_directory_path() / "edsparser_integration_test";
@@ -511,16 +483,18 @@ void test_pipeline_vcf_to_leds() {
 
 // ===== MAIN =====
 
-int main() {
+int main(int argc, char* argv[]) {
     std::cout << "===========================================\n";
     std::cout << "EDSParser Integration Tests\n";
     std::cout << "===========================================\n\n";
 
-    // Find tools
-    if (!find_tools()) {
-        std::cerr << "ERROR: Could not find tools directory. Build the project first.\n";
+    if (argc < 2) {
+        std::cerr << "ERROR: Path to tools directory is required.\n";
+        std::cerr << "Usage: " << argv[0] << " <path_to_tools_dir>\n";
         return 1;
     }
+    TOOLS_DIR = argv[1];
+
     std::cout << "Tools directory: " << TOOLS_DIR << "\n\n";
 
     // edsparser-stats tests
