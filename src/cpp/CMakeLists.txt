@@ -144,6 +144,22 @@ add_executable(test_vcf ${TEST_DIR}/test_vcf.cpp)
 target_link_libraries(test_vcf edsparser_lib)
 add_test(NAME test_vcf COMMAND test_vcf)
 
+# Test: CLI tool integration tests
+add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
+target_link_libraries(test_integration edsparser_lib)
+add_test(NAME test_integration COMMAND test_integration WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Memory stress tests (built but NOT run automatically - too slow for CI)
+# Run manually when needed: ./test_memory_smoke or ./test_memory_stress
+add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
+target_link_libraries(test_memory_stress edsparser_lib)
+
+add_executable(test_memory_smoke ${TEST_DIR}/test_memory_smoke.cpp)
+target_link_libraries(test_memory_smoke edsparser_lib)
+
+# Note: These are excluded from 'ctest' / 'make test'
+# To run: cd build/src/cpp && ./test_memory_smoke
+
 # Print configuration summary
 message(STATUS "")
 message(STATUS "Configuration Summary:")

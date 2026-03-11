@@ -1,0 +1,3 @@
+# Ignore all generated test files (large files, user-generated)
+*.eds
+*.seds

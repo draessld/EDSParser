@@ -2,6 +2,7 @@
 #define EDSPARSER_EDS_HPP
 
 #include "../common.hpp"
+#include "sources.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <filesystem>
+#include <memory>
 
 namespace edsparser {
 
@@ -21,18 +23,11 @@ namespace edsparser {
  * Compact format (optional): str1{str2,str3}str4 (brackets only on degenerate symbols)
  * Empty strings are represented as empty entries between commas.
  *
- * Storage modes:
- * - FULL: All strings loaded into RAM (default, backward compatible)
- * - METADATA_ONLY: Only metadata/index loaded, strings streamed on-demand (memory-efficient)
+ * Uses streaming architecture with metadata/index for memory-efficient access.
+ * Strings are read on-demand from disk rather than loaded into RAM.
  */
 class EDS {
 public:
-    // Storage mode options
-    enum class StoringMode {
-        FULL,           // All strings in RAM (default)
-        METADATA_ONLY   // Only metadata, stream strings on-demand
-    };
-
     // Output format options
     enum class OutputFormat {
         FULL,     // Always use brackets: {ACGT}{A,ACA}{CGT}
@@ -40,23 +35,20 @@ public:
     };
 
     // Default constructor
-    EDS() : is_empty_(true), mode_(StoringMode::FULL), has_sources_(false) {}
+    EDS() : is_empty_(true), sources_(nullptr) {}
 
-    // Stream-based constructors
+    // Stream-based constructor (EDS only, no sources support)
     explicit EDS(std::istream& eds_stream);
-    EDS(std::istream& eds_stream, std::istream& seds_stream);
 
-    // String-based constructors (for convenience - wraps streams internally)
+    // String-based constructor (EDS only, for convenience - wraps streams internally)
     explicit EDS(const std::string& eds_string);
-    EDS(const std::string& eds_string, const std::string& seds_string);
 
-    // File-based loaders (with optional StoringMode for memory efficiency)
-    static EDS load(const std::filesystem::path& path, StoringMode mode = StoringMode::FULL);
-    static EDS load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path, StoringMode mode = StoringMode::FULL);
+    // File-based loaders (always uses streaming for memory efficiency)
+    static EDS load(const std::filesystem::path& path);
+    static EDS load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path);
 
     // Convenience factory for string construction
     static EDS from_string(const std::string& eds_string);
-    static EDS from_string(const std::string& eds_string, const std::string& seds_string);
 
     // Destructor
     ~EDS() = default;
@@ -73,8 +65,6 @@ public:
     size_t length() const { return n_; }           // Number of sets
     size_t size() const { return N_; }             // Total characters
     size_t cardinality() const { return m_; }      // Total number of strings
-    bool has_sources() const { return has_sources_; }  // Whether sources are loaded
-    StoringMode get_storing_mode() const { return mode_; }  // Get storage mode
 
     // Metadata structure (combines index data and statistics)
     // This is the core of memory-efficient streaming EDS
@@ -95,11 +85,6 @@ public:
         size_t total_change_size;         // Total chars in degenerate symbols
         size_t num_empty_strings;         // Count of empty string alternatives
 
-        // Source statistics (only meaningful if sources are loaded)
-        size_t num_paths;                 // Total number of distinct path IDs
-        size_t max_paths_per_string;      // Maximum paths in any single string
-        double avg_paths_per_string;      // Average paths per string
-
         // Position checking support (computed from index data)
         std::vector<Position> cum_common_positions;   // Cumulative common chars before each symbol (n+1 entries)
         std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
@@ -114,11 +99,6 @@ public:
         size_t num_common_chars;
         size_t total_change_size;
         size_t num_empty_strings;
-
-        // Source statistics
-        size_t num_paths;
-        size_t max_paths_per_string;
-        double avg_paths_per_string;
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
@@ -129,13 +109,6 @@ public:
     void print(std::ostream& os = std::cout) const;
     void save(std::ostream& os, OutputFormat format = OutputFormat::FULL) const;
     void save(const std::filesystem::path& path, OutputFormat format = OutputFormat::FULL) const;
-    void save_sources(std::ostream& os) const;  // Save sEDS format
-    void save_sources(const std::filesystem::path& path) const;  // Save sEDS to file
-
-    // Loading methods (sources only - EDS loading is via constructors/static load)
-    void load_sources(std::istream& is);  // Load sources from sEDS stream
-    void load_sources(const std::filesystem::path& path);  // Load sources from sEDS file
-    void load_sources(const std::string& seds_string);  // Load sources from sEDS string
 
     // Pattern generation for benchmarking
     void generate_patterns(std::ostream& os, size_t count, Length pattern_length) const;
@@ -148,21 +121,11 @@ public:
                        const std::vector<int>& degenerate_strings,
                        const String& pattern) const;
 
-    // Merging: merge two adjacent symbols (degenerate or non-degenerate)
-    // Example: {G,C} + {T} → {GT,CT}
-    // Example: {T} + {A,C,G} → {TA,TC,TG}
-    // Example: {G,C} + {T} + {A,C} would require two calls: merge(0,1) then merge(0,1) again
-    // Behavior depends on whether sources are loaded:
-    //   - WITHOUT sources: CARTESIAN merge (all combinations of alternatives)
-    //   - WITH sources: LINEAR merge (only combinations with valid source intersection)
-    // Returns new EDS with merged positions (original EDS unchanged)
-    // Throws: std::invalid_argument if positions not adjacent (pos2 != pos1 + 1)
-    EDS merge_adjacent(size_t pos1, size_t pos2) const;
-
     // Access to internal data
-    const std::vector<StringSet>& get_sets() const;  // Throws if METADATA_ONLY mode
+    // [[deprecated("Direct access to sets is not supported in streaming mode. Use read_symbol(pos) instead.")]]
+    const std::vector<StringSet>& get_sets() const;
+
     const std::vector<bool>& get_is_degenerate() const { return metadata_.is_degenerate; }
-    const std::vector<std::set<int>>& get_sources() const;  // Throws if METADATA_ONLY mode
 
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
@@ -170,10 +133,17 @@ public:
     std::streampos get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
     Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
 
-    // Source streaming access (works in both modes)
-    std::set<int> read_source(size_t string_id) const;  // Read source set from file or memory
-    void set_source_cache_capacity(size_t capacity);    // Configure LRU cache size
-    void clear_source_cache() const;                    // Clear source cache manually
+    // Source access (delegated to Sources object)
+    bool has_sources() const { return sources_ != nullptr; }
+    std::set<int> read_source(size_t string_id) const;  // Delegates to sources_->read_source()
+
+    // Direct Sources object access (for advanced users)
+    std::shared_ptr<Sources> get_sources_object() const { return sources_; }
+    void set_sources_object(std::shared_ptr<Sources> sources);
+
+    // Source cache management (deprecated - use sources_->set_cache_capacity() directly)
+    void set_source_cache_capacity(size_t capacity);    // Delegates to sources_
+    void clear_source_cache() const;                    // Delegates to sources_
 
 private:
     // Core state
@@ -181,7 +151,6 @@ private:
     size_t n_;                          // Number of sets
     size_t N_;                          // Total size (characters)
     size_t m_;                          // Cardinality (number of strings in all sets)
-    StoringMode mode_;                  // Storage mode
 
     // Metadata (always present, contains index + statistics)
     Metadata metadata_;
@@ -193,35 +162,16 @@ private:
     std::filesystem::path file_path_;
     mutable std::ifstream stream_;      // Mutable to allow reading in const methods
 
-    // Optional source support
-    bool has_sources_;                           // Whether sources are loaded
-    std::vector<std::set<int>> sources_;         // Path IDs per string (indexed by string ID, only FULL mode)
-
-    // Source streaming support (only if has_sources_ && mode_ == METADATA_ONLY)
-    std::filesystem::path sources_file_path_;
-    mutable std::ifstream sources_stream_;       // Mutable for const methods
-    std::vector<std::streampos> source_base_positions_;  // Index: m × 8 bytes
-
-    // LRU cache for source streaming performance
-    struct SourceCacheEntry {
-        size_t string_id;
-        std::set<int> paths;
-    };
-    mutable std::list<SourceCacheEntry> source_cache_;
-    mutable std::unordered_map<size_t, std::list<SourceCacheEntry>::iterator> source_cache_map_;
-    size_t source_cache_capacity_;  // Default: 10000
+    // Optional source support (delegated to Sources class)
+    std::shared_ptr<Sources> sources_;  // nullptr if no sources loaded
 
     // Helper methods
     void parse(std::istream& is);
-    void parse_sources(std::istream& is);
-    void parse_sources_metadata_only(std::istream& is);  // Build index without loading data
     void calculate_statistics();
-    void calculate_source_statistics();
     std::string normalize_eds_format(const std::string& input) const;
 
     // Streaming helpers
     StringSet read_symbol_from_stream(Position pos) const;
-    std::set<int> read_source_from_stream(size_t string_id) const;  // Source streaming helper
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

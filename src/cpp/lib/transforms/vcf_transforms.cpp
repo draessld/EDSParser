@@ -2,16 +2,22 @@
 #include "eds_transforms.hpp"
 #include "../formats/eds.hpp"
 #include "../common.hpp"
+#include "../pipe_stream.hpp"
 #include <fstream>
 #include <sstream>
 #include <map>
 #include <set>
 #include <vector>
+#include <array>
+#include <string_view>
 #include <algorithm>
 #include <stdexcept>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <thread>
+#include <atomic>
+#include <exception>
 
 namespace edsparser {
 
@@ -289,74 +295,92 @@ enum class SkipReason {
 /**
  * Parse a single VCF line (non-header) into VCFVariant structure.
  * Returns nullptr if line should be skipped (header, comment, malformed).
+ *
+ * Uses single-pass parsing with string_view for efficiency.
  */
 std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_samples, SkipReason& skip_reason) {
     skip_reason = SkipReason::NONE;
+
+    // Quick check for empty line or header
     if (line.empty() || line[0] == '#') {
         // Header or comment line - check if it's the column header
-        if (line.substr(0, 6) == "#CHROM") {
-            // Count sample columns (everything after FORMAT)
-            std::stringstream ss(line);
-            std::string token;
-            std::vector<std::string> columns;
-            while (ss >> token) {
-                columns.push_back(token);
-            }
-            // VCF format: CHROM POS ID REF ALT QUAL FILTER INFO FORMAT [SAMPLE1 SAMPLE2 ...]
-            if (columns.size() > 9) {
-                n_samples = columns.size() - 9;
+        if (line.size() >= 6 && line[0] == '#' && line[1] == 'C') {
+            std::string_view sv(line);
+            if (sv.substr(0, 6) == "#CHROM") {
+                // Count sample columns by counting tabs after first 8 fields
+                size_t tab_count = 0;
+                for (char c : line) {
+                    if (c == '\t') tab_count++;
+                }
+                // VCF: CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE...
+                // = 8 tabs for 9 fixed columns, then 1 tab per sample
+                if (tab_count >= 9) {
+                    n_samples = tab_count - 8;
+                }
             }
         }
         skip_reason = SkipReason::HEADER;
         return nullptr;
     }
 
-    auto var = std::make_unique<VCFVariant>();
+    // Single-pass field extraction using string_view
+    std::array<std::string_view, 16> fields;  // VCF has 9 fixed + up to 7 samples for initial parse
+    size_t field_count = 0;
+    size_t pos = 0;
+    const size_t len = line.size();
+    char delimiter = '\t';
 
-    // Parse tab-separated or space-separated fields
-    // VCF standard requires tabs, but handle spaces for compatibility
-    std::stringstream ss(line);
-    std::string token;
-    std::vector<std::string> fields;
+    // First pass: extract fields with tab delimiter
+    while (pos < len && field_count < fields.size()) {
+        size_t next = line.find(delimiter, pos);
+        if (next == std::string::npos) next = len;
 
-    // Try tab delimiter first
-    while (std::getline(ss, token, '\t')) {
-        // Skip empty tokens (from multiple consecutive delimiters)
-        if (!token.empty()) {
-            fields.push_back(token);
+        if (next > pos) {  // Skip empty fields
+            fields[field_count++] = std::string_view(line.data() + pos, next - pos);
+        }
+        pos = next + 1;
+    }
+
+    // If fewer than 5 fields found with tabs, try space delimiter
+    if (field_count < 5) {
+        field_count = 0;
+        pos = 0;
+        while (pos < len && field_count < fields.size()) {
+            // Skip leading whitespace
+            while (pos < len && (line[pos] == ' ' || line[pos] == '\t')) pos++;
+            if (pos >= len) break;
+
+            // Find end of field
+            size_t start = pos;
+            while (pos < len && line[pos] != ' ' && line[pos] != '\t') pos++;
+
+            fields[field_count++] = std::string_view(line.data() + start, pos - start);
         }
     }
 
-    // If we only got 1 field, the file might be using spaces instead of tabs
-    if (fields.size() < 5) {
-        fields.clear();
-        ss.clear();
-        ss.str(line);
-
-        // Split on whitespace
-        while (ss >> token) {
-            fields.push_back(token);
-        }
-    }
-
-    if (fields.size() < 5) {
+    if (field_count < 5) {
         skip_reason = SkipReason::MALFORMED;
         return nullptr;  // Malformed line
     }
 
-    // Extract core fields
-    var->chrom = fields[0];
+    auto var = std::make_unique<VCFVariant>();
+
+    // Extract core fields (convert string_view to string where needed)
+    var->chrom = std::string(fields[0]);
+
     try {
-        var->pos = std::stoull(fields[1]);  // VCF positions are 1-indexed
+        // Convert string_view to string for stoull (required by some compilers)
+        var->pos = std::stoull(std::string(fields[1]));  // VCF positions are 1-indexed
     } catch (...) {
         skip_reason = SkipReason::MALFORMED;
         return nullptr;  // Invalid position
     }
-    var->ref = fields[3];
+
+    var->ref = std::string(fields[3]);
 
     // Parse ALT field
     try {
-        var->alts = parse_alt_field(fields[4], var->ref);
+        var->alts = parse_alt_field(std::string(fields[4]), var->ref);
     } catch (const std::runtime_error& e) {
         // Unsupported SV type - skip this line
         std::cerr << "Warning: Skipping variant at " << var->chrom << ":" << var->pos
@@ -365,21 +389,43 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
         return nullptr;
     }
 
-    // Parse genotypes (if present)
-    if (fields.size() >= 10) {
-        // Fields 9+ are sample genotypes
-        // Field 8 is FORMAT (e.g., "GT:DP:GQ")
-        // We only care about GT (first field)
+    // Parse remaining genotype fields if present
+    if (field_count >= 10) {
+        // Pre-reserve for genotypes
+        var->genotypes.reserve(field_count - 9);
 
-        for (size_t i = 9; i < fields.size(); i++) {
+        // Process fields already parsed
+        for (size_t i = 9; i < field_count; i++) {
+            std::string_view gt_sv = fields[i];
             // Extract GT field (before first ':')
-            std::string gt_field = fields[i];
-            size_t colon_pos = gt_field.find(':');
+            size_t colon_pos = gt_sv.find(':');
             if (colon_pos != std::string::npos) {
-                gt_field = gt_field.substr(0, colon_pos);
+                gt_sv = gt_sv.substr(0, colon_pos);
             }
+            var->genotypes.push_back(parse_genotype(std::string(gt_sv)));
+        }
 
-            var->genotypes.push_back(parse_genotype(gt_field));
+        // Continue parsing if there are more samples beyond the array
+        if (field_count == fields.size()) {
+            // More fields to parse, continue from where we left off
+            while (pos < len) {
+                // Skip delimiter
+                while (pos < len && (line[pos] == '\t' || line[pos] == ' ')) pos++;
+                if (pos >= len) break;
+
+                // Find end of field
+                size_t start = pos;
+                while (pos < len && line[pos] != '\t' && line[pos] != ' ') pos++;
+
+                std::string_view sample_sv(line.data() + start, pos - start);
+
+                // Extract GT field (before first ':')
+                size_t colon_pos = sample_sv.find(':');
+                if (colon_pos != std::string::npos) {
+                    sample_sv = sample_sv.substr(0, colon_pos);
+                }
+                var->genotypes.push_back(parse_genotype(std::string(sample_sv)));
+            }
         }
     }
 
@@ -470,8 +516,8 @@ VariantGroup merge_variant_group(
     // Initialize merged genotypes (one vector per sample)
     group.merged_genotypes.resize(n_samples);
 
-    // Map: haplotype string -> index in merged_haplotypes
-    std::map<std::string, int> haplotype_to_index;
+    // Use unordered_map for faster lookups (O(1) average) in this hot loop
+    std::unordered_map<std::string, int> haplotype_to_index;
 
     // Always add reference haplotype first (index 0)
     group.merged_haplotypes.push_back(reference_span);
@@ -917,53 +963,47 @@ void parse_vcf_to_leds_streaming_direct(
     VCFStats* stats,
     size_t block_size)
 {
-    // Create temporary files for intermediate EDS/sEDS
-    // Use std::filesystem::temp_directory_path() for portability
-    auto temp_dir = std::filesystem::temp_directory_path();
-    auto temp_eds_path = temp_dir / ("edsparser_temp_eds_" + std::to_string(std::time(nullptr)) + ".tmp");
-    auto temp_seds_path = temp_dir / ("edsparser_temp_seds_" + std::to_string(std::time(nullptr)) + ".tmp");
+    // Create in-memory pipes for intermediate EDS/sEDS data
+    // This eliminates disk I/O between VCF→EDS and EDS→l-EDS stages
+    auto [eds_pipe_out, eds_pipe_in] = make_pipe();
+    auto [seds_pipe_out, seds_pipe_in] = make_pipe();
 
+    // Exception handling for producer thread
+    std::exception_ptr producer_exception = nullptr;
+    std::atomic<bool> producer_done{false};
+
+    // Producer thread: VCF → EDS (writes to pipes)
+    std::thread producer([&]() {
+        try {
+            parse_vcf_to_eds_streaming(vcf_stream, fasta_stream,
+                                       eds_pipe_out, seds_pipe_out,
+                                       stats, block_size);
+        } catch (...) {
+            producer_exception = std::current_exception();
+        }
+
+        // Signal end of data
+        eds_pipe_out.close();
+        seds_pipe_out.close();
+        producer_done = true;
+    });
+
+    // Consumer (main thread): EDS → l-EDS (reads from pipes, writes to output)
     try {
-        // Step 1: VCF → EDS (write to temp files)
-        {
-            std::ofstream temp_eds(temp_eds_path);
-            std::ofstream temp_seds(temp_seds_path);
-
-            if (!temp_eds || !temp_seds) {
-                throw std::runtime_error("Failed to create temporary files for l-EDS transformation");
-            }
-
-            parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, temp_eds, temp_seds, stats, block_size);
-
-            temp_eds.close();
-            temp_seds.close();
-        }
-
-        // Step 2: EDS → l-EDS (read from temp files, write to output)
-        {
-            std::ifstream temp_eds(temp_eds_path);
-            std::ifstream temp_seds(temp_seds_path);
-
-            if (!temp_eds || !temp_seds) {
-                throw std::runtime_error("Failed to open temporary files for l-EDS transformation");
-            }
-
-            eds_to_leds_linear(temp_eds, leds_output, context_length,
-                             &temp_seds, &seds_output);
-
-            temp_eds.close();
-            temp_seds.close();
-        }
-
-        // Clean up temporary files
-        std::filesystem::remove(temp_eds_path);
-        std::filesystem::remove(temp_seds_path);
-
+        eds_to_leds_linear(eds_pipe_in, leds_output, context_length,
+                          &seds_pipe_in, &seds_output);
     } catch (...) {
-        // Clean up temporary files on error
-        std::filesystem::remove(temp_eds_path);
-        std::filesystem::remove(temp_seds_path);
+        // Wait for producer to finish before rethrowing
+        producer.join();
         throw;
+    }
+
+    // Wait for producer to complete
+    producer.join();
+
+    // Check if producer had an exception
+    if (producer_exception) {
+        std::rethrow_exception(producer_exception);
     }
 }
 

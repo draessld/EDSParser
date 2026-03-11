@@ -7,6 +7,7 @@ This directory contains universal experiment scripts for transforming MSA, VCF, 
 - **[transform_to_eds.sh](transform_to_eds.sh)** - Transform MSA/VCF/EDS to EDS/l-EDS formats
 - **[generate_random_dataset.sh](generate_random_dataset.sh)** - Generate synthetic random EDS datasets
 - **[generate_patterns.sh](generate_patterns.sh)** - Generate random patterns from EDS files for benchmarking
+- **[run_synthetic_test.sh](run_synthetic_test.sh)** - Run an end-to-end test using a generated synthetic dataset
 - **[generate_statistics.sh](generate_statistics.sh)** - Generate detailed statistics from EDS/l-EDS files
 - **[clean_experiments.sh](clean_experiments.sh)** - Universal cleanup script
 

@@ -5,38 +5,11 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Dry run mode (preview what would be deleted)
 DRY_RUN=false
-
-# Interactive mode (ask before deleting)
 INTERACTIVE=false
-
-# Specific dataset to clean (empty = all datasets)
 TARGET_DATASET=""
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
 
 show_help() {
     cat << EOF
@@ -140,7 +113,8 @@ confirm_action() {
 
 clean_dataset() {
     local dataset_path="$1"
-    local dataset_name=$(basename "$dataset_path")
+    local dataset_name
+    dataset_name=$(basename "$dataset_path")
 
     log_info "Scanning dataset: $dataset_name"
 
@@ -150,38 +124,36 @@ clean_dataset() {
     # Find and clean output directories
     if [[ -d "$dataset_path" ]]; then
         for item in "$dataset_path"/*; do
+            local basename
+            basename=$(basename "$item")
             if [[ -d "$item" ]]; then
-                local dirname=$(basename "$item")
-
-                if is_input_directory "$dirname"; then
-                    log_info "  Preserving input directory: $dirname/"
-                    ((skipped_count++))
-                elif is_output_directory "$dirname"; then
+                if is_output_directory "$basename"; then
                     if [[ "$DRY_RUN" == "true" ]]; then
-                        log_warning "  [DRY RUN] Would delete: $dirname/"
+                        log_warning "  [DRY RUN] Would delete output directory: $basename/"
                     else
-                        log_warning "  Deleting: $dirname/"
+                        log_warning "  Deleting output directory: $basename/"
                         rm -rf "$item"
                         ((deleted_count++))
                     fi
+                elif is_input_directory "$basename"; then
+                    log_info "  Preserving input directory: $basename/"
+                    ((skipped_count++))
                 else
-                    log_info "  Preserving directory: $dirname/"
+                    log_info "  Preserving unrecognized directory: $basename/"
                     ((skipped_count++))
                 fi
             elif [[ -f "$item" ]]; then
-                local filename=$(basename "$item")
-
                 # Delete statistics and CSV files
-                if [[ "$filename" == statistics.csv ]] || [[ "$filename" == *.csv ]]; then
+                if [[ "$basename" == "statistics.csv" ]] || [[ "$basename" == *.csv ]]; then
                     if [[ "$DRY_RUN" == "true" ]]; then
-                        log_warning "  [DRY RUN] Would delete: $filename"
+                        log_warning "  [DRY RUN] Would delete statistics file: $basename"
                     else
-                        log_warning "  Deleting: $filename"
+                        log_warning "  Deleting statistics file: $basename"
                         rm -f "$item"
                         ((deleted_count++))
                     fi
                 else
-                    log_info "  Preserving file: $filename"
+                    log_info "  Preserving file: $basename"
                     ((skipped_count++))
                 fi
             fi
@@ -218,6 +190,7 @@ main() {
     local total_deleted=0
     local datasets_cleaned=0
 
+    local dataset_path
     if [[ -n "$TARGET_DATASET" ]]; then
         # Clean specific dataset
         local dataset_path="$datasets_dir/$TARGET_DATASET"
@@ -237,7 +210,8 @@ main() {
         fi
     else
         # Clean all datasets
-        local dataset_count=$(find "$datasets_dir" -mindepth 1 -maxdepth 1 -type d | wc -l)
+        local dataset_count
+        dataset_count=$(find "$datasets_dir" -mindepth 1 -maxdepth 1 -type d | wc -l)
 
         if [[ $dataset_count -eq 0 ]]; then
             log_warning "No datasets found in $datasets_dir/"
@@ -255,6 +229,7 @@ main() {
             echo ""
         fi
 
+        local deleted
         for dataset_path in "$datasets_dir"/*; do
             if [[ -d "$dataset_path" ]]; then
                 clean_dataset "$dataset_path"

@@ -5,15 +5,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Default parameters
 DATASET_NAME=""
 INPUT_DIRS="eds"  # Comma-separated list of directories
 FILE_PATTERN="*"
@@ -21,48 +14,12 @@ OUTPUT_FORMAT="table"  # table, json, csv
 OUTPUT_FILE=""
 FULL_MODE=false
 FORCE_OVERWRITE=false
-
-# Tool path
-STATS_TOOL="edsparser-stats"
-
-# Statistics
+THREADS=1
+STATS_TOOL=""
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 declare -a FAILED_FILES
 declare -a OUTPUT_FILES
-
-# Helper functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-resolve_dataset_path() {
-    local input="$1"
-
-    # Check if input is an absolute path
-    if [[ "$input" == /* ]]; then
-        echo "$input"
-    # Check if input is a relative path (contains /)
-    elif [[ "$input" == */* ]]; then
-        # Convert to absolute path
-        echo "$(cd "$(dirname "$input")" 2>/dev/null && pwd)/$(basename "$input")"
-    else
-        # Treat as dataset name, use datasets/ prefix
-        echo "datasets/$input"
-    fi
-}
 
 show_help() {
     cat << EOF
@@ -78,6 +35,7 @@ OPTIONS:
                       Examples: "eds", "3_leds,5_leds", "eds,3_leds,5_leds,10_leds"
   --pattern PATTERN   File pattern to process (default: "*")
   --format FORMAT     Output format: "table", "json", or "csv" (default: "table")
+  --threads N         Number of parallel jobs to run (default: 1). Not for 'table' format.
   --output FILE       Custom output filename (default: auto-generate per directory)
                       Auto-generated: datasets/DATASET/<dir_name>_statistics.<ext>
   --full              Use FULL mode (loads all strings, more detailed)
@@ -120,15 +78,18 @@ EOF
 }
 
 check_tool() {
-    log_info "Checking for edsparser-stats tool..."
+    log_info "Locating required tools..."
+    local build_dir="$SCRIPT_DIR/../build/src/cpp/tools"
 
-    if ! command -v "$STATS_TOOL" &> /dev/null; then
-        log_error "Tool '$STATS_TOOL' not found"
-        log_error "Please run INSTALL.sh or ensure tools are installed"
+    STATS_TOOL=$(command -v edsparser-stats || echo "$build_dir/edsparser-stats")
+
+    if [[ ! -x "$STATS_TOOL" ]]; then
+        log_error "Tool 'edsparser-stats' not found or not executable."
+        log_error "Please run ./INSTALL.sh from the project root."
         exit 1
     fi
 
-    log_success "Found $STATS_TOOL: $(which $STATS_TOOL)"
+    log_success "Found edsparser-stats: $STATS_TOOL"
 }
 
 print_csv_header() {
@@ -176,12 +137,12 @@ parse_json_to_csv() {
 
 generate_stats() {
     local eds_file="$1"
-    local dataset_path="$2"
     local input_dir_name="$3"
-    local basename=$(basename "$eds_file" | sed -E 's/\.(eds|leds)$//')
+    local basename=$(basename "$eds_file" .eds | basename -s .leds)
 
     # Find corresponding .seds file
-    local seds_file="${eds_file%.eds}.seds"
+    local seds_file
+    seds_file="${eds_file%.eds}.seds"
     seds_file="${seds_file%.leds}.seds"
 
     log_info "Processing $input_dir_name/$basename..."
@@ -233,6 +194,9 @@ generate_stats() {
     fi
 }
 
+# Export function for parallel execution
+export -f generate_stats log_info log_success log_warning log_error parse_json_to_csv
+
 print_summary() {
     echo "" >&2
     log_info "================================================"
@@ -267,7 +231,8 @@ main() {
     fi
 
     # Resolve dataset path (supports both names and paths)
-    local dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    dataset_path=$(resolve_dataset_path "$DATASET_NAME")
+    export dataset_path
 
     if [[ ! -d "$dataset_path" ]]; then
         log_error "Dataset not found: $dataset_path"
@@ -279,6 +244,7 @@ main() {
     log_info "Input directories: $INPUT_DIRS"
     log_info "File pattern: $FILE_PATTERN"
     log_info "Output format: $OUTPUT_FORMAT"
+    log_info "Parallel jobs: $THREADS"
     log_info "Full mode: $FULL_MODE"
     echo ""
 
@@ -286,6 +252,7 @@ main() {
     check_tool
 
     # Split input directories
+    local DIR_ARRAY
     IFS=',' read -ra DIR_ARRAY <<< "$INPUT_DIRS"
 
     # Determine file extension based on format
@@ -330,8 +297,10 @@ main() {
         echo ""
 
         # Find EDS/l-EDS files
-        local eds_files=("$input_path"/$FILE_PATTERN.eds "$input_path"/$FILE_PATTERN.leds)
-        local found_files=()
+        local eds_files
+        eds_files=("$input_path"/$FILE_PATTERN.eds "$input_path"/$FILE_PATTERN.leds)
+        local found_files
+        found_files=()
 
         for file in "${eds_files[@]}"; do
             if [[ -f "$file" ]]; then
@@ -355,9 +324,23 @@ main() {
             print_csv_header > "$dir_output_file"
         fi
 
-        # Process each file
-        for eds_file in "${found_files[@]}"; do
-            generate_stats "$eds_file" "$dataset_path" "$input_dir" >> "$dir_output_file"
+        # Export variables needed for parallel execution
+        export STATS_TOOL OUTPUT_FORMAT FULL_MODE
+
+        # Process files in parallel for json/csv, sequentially for table
+        if [[ "$OUTPUT_FORMAT" == "table" ]] && [[ $THREADS -gt 1 ]]; then
+            log_warning "Table format does not support parallel execution. Processing sequentially."
+        fi
+
+        if [[ "$OUTPUT_FORMAT" != "table" ]] && [[ $THREADS -gt 1 ]]; then
+            # Parallel for json/csv
+            printf "%s\n" "${found_files[@]}" | xargs -n 1 -P "$THREADS" -I {} \
+                bash -c "generate_stats \"{}\" \"$input_dir\"" >> "$dir_output_file"
+        else
+            # Sequential for table or threads=1
+            for eds_file in "${found_files[@]}"; do
+                generate_stats "$eds_file" "$input_dir" >> "$dir_output_file"
+            done
         done
 
         log_success "Saved statistics to: $dir_output_file"
@@ -386,6 +369,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --format)
             OUTPUT_FORMAT="$2"
+            shift 2
+            ;;
+        --threads)
+            THREADS="$2"
             shift 2
             ;;
         --output)

@@ -69,13 +69,16 @@ cmd_history.log
 *.temp
 tmp/
 temp/
+Testing/
 
 # OS files
 Thumbs.db
 .DS_Store
 
 # CLAUDE
-CLAUDE.md
+*.md
+!CLAUDE.md
+.claude/
 
 # Experiment outputs - exclude all dataset content
 experiments/datasets/**

@@ -4,6 +4,7 @@
 #include "../common.hpp"
 #include "../formats/eds.hpp"
 #include <iostream>
+#include <string>
 
 namespace edsparser {
 
@@ -14,6 +15,31 @@ namespace edsparser {
  * - EDS → l-EDS (length-constrained merging)
  * - Both LINEAR (phasing-aware) and CARTESIAN (all combinations) strategies
  */
+
+/**
+ * Estimate transformation complexity for EDS → l-EDS
+ * Returns estimated iteration count and warnings about potential exponential growth
+ */
+struct TransformComplexity {
+    // Diagnostic metrics
+    size_t adjacent_degenerate_pairs;   // Count of adjacent degenerate symbols
+    size_t short_contexts;              // Count of contexts shorter than threshold
+    double avg_degenerate_cluster_size; // Average consecutive degenerate symbols
+
+    // Risk warnings (simple categories: fast/slow/exponential)
+    bool warn_slow;                     // True if transformation likely to be slow
+    bool warn_exponential;              // True if potential exponential growth detected
+    std::string recommendation;         // User-facing recommendation with actionable advice
+};
+
+/**
+ * Estimate complexity of EDS → l-EDS transformation before running it
+ * Use this to warn users about potentially slow transformations
+ */
+TransformComplexity estimate_leds_complexity(
+    const EDS& eds,
+    size_t context_length
+);
 
 /**
  * Convert EDS to l-EDS using linear merging with phasing preservation
@@ -49,12 +75,6 @@ void eds_to_leds_cartesian(
     size_t num_threads = 1,
     bool compact = true
 );
-
-/**
- * Check if EDS satisfies l-EDS property
- * (all internal common blocks have length >= l)
- */
-bool is_leds(const EDS& eds, Length context_length);
 
 } // namespace edsparser
 

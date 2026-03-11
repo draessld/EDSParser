@@ -29,7 +29,7 @@ print_info() {
 }
 
 # Remove tools
-for tool in edsparser-transform edsparser-stats edsparser-genpatterns; do
+for tool in eds2leds msa2eds vcf2eds genrandomeds edsparser-stats edsparser-genpatterns; do
     if [ -f "$HOME/.local/bin/$tool" ]; then
         rm -f "$HOME/.local/bin/$tool"
         print_status "Removed $tool from ~/.local/bin"

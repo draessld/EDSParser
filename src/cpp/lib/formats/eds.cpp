@@ -11,146 +11,188 @@ namespace edsparser {
 // CONSTRUCTORS & PARSING
 // ================================================================================
 
-// Stream-based constructor (always FULL mode for streams)
-EDS::EDS(std::istream& eds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
+// Stream-based constructor (EDS only, no sources)
+EDS::EDS(std::istream& eds_stream) : is_empty_(false), sources_(nullptr) {
     parse(eds_stream);
 }
 
-// Stream-based constructor with sources (always FULL mode)
-EDS::EDS(std::istream& eds_stream, std::istream& seds_stream) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
-    parse(eds_stream);
-    parse_sources(seds_stream);
-}
-
-// String-based constructor (always FULL mode for strings)
-EDS::EDS(const std::string& eds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
-    std::stringstream ss(eds_string);
-    parse(ss);
-}
-
-// String-based constructor with sources (always FULL mode)
-EDS::EDS(const std::string& eds_string, const std::string& seds_string) : is_empty_(false), mode_(StoringMode::FULL), has_sources_(false), source_cache_capacity_(10000) {
-    std::stringstream eds_ss(eds_string);
-    std::stringstream seds_ss(seds_string);
-    parse(eds_ss);
-    parse_sources(seds_ss);
+// String-based constructor (EDS only, no sources)
+// Uses std::istringstream to avoid temp file I/O
+EDS::EDS(const std::string& eds_string) : is_empty_(false), sources_(nullptr) {
+    // Normalize the input string
+    std::string normalized = normalize_eds_format(eds_string);
+    // Remove whitespace
+    normalized.erase(std::remove_if(normalized.begin(), normalized.end(), ::isspace), normalized.end());
+    
+    // Use a string stream for in-memory parsing
+    std::istringstream iss(normalized);
+    // Parse metadata
+    parse(iss);
+    // Note: read_symbol() will not work for objects created from a string,
+    // as there is no persistent stream. This constructor is for in-memory representation.
 }
 
 void EDS::parse(std::istream& is) {
-    // Read entire input into string for easier parsing
-    std::stringstream buffer;
-    buffer << is.rdbuf();
-    std::string input = buffer.str();
-
-    // Remove whitespace
-    input.erase(std::remove_if(input.begin(), input.end(), ::isspace), input.end());
-
-    if (input.empty()) {
-        is_empty_ = true;
-        n_ = 0;
-        N_ = 0;
-        m_ = 0;
-        return;
-    }
-
-    // Normalize compact format to full bracketed format
-    // This allows both "ACGT{A,ACA}CGT" and "{ACGT}{A,ACA}{CGT}" to work
-    input = normalize_eds_format(input);
-
-    // Parse EDS format: {str1,str2,...}{str3}{str4,str5}...
-    size_t pos = 0;
-    n_ = 0;      // Number of sets
-    N_ = 0;      // Total characters
-    m_ = 0;      // Cardinality (total strings)
+    // Streaming parser: builds an index without loading file content into memory.
+    // Handles both compact (ACGT{A,C}) and full ({ACGT}{A,C}) formats.
+    // Uses a byte offset counter instead of tellg() to avoid per-character virtual calls.
 
     // Clear all data structures
-    sets_.clear();
     metadata_.base_positions.clear();
     metadata_.symbol_sizes.clear();
     metadata_.string_lengths.clear();
     metadata_.cum_set_sizes.clear();
     metadata_.is_degenerate.clear();
 
-    while (pos < input.length()) {
-        // Record starting position of this symbol
-        std::streampos symbol_start = static_cast<std::streampos>(pos);
-        metadata_.base_positions.push_back(symbol_start);
+    n_ = 0;
+    N_ = 0;
+    m_ = 0;
 
-        // Expect '{'
-        if (input[pos] != SET_OPEN) {
-            throw std::runtime_error("Expected '{' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '{'
+    // Running statistics accumulated inline (avoids a separate calculate_statistics() pass)
+    metadata_.num_degenerate_symbols = 0;
+    metadata_.num_common_chars = 0;
+    metadata_.total_change_size = 0;
+    metadata_.num_empty_strings = 0;
+    metadata_.min_context_length = UINT32_MAX;
+    metadata_.max_context_length = 0;
+    size_t total_context_length = 0;
+    size_t num_context_blocks = 0;
 
-        // Parse strings within this set
-        StringSet current_set;
-        std::string current_string;
+    // Cumulative arrays built incrementally (push one entry per symbol)
+    metadata_.cum_common_positions.clear();
+    metadata_.cum_degenerate_counts.clear();
+    metadata_.cum_common_positions.push_back(0);  // cum_common_positions[0] = 0
+    metadata_.cum_degenerate_counts.push_back(0); // cum_degenerate_counts[0] = 0
+    Position cumulative_common = 0;
+    int cumulative_degenerate = 0;
+
+    auto process_token = [&](const std::string& token, bool is_bracketed) {
+        if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
+
         size_t symbol_size = 0;
-
-        while (pos < input.length() && input[pos] != SET_CLOSE) {
-            if (input[pos] == SET_SEPARATOR) {
-                // End of current string
-                Length str_len = current_string.length();
-                metadata_.string_lengths.push_back(str_len);
-                N_ += str_len;
-                symbol_size++;
-
-                // Only store string if FULL mode
-                if (mode_ == StoringMode::FULL) {
-                    current_set.push_back(current_string);
-                }
-
-                current_string.clear();
-                pos++;
+        if (is_bracketed) {
+            // Manual comma scan instead of stringstream — no heap allocation per segment
+            if (token.empty()) {
+                // Empty set {} means one empty string ""
+                metadata_.string_lengths.push_back(0);
+                symbol_size = 1;
+                metadata_.num_empty_strings++;
             } else {
-                // Regular character, add to current string
-                current_string += input[pos];
-                pos++;
+                size_t start = 0;
+                for (size_t pos = 0; pos <= token.size(); ++pos) {
+                    if (pos == token.size() || token[pos] == SET_SEPARATOR) {
+                        size_t len = pos - start;
+                        metadata_.string_lengths.push_back(len);
+                        N_ += len;
+                        if (len == 0) metadata_.num_empty_strings++;
+                        symbol_size++;
+                        start = pos + 1;
+                    }
+                }
             }
+        } else {
+            size_t len = token.length();
+            metadata_.string_lengths.push_back(len);
+            N_ += len;
+            if (len == 0) metadata_.num_empty_strings++;
+            symbol_size = 1;
         }
 
-        // Add last string in set (could be empty)
-        Length str_len = current_string.length();
-        metadata_.string_lengths.push_back(str_len);
-        N_ += str_len;
-        symbol_size++;
-
-        if (mode_ == StoringMode::FULL) {
-            current_set.push_back(current_string);
-        }
-
-        // Expect '}'
-        if (pos >= input.length() || input[pos] != SET_CLOSE) {
-            throw std::runtime_error("Expected '}' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '}'
-
-        // Validate set is not empty
-        if (symbol_size == 0) {
-            throw std::runtime_error("Empty set at position " + std::to_string(pos));
-        }
-
-        // Store metadata
+        bool is_deg = (symbol_size > 1);
         metadata_.symbol_sizes.push_back(symbol_size);
-        metadata_.cum_set_sizes.push_back(m_);  // Cumulative count before adding this set
-        metadata_.is_degenerate.push_back(symbol_size > 1);
+        metadata_.cum_set_sizes.push_back(m_);
+        metadata_.is_degenerate.push_back(is_deg);
 
-        // Store full data if FULL mode
-        if (mode_ == StoringMode::FULL) {
-            sets_.push_back(current_set);
+        // Update running statistics
+        if (is_deg) {
+            metadata_.num_degenerate_symbols++;
+            metadata_.total_change_size += (symbol_size - 1);
+            cumulative_degenerate += static_cast<int>(symbol_size);
+        } else {
+            // Non-degenerate: this is a context block
+            Length ctx_len = metadata_.string_lengths[m_]; // first (and only) string
+            metadata_.num_common_chars += ctx_len;
+            if (ctx_len < metadata_.min_context_length) metadata_.min_context_length = ctx_len;
+            if (ctx_len > metadata_.max_context_length) metadata_.max_context_length = ctx_len;
+            total_context_length += ctx_len;
+            num_context_blocks++;
+            cumulative_common += ctx_len;
         }
+
+        // Cumulative arrays: push value after this symbol
+        metadata_.cum_common_positions.push_back(cumulative_common);
+        metadata_.cum_degenerate_counts.push_back(cumulative_degenerate);
 
         m_ += symbol_size;
         n_++;
+    };
+
+    char ch;
+    std::string current_token;
+    size_t byte_offset = 0;
+
+    // Consume leading whitespace manually (track byte offset)
+    while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
+        is.get(ch);
+        byte_offset++;
     }
 
-    // Validate we parsed something
+    while (is.peek() != EOF) {
+        if (is.peek() == SET_OPEN) {
+            // Flush any accumulated non-bracketed token
+            if (!current_token.empty()) {
+                process_token(current_token, false);
+                current_token.clear();
+            }
+
+            // Record position of '{', then consume it
+            metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
+            is.get(ch); // consume '{'
+            byte_offset++;
+
+            std::string bracketed_content;
+            std::getline(is, bracketed_content, SET_CLOSE);
+            if (!is) throw std::runtime_error("Unmatched '{' in EDS stream.");
+            byte_offset += bracketed_content.size() + 1; // +1 for the consumed '}'
+
+            process_token(bracketed_content, true);
+        } else {
+            if (current_token.empty()) {
+                metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
+            }
+            is.get(ch);
+            byte_offset++;
+            current_token += ch;
+        }
+
+        if (is.peek() == SET_OPEN || is.peek() == EOF ||
+            std::isspace(static_cast<unsigned char>(is.peek()))) {
+            if (!current_token.empty()) {
+                process_token(current_token, false);
+                current_token.clear();
+            }
+            // Consume whitespace manually
+            while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
+                is.get(ch);
+                byte_offset++;
+            }
+        }
+    }
+
     if (n_ == 0) {
         is_empty_ = true;
+        metadata_.min_context_length = 0;
+        metadata_.max_context_length = 0;
+        metadata_.avg_context_length = 0.0;
     } else {
         is_empty_ = false;
-        // Calculate statistics from metadata
-        calculate_statistics();
+        // Finalize statistics
+        if (metadata_.min_context_length == UINT32_MAX) {
+            metadata_.min_context_length = 0;
+        }
+        metadata_.avg_context_length = (num_context_blocks > 0)
+            ? static_cast<double>(total_context_length) / num_context_blocks
+            : 0.0;
     }
 }
 
@@ -163,34 +205,16 @@ EDS EDS::from_string(const std::string& eds_string) {
     return EDS(eds_string);
 }
 
-// Convenience factory for string-based construction with sources
-EDS EDS::from_string(const std::string& eds_string, const std::string& seds_string) {
-    return EDS(eds_string, seds_string);
-}
-
 // ================================================================================
 // FILE LOADERS
 // ================================================================================
 
-// Load EDS from file (with optional StoringMode)
-EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
+// Load EDS from file (uses streaming for memory efficiency)
+EDS EDS::load(const std::filesystem::path& path) {
     EDS eds;
-    eds.mode_ = mode;
     eds.is_empty_ = false;
-    eds.has_sources_ = false;
-    eds.source_cache_capacity_ = 10000;  // Default cache size
-
-    // Deprecation warning for FULL mode
-    if (mode == StoringMode::FULL) {
-        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
-                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
-                  << "         All operations now work with METADATA_ONLY mode.\n";
-    }
-
-    // For METADATA_ONLY, save path for later streaming
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.file_path_ = path;
-    }
+    eds.sources_ = nullptr;  // No sources by default
+    eds.file_path_ = path;
 
     std::ifstream ifs(path);
     if (!ifs) {
@@ -198,365 +222,81 @@ EDS EDS::load(const std::filesystem::path& path, StoringMode mode) {
     }
     eds.parse(ifs);
 
-    // For METADATA_ONLY, reopen file and keep stream open
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.stream_.open(path);
-        if (!eds.stream_) {
-            throw std::runtime_error("Failed to reopen file for streaming: " + path.string());
-        }
-    }
+    // Reuse the already-open stream (seek to beginning) instead of reopening
+    ifs.clear();
+    ifs.seekg(0);
+    eds.stream_ = std::move(ifs);
 
     return eds;
 }
 
-// Load EDS from file with sources from file (with optional StoringMode)
-EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path, StoringMode mode) {
+// Load EDS from file with sources from file (uses streaming for memory efficiency)
+EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path& seds_path) {
     EDS eds;
-    eds.mode_ = mode;
     eds.is_empty_ = false;
-    eds.has_sources_ = false;
-    eds.source_cache_capacity_ = 10000;  // Default cache size
+    eds.file_path_ = eds_path;
 
-    // Deprecation warning for FULL mode
-    if (mode == StoringMode::FULL) {
-        std::cerr << "WARNING: FULL storage mode is deprecated and will be removed in a future version.\n"
-                  << "         Please use StoringMode::METADATA_ONLY for better memory efficiency.\n"
-                  << "         All operations now work with METADATA_ONLY mode.\n";
-    }
-
-    // For METADATA_ONLY, save BOTH paths for later streaming
-    if (mode == StoringMode::METADATA_ONLY) {
-        eds.file_path_ = eds_path;
-        eds.sources_file_path_ = seds_path;
-    }
-
+    // Load EDS
     std::ifstream eds_ifs(eds_path);
     if (!eds_ifs) {
         throw std::runtime_error("Failed to open EDS file: " + eds_path.string());
     }
     eds.parse(eds_ifs);
 
-    std::ifstream seds_ifs(seds_path);
-    if (!seds_ifs) {
-        throw std::runtime_error("Failed to open sEDS file: " + seds_path.string());
-    }
-    eds.parse_sources(seds_ifs);
+    // Load sources using Sources class (always streaming)
+    eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS);
 
-    // For METADATA_ONLY, reopen BOTH files and keep streams open
-    if (mode == StoringMode::METADATA_ONLY) {
-        // EDS stream
-        eds.stream_.open(eds_path);
-        if (!eds.stream_) {
-            throw std::runtime_error("Failed to reopen file for streaming: " + eds_path.string());
-        }
-
-        // Sources stream
-        eds.sources_stream_.open(seds_path);
-        if (!eds.sources_stream_) {
-            throw std::runtime_error("Failed to reopen sources file for streaming: " + seds_path.string());
-        }
-    }
+    // Reuse the already-open stream (seek to beginning) instead of reopening
+    eds_ifs.clear();
+    eds_ifs.seekg(0);
+    eds.stream_ = std::move(eds_ifs);
 
     return eds;
 }
 
-// Load sources from sEDS stream
-void EDS::load_sources(std::istream& is) {
-    parse_sources(is);
-}
-
-// Load sources from sEDS file
-void EDS::load_sources(const std::filesystem::path& path) {
-    std::ifstream ifs(path);
-    if (!ifs) {
-        throw std::runtime_error("Failed to open file: " + path.string());
-    }
-    parse_sources(ifs);
-}
-
-// Load sources from sEDS string
-void EDS::load_sources(const std::string& seds_string) {
-    std::stringstream ss(seds_string);
-    parse_sources(ss);
-}
+// ================================================================================
+// SOURCE MANAGEMENT (Deleted - now delegated to Sources class)
+// ================================================================================
+// Note: load_sources(), save_sources(), parse_sources() methods have been removed.
+// Sources are now managed via the Sources class.
+// Use Sources::load() to create a Sources object, then set_sources_object() to attach it.
 
 // ================================================================================
-// SOURCE PARSING
+// (Deleted: parse_sources() and parse_sources_metadata_only() moved to Sources class)
 // ================================================================================
 
-// Parse sEDS format (flattened): {path_ids}{path_ids}...
-// Format: one set of path IDs per string (indexed by string ID 0..m-1)
-// Example: For EDS {ACGT}{A,ACA}{CGT}{T,TG} with 6 strings total:
-//          sEDS is {0}{1,3}{2}{0}{1}{2,3}
-//          where str0→{0}, str1→{1,3}, str2→{2}, str3→{0}, str4→{1}, str5→{2,3}
-void EDS::parse_sources(std::istream& is) {
-    // For METADATA_ONLY mode, build index without loading data
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        parse_sources_metadata_only(is);
-        return;
-    }
+// (Deleted: read_source_from_stream() - now in Sources class)
 
-    // FULL mode: Read entire input into string
-    std::stringstream buffer;
-    buffer << is.rdbuf();
-    std::string input = buffer.str();
-
-    // Remove whitespace
-    input.erase(std::remove_if(input.begin(), input.end(), ::isspace), input.end());
-
-    if (input.empty()) {
-        throw std::runtime_error("sEDS input is empty");
-    }
-
-    // Parse flattened sEDS format: {path_ids}{path_ids}...
-    // One source set per string, ordered by string ID (total = cardinality m)
-    size_t pos = 0;
-    sources_.clear();
-    size_t string_count = 0;
-
-    while (pos < input.length()) {
-        // Expect '{'
-        if (input[pos] != SET_OPEN) {
-            throw std::runtime_error("sEDS: Expected '{' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '{'
-
-        // Parse path IDs for this string
-        std::set<int> path_set;
-        std::string current_number;
-
-        while (pos < input.length() && input[pos] != SET_CLOSE) {
-            if (input[pos] == SET_SEPARATOR) {
-                // End of current path ID
-                if (!current_number.empty()) {
-                    int path_id = std::stoi(current_number);
-                    if (path_id < 0) {
-                        throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-                    }
-                    path_set.insert(path_id);
-                    current_number.clear();
-                }
-                pos++;
-            } else if (std::isdigit(input[pos])) {
-                // Digit, add to current number
-                current_number += input[pos];
-                pos++;
-            } else {
-                throw std::runtime_error("sEDS: Invalid character '" + std::string(1, input[pos]) +
-                                       "' at position " + std::to_string(pos));
-            }
-        }
-
-        // Add last path ID if present
-        if (!current_number.empty()) {
-            int path_id = std::stoi(current_number);
-            if (path_id < 0) {
-                throw std::runtime_error("sEDS: Invalid path ID (must be >= 0): " + current_number);
-            }
-            path_set.insert(path_id);
-        }
-
-        // Expect '}'
-        if (pos >= input.length() || input[pos] != SET_CLOSE) {
-            throw std::runtime_error("sEDS: Expected '}' at position " + std::to_string(pos));
-        }
-        pos++; // Skip '}'
-
-        // Validate path set is not empty (unless it's an error case we want to catch)
-        if (path_set.empty()) {
-            throw std::runtime_error("sEDS: Empty path set at string " + std::to_string(string_count));
-        }
-
-        // Store source set
-        sources_.push_back(path_set);
-        string_count++;
-    }
-
-    // Validate source count matches cardinality
-    if (sources_.size() != m_) {
-        throw std::runtime_error("sEDS: Source count (" + std::to_string(sources_.size()) +
-                               ") does not match EDS cardinality (" + std::to_string(m_) + ")");
-    }
-
-    has_sources_ = true;
-
-    // Calculate source statistics
-    calculate_source_statistics();
-}
-
-// Parse sEDS in METADATA_ONLY mode: build index without loading data
-void EDS::parse_sources_metadata_only(std::istream& is) {
-    source_base_positions_.clear();
-    source_base_positions_.reserve(m_);  // Pre-allocate for m strings
-
-    std::streampos current_pos = is.tellg();
-    size_t string_count = 0;
-    char ch;
-
-    // Single-pass scan to build index
-    while (is.get(ch)) {
-        if (ch == '{') {
-            // Record starting position of this source set
-            source_base_positions_.push_back(current_pos);
-
-            // Skip until matching '}'
-            int depth = 1;
-            while (depth > 0 && is.get(ch)) {
-                if (ch == '{') depth++;
-                else if (ch == '}') depth--;
-            }
-
-            current_pos = is.tellg();
-            string_count++;
-        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-            throw std::runtime_error("Unexpected character in sEDS file: " +
-                                   std::string(1, ch));
-        } else {
-            current_pos = is.tellg();
-        }
-    }
-
-    // Validate count matches EDS cardinality
-    if (string_count != m_) {
-        throw std::runtime_error("sEDS: Source count (" +
-            std::to_string(string_count) + ") does not match EDS cardinality (" +
-            std::to_string(m_) + ")");
-    }
-
-    has_sources_ = true;
-
-    // Note: Source statistics cannot be calculated without loading actual data
-    // They will be computed on-demand if needed
-}
-
-// ================================================================================
-// SOURCE STREAMING ACCESS
-// ================================================================================
-
-// Read source set from stream (helper for METADATA_ONLY mode)
-std::set<int> EDS::read_source_from_stream(size_t string_id) const {
-    if (!sources_stream_.is_open()) {
-        throw std::runtime_error("Sources file stream not available");
-    }
-
-    // Seek to position
-    sources_stream_.clear();  // Clear error flags
-    sources_stream_.seekg(source_base_positions_[string_id]);
-
-    if (!sources_stream_) {
-        throw std::runtime_error("Failed to seek to source position " +
-                                std::to_string(string_id));
-    }
-
-    // Parse one source set: {path_id1,path_id2,...}
-    std::set<int> result;
-    char ch;
-    std::string current_number;
-
-    // Expect '{'
-    if (!sources_stream_.get(ch) || ch != '{') {
-        throw std::runtime_error("Expected '{' for source set " +
-                                std::to_string(string_id));
-    }
-
-    // Parse path IDs
-    while (sources_stream_.get(ch) && ch != '}') {
-        if (ch == ',') {
-            if (!current_number.empty()) {
-                result.insert(std::stoi(current_number));
-                current_number.clear();
-            }
-        } else if (std::isdigit(static_cast<unsigned char>(ch))) {
-            current_number += ch;
-        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-            throw std::runtime_error("Invalid character in source set: " +
-                                   std::string(1, ch));
-        }
-    }
-
-    // Add last number
-    if (!current_number.empty()) {
-        result.insert(std::stoi(current_number));
-    }
-
-    return result;
-}
-
-// Read source set (works in both FULL and METADATA_ONLY modes)
+// Read source set (delegates to Sources object)
 std::set<int> EDS::read_source(size_t string_id) const {
-    // Validation
-    if (!has_sources_) {
+    if (!sources_) {
         throw std::runtime_error("No sources loaded");
     }
-    if (string_id >= m_) {
-        throw std::out_of_range("String ID " + std::to_string(string_id) +
-                               " out of range (m=" + std::to_string(m_) + ")");
-    }
-
-    // FULL mode: return directly from vector
-    if (mode_ == StoringMode::FULL) {
-        return sources_[string_id];
-    }
-
-    // METADATA_ONLY mode: check cache first
-    auto cache_it = source_cache_map_.find(string_id);
-    if (cache_it != source_cache_map_.end()) {
-        // Cache hit: move to front of LRU list
-        source_cache_.splice(source_cache_.begin(), source_cache_, cache_it->second);
-        return cache_it->second->paths;
-    }
-
-    // Cache miss: read from file
-    std::set<int> paths = read_source_from_stream(string_id);
-
-    // Add to cache
-    if (source_cache_capacity_ > 0) {
-        // Evict if cache full
-        if (source_cache_.size() >= source_cache_capacity_) {
-            size_t evict_id = source_cache_.back().string_id;
-            source_cache_map_.erase(evict_id);
-            source_cache_.pop_back();
-        }
-
-        // Insert at front (most recently used)
-        source_cache_.push_front({string_id, paths});
-        source_cache_map_[string_id] = source_cache_.begin();
-    }
-
-    return paths;
+    return sources_->read_source(string_id);
 }
 
-// Configure source cache capacity
+// Configure source cache capacity (delegates to Sources)
 void EDS::set_source_cache_capacity(size_t capacity) {
-    source_cache_capacity_ = capacity;
-    if (source_cache_.size() > capacity) {
-        // Trim cache to new size
-        while (source_cache_.size() > capacity) {
-            size_t evict_id = source_cache_.back().string_id;
-            source_cache_map_.erase(evict_id);
-            source_cache_.pop_back();
-        }
+    if (sources_) {
+        sources_->set_cache_capacity(capacity);
     }
 }
 
-// Clear source cache manually
+// Clear source cache manually (delegates to Sources)
 void EDS::clear_source_cache() const {
-    source_cache_.clear();
-    source_cache_map_.clear();
+    if (sources_) {
+        sources_->clear_cache();
+    }
 }
 
-// Get sources vector (FULL mode only, for backward compatibility)
-const std::vector<std::set<int>>& EDS::get_sources() const {
-    if (!has_sources_) {
-        throw std::runtime_error("No sources loaded");
+// Set sources object
+void EDS::set_sources_object(std::shared_ptr<Sources> sources) {
+    // Validate cardinality matches if both EDS and sources are non-empty
+    if (sources && !is_empty_ && sources->cardinality() != m_) {
+        throw std::invalid_argument("Sources cardinality (" + std::to_string(sources->cardinality()) +
+                                  ") does not match EDS cardinality (" + std::to_string(m_) + ")");
     }
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot access sources vector in METADATA_ONLY mode. "
-            "Use read_source(string_id) for on-demand access, or load with StoringMode::FULL"
-        );
-    }
-    return sources_;
+    sources_ = sources;
 }
 
 // ================================================================================
@@ -572,9 +312,6 @@ void EDS::calculate_statistics() {
         metadata_.num_common_chars = 0;
         metadata_.total_change_size = 0;
         metadata_.num_empty_strings = 0;
-        metadata_.num_paths = 0;
-        metadata_.max_paths_per_string = 0;
-        metadata_.avg_paths_per_string = 0.0;
         metadata_.cum_common_positions.clear();
         metadata_.cum_degenerate_counts.clear();
         return;
@@ -674,41 +411,7 @@ void EDS::calculate_statistics() {
     }
 }
 
-void EDS::calculate_source_statistics() {
-    // Initialize source statistics
-    metadata_.num_paths = 0;
-    metadata_.max_paths_per_string = 0;
-    metadata_.avg_paths_per_string = 0.0;
-
-    if (!has_sources_ || sources_.empty()) {
-        return;
-    }
-
-    // Track all unique path IDs
-    std::set<int> all_paths;
-    size_t total_paths = 0;
-
-    for (const auto& source_set : sources_) {
-        // Track max paths in any single string
-        if (source_set.size() > metadata_.max_paths_per_string) {
-            metadata_.max_paths_per_string = source_set.size();
-        }
-
-        // Accumulate all unique paths
-        for (int path_id : source_set) {
-            all_paths.insert(path_id);
-        }
-
-        // Count total for average
-        total_paths += source_set.size();
-    }
-
-    // Calculate statistics
-    metadata_.num_paths = all_paths.size();
-    metadata_.avg_paths_per_string = sources_.size() > 0
-        ? static_cast<double>(total_paths) / sources_.size()
-        : 0.0;
-}
+// (Deleted: calculate_source_statistics() - now in Sources class)
 
 EDS::Statistics EDS::get_statistics() const {
     // Return Statistics struct from Metadata (for backward compatibility)
@@ -720,9 +423,6 @@ EDS::Statistics EDS::get_statistics() const {
     stats.num_common_chars = metadata_.num_common_chars;
     stats.total_change_size = metadata_.total_change_size;
     stats.num_empty_strings = metadata_.num_empty_strings;
-    stats.num_paths = metadata_.num_paths;
-    stats.max_paths_per_string = metadata_.max_paths_per_string;
-    stats.avg_paths_per_string = metadata_.avg_paths_per_string;
     return stats;
 }
 
@@ -753,8 +453,8 @@ void EDS::print_statistics(std::ostream& os) const {
     os << "  Common characters:            " << stats.num_common_chars << "\n";
     os << "  Empty strings:                " << stats.num_empty_strings << "\n";
     os << "\n";
-    if (has_sources_) {
-        os << "Sources: Loaded (" << sources_.size() << " strings with source info)\n";
+    if (sources_) {
+        os << "Sources: Loaded (" << sources_->cardinality() << " strings with source info)\n";
     } else {
         os << "Sources: Not loaded\n";
     }
@@ -833,37 +533,11 @@ void EDS::save(const std::filesystem::path& path, OutputFormat format) const {
     save(ofs, format);
 }
 
-void EDS::save_sources(std::ostream& os) const {
-    if (!has_sources_) {
-        throw std::runtime_error("Cannot save sources: no sources loaded");
-    }
-
-    // Output sEDS format (flattened): {path_ids}{path_ids}...
-    // One set per string, ordered by string ID
-    for (size_t i = 0; i < sources_.size(); i++) {
-        os << "{";
-        bool first = true;
-        for (int path_id : sources_[i]) {
-            if (!first) os << ",";
-            os << path_id;
-            first = false;
-        }
-        os << "}";
-    }
-    os << "\n";
-}
+// (Deleted: save_sources() methods - now in Sources class via sources_->save())
 
 // ================================================================================
 // PATTERN GENERATION & EXTRACTION
 // ================================================================================
-
-void EDS::save_sources(const std::filesystem::path& path) const {
-    std::ofstream ofs(path);
-    if (!ofs) {
-        throw std::runtime_error("Failed to open file for writing: " + path.string());
-    }
-    save_sources(ofs);
-}
 
 void EDS::generate_patterns(std::ostream& os, size_t count, Length pattern_length) const {
     if (is_empty_ || n_ == 0) {
@@ -1069,14 +743,9 @@ std::string EDS::normalize_eds_format(const std::string& input) const {
     return result;
 }
 
-// Read symbol from stream (for METADATA_ONLY mode)
+// Read symbol from stream (on-demand reading)
 StringSet EDS::read_symbol_from_stream(Position pos) const {
-    if (mode_ == StoringMode::FULL) {
-        // In FULL mode, return directly from sets_
-        return sets_[pos];
-    }
-
-    // METADATA_ONLY mode: stream from file
+    // Stream from file
     if (!stream_.is_open()) {
         throw std::runtime_error("File stream not available for reading symbol");
     }
@@ -1127,15 +796,12 @@ StringSet EDS::read_symbol(Position pos) const {
 // POSITION CHECKING & VALIDATION
 // ================================================================================
 
-// get_sets() with error checking
+// get_sets() - deprecated (streaming mode only)
 const std::vector<StringSet>& EDS::get_sets() const {
-    if (mode_ == StoringMode::METADATA_ONLY) {
-        throw std::runtime_error(
-            "Cannot access sets in METADATA_ONLY mode. "
-            "Use read_symbol(pos) for on-demand access, or load with StoringMode::FULL"
-        );
-    }
-    return sets_;
+    throw std::runtime_error(
+        "Direct access to sets is not supported in streaming mode. "
+        "Use read_symbol(pos) for on-demand access"
+    );
 }
 
 // Check if pattern occurs at position with given degenerate string choices
@@ -1188,7 +854,7 @@ bool EDS::check_position(Position common_pos,
     }
 
     // Source validation: check if path intersection is non-empty
-    if (has_sources_) {
+    if (sources_) {
         std::set<int> path_intersection;
         try {
             path_intersection = calculate_path_intersection(
@@ -1206,21 +872,14 @@ bool EDS::check_position(Position common_pos,
         }
     }
 
-    // Reconstruct string based on storage mode
+    // Reconstruct string from file
     String reconstructed;
 
     try {
-        if (mode_ == StoringMode::FULL) {
-            reconstructed = reconstruct_from_memory(
-                start_symbol, offset_in_symbol,
-                degenerate_strings, pattern.length()
-            );
-        } else {
-            reconstructed = reconstruct_from_file(
-                start_symbol, offset_in_symbol,
-                degenerate_strings, pattern.length()
-            );
-        }
+        reconstructed = reconstruct_from_file(
+            start_symbol, offset_in_symbol,
+            degenerate_strings, pattern.length()
+        );
     } catch (const std::exception&) {
         // If reconstruction fails (e.g., validation errors),
         // let the exception propagate
@@ -1491,7 +1150,7 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
                                                const std::vector<int>& degenerate_strings,
                                                Length pattern_length) const {
     // If no sources loaded, return universal set {0}
-    if (!has_sources_) {
+    if (!sources_) {
         return {0};
     }
 
@@ -1550,14 +1209,14 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
         }
 
         // Get source set for this string
-        if (global_string_idx >= sources_.size()) {
+        if (global_string_idx >= sources_->cardinality()) {
             throw std::runtime_error(
                 "String ID " + std::to_string(global_string_idx) +
-                " out of range for sources (size: " + std::to_string(sources_.size()) + ")"
+                " out of range for sources (size: " + std::to_string(sources_->cardinality()) + ")"
             );
         }
 
-        const std::set<int>& current_sources = sources_[global_string_idx];
+        const std::set<int> current_sources = sources_->read_source(global_string_idx);
 
         // Compute intersection
         if (first) {
@@ -1604,283 +1263,6 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
     }
 
     return intersection;
-}
-
-// ================================================================================
-// MERGING OPERATIONS
-// ================================================================================
-
-// Merge two adjacent symbols (degenerate or non-degenerate)
-EDS EDS::merge_adjacent(size_t pos1, size_t pos2) const {
-    // ===== VALIDATION =====
-
-    // Validation: positions must be adjacent
-    if (pos2 != pos1 + 1) {
-        throw std::invalid_argument(
-            "Positions must be adjacent: pos2 (" + std::to_string(pos2) +
-            ") must equal pos1 + 1 (" + std::to_string(pos1 + 1) + ")"
-        );
-    }
-
-    // Validation: both positions must be within bounds
-    if (pos1 >= n_ || pos2 >= n_) {
-        throw std::out_of_range(
-            "Position out of range: pos1=" + std::to_string(pos1) +
-            ", pos2=" + std::to_string(pos2) + ", n=" + std::to_string(n_)
-        );
-    }
-
-    // ===== CALCULATE MERGED METADATA =====
-
-    // Get source indices for the two symbols
-    size_t global_string_idx1 = metadata_.cum_set_sizes[pos1];
-    size_t global_string_idx2 = metadata_.cum_set_sizes[pos2];
-    size_t set1_size = metadata_.symbol_sizes[pos1];
-    size_t set2_size = metadata_.symbol_sizes[pos2];
-
-    // Calculate merged symbol size and prepare merged data
-    size_t merged_size;
-    std::vector<std::set<int>> merged_sources;
-    std::vector<Length> merged_string_lengths;
-
-    if (!has_sources_) {
-        // CARTESIAN merge: size is product
-        merged_size = set1_size * set2_size;
-
-        // Calculate string lengths for all combinations
-        for (size_t i = 0; i < set1_size; ++i) {
-            Length len1 = metadata_.string_lengths[global_string_idx1 + i];
-            for (size_t j = 0; j < set2_size; ++j) {
-                Length len2 = metadata_.string_lengths[global_string_idx2 + j];
-                merged_string_lengths.push_back(len1 + len2);
-            }
-        }
-    } else {
-        // LINEAR merge: only count valid combinations (non-empty intersection)
-        for (size_t i = 0; i < set1_size; ++i) {
-            const std::set<int>& sources1 = sources_[global_string_idx1 + i];
-            Length len1 = metadata_.string_lengths[global_string_idx1 + i];
-
-            for (size_t j = 0; j < set2_size; ++j) {
-                const std::set<int>& sources2 = sources_[global_string_idx2 + j];
-                Length len2 = metadata_.string_lengths[global_string_idx2 + j];
-
-                // Compute intersection with special handling for {0}
-                std::set<int> intersection;
-                bool sources1_has_universal = sources1.count(0) > 0;
-                bool sources2_has_universal = sources2.count(0) > 0;
-
-                if (sources1_has_universal && sources2_has_universal) {
-                    // {0} ∩ {0} = {0}
-                    intersection.insert(0);
-                } else if (sources1_has_universal) {
-                    // {0} ∩ {x,y,...} = {x,y,...}
-                    intersection = sources2;
-                } else if (sources2_has_universal) {
-                    // {x,y,...} ∩ {0} = {x,y,...}
-                    intersection = sources1;
-                } else {
-                    // Regular set intersection
-                    std::set_intersection(
-                        sources1.begin(), sources1.end(),
-                        sources2.begin(), sources2.end(),
-                        std::inserter(intersection, intersection.begin())
-                    );
-                }
-
-                // Only keep if intersection is non-empty
-                if (!intersection.empty()) {
-                    merged_sources.push_back(intersection);
-                    merged_string_lengths.push_back(len1 + len2);
-                }
-            }
-        }
-
-        merged_size = merged_sources.size();
-
-        // Validation: merged set must not be empty
-        if (merged_size == 0) {
-            throw std::runtime_error(
-                "Merging positions " + std::to_string(pos1) + " and " +
-                std::to_string(pos2) + " results in empty set "
-                "(no valid source intersections)"
-            );
-        }
-    }
-
-    // ===== BUILD NEW EDS =====
-
-    EDS result;
-    result.is_empty_ = false;
-    result.mode_ = mode_;
-    result.has_sources_ = has_sources_;
-    result.file_path_ = file_path_;
-    result.n_ = n_ - 1;  // One less position after merge
-
-    // ===== BUILD NEW METADATA =====
-
-    result.metadata_.base_positions.clear();
-    result.metadata_.symbol_sizes.clear();
-    result.metadata_.string_lengths.clear();
-    result.metadata_.cum_set_sizes.clear();
-    result.metadata_.is_degenerate.clear();
-
-    size_t current_string_idx = 0;
-
-    // Copy metadata for positions before pos1
-    for (size_t i = 0; i < pos1; ++i) {
-        result.metadata_.base_positions.push_back(metadata_.base_positions[i]);
-        result.metadata_.symbol_sizes.push_back(metadata_.symbol_sizes[i]);
-        result.metadata_.is_degenerate.push_back(metadata_.is_degenerate[i]);
-        result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-        // Copy string lengths for this symbol
-        for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-            result.metadata_.string_lengths.push_back(
-                metadata_.string_lengths[metadata_.cum_set_sizes[i] + j]
-            );
-        }
-
-        current_string_idx += metadata_.symbol_sizes[i];
-    }
-
-    // Add merged position metadata
-    result.metadata_.base_positions.push_back(metadata_.base_positions[pos1]);
-    result.metadata_.symbol_sizes.push_back(merged_size);
-    result.metadata_.is_degenerate.push_back(merged_size > 1);  // Degenerate if > 1 alternative
-    result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-    // Add merged string lengths
-    for (Length len : merged_string_lengths) {
-        result.metadata_.string_lengths.push_back(len);
-    }
-    current_string_idx += merged_size;
-
-    // Copy metadata for positions after pos2
-    for (size_t i = pos2 + 1; i < n_; ++i) {
-        result.metadata_.base_positions.push_back(metadata_.base_positions[i]);
-        result.metadata_.symbol_sizes.push_back(metadata_.symbol_sizes[i]);
-        result.metadata_.is_degenerate.push_back(metadata_.is_degenerate[i]);
-        result.metadata_.cum_set_sizes.push_back(current_string_idx);
-
-        // Copy string lengths for this symbol
-        for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-            result.metadata_.string_lengths.push_back(
-                metadata_.string_lengths[metadata_.cum_set_sizes[i] + j]
-            );
-        }
-
-        current_string_idx += metadata_.symbol_sizes[i];
-    }
-
-    // Calculate result cardinality and size
-    result.m_ = current_string_idx;
-    result.N_ = 0;
-    for (Length len : result.metadata_.string_lengths) {
-        result.N_ += len;
-    }
-
-    // ===== BUILD SOURCES (if needed) =====
-
-    if (has_sources_) {
-        result.sources_.clear();
-
-        // Copy sources before pos1
-        size_t source_idx = 0;
-        for (size_t i = 0; i < pos1; ++i) {
-            for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_.push_back(sources_[source_idx++]);
-            }
-        }
-
-        // Add merged sources
-        for (const auto& src : merged_sources) {
-            result.sources_.push_back(src);
-        }
-
-        // Skip sources for pos1 and pos2
-        source_idx = metadata_.cum_set_sizes[pos2] + metadata_.symbol_sizes[pos2];
-
-        // Copy sources after pos2
-        for (size_t i = pos2 + 1; i < n_; ++i) {
-            for (size_t j = 0; j < metadata_.symbol_sizes[i]; ++j) {
-                result.sources_.push_back(sources_[source_idx++]);
-            }
-        }
-    }
-
-    // ===== BUILD SETS (FULL mode only) =====
-
-    if (mode_ == StoringMode::FULL) {
-        result.sets_.clear();
-
-        // Copy sets before pos1
-        for (size_t i = 0; i < pos1; ++i) {
-            result.sets_.push_back(sets_[i]);
-        }
-
-        // Build merged set
-        StringSet merged_set;
-        const StringSet& set1 = sets_[pos1];
-        const StringSet& set2 = sets_[pos2];
-
-        if (!has_sources_) {
-            // CARTESIAN: all combinations
-            for (const auto& str1 : set1) {
-                for (const auto& str2 : set2) {
-                    merged_set.push_back(str1 + str2);
-                }
-            }
-        } else {
-            // LINEAR: only valid combinations (same logic as metadata calculation)
-            for (size_t i = 0; i < set1.size(); ++i) {
-                for (size_t j = 0; j < set2.size(); ++j) {
-                    const std::set<int>& sources1 = sources_[global_string_idx1 + i];
-                    const std::set<int>& sources2 = sources_[global_string_idx2 + j];
-
-                    // Compute intersection
-                    std::set<int> intersection;
-                    bool sources1_has_universal = sources1.count(0) > 0;
-                    bool sources2_has_universal = sources2.count(0) > 0;
-
-                    if (sources1_has_universal && sources2_has_universal) {
-                        intersection.insert(0);
-                    } else if (sources1_has_universal) {
-                        intersection = sources2;
-                    } else if (sources2_has_universal) {
-                        intersection = sources1;
-                    } else {
-                        std::set_intersection(
-                            sources1.begin(), sources1.end(),
-                            sources2.begin(), sources2.end(),
-                            std::inserter(intersection, intersection.begin())
-                        );
-                    }
-
-                    if (!intersection.empty()) {
-                        merged_set.push_back(set1[i] + set2[j]);
-                    }
-                }
-            }
-        }
-
-        result.sets_.push_back(merged_set);
-
-        // Copy sets after pos2
-        for (size_t i = pos2 + 1; i < n_; ++i) {
-            result.sets_.push_back(sets_[i]);
-        }
-    }
-
-    // ===== FINALIZE =====
-
-    // Recalculate statistics
-    result.calculate_statistics();
-    if (has_sources_) {
-        result.calculate_source_statistics();
-    }
-
-    return result;
 }
 
 } // namespace edsparser

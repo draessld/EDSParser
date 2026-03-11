@@ -91,7 +91,7 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     std::cout << "========================================\n";
     std::cout << "File: " << input_file.filename().string() << "\n";
     std::cout << "Size: " << format_size(file_size) << "\n";
-    std::cout << "Storage Mode: " << (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? "METADATA_ONLY (memory-efficient)" : "FULL (all data in RAM)") << "\n";
+    std::cout << "Storage Mode: STREAMING (memory-efficient)\n";
     std::cout << "\n";
 
     std::cout << "Structure:\n";
@@ -127,10 +127,8 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     if (eds.has_sources()) {
         std::cout << "Sources (pangenome paths):\n";
-        std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources().size()) << "\n";
-        std::cout << "  Total paths (genomes):        " << std::setw(12) << format_number(stats.num_paths) << "\n";
-        std::cout << "  Max paths per string:         " << std::setw(12) << format_number(stats.max_paths_per_string) << "\n";
-        std::cout << "  Avg paths per string:         " << std::setw(12) << std::fixed << std::setprecision(2) << stats.avg_paths_per_string << "\n";
+        std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources_object()->cardinality()) << "\n";
+        std::cout << "  Mode: Streaming (loaded from file)\n";
         std::cout << "\n";
     } else if (has_sources_file) {
         std::cout << "Sources: File provided but parsing failed\n";
@@ -138,12 +136,9 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     }
 
     std::cout << "Memory Usage:\n";
-    std::cout << "  Current (" << (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? "METADATA_ONLY" : "FULL") << "): "
-              << std::setw(12) << format_size(eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? metadata_mem : full_mem) << "\n";
-    if (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY) {
-        std::cout << "  Estimated FULL mode:          " << std::setw(12) << format_size(full_mem) << "\n";
-        std::cout << "  Reduction factor:             " << std::setw(12) << std::fixed << std::setprecision(1) << reduction_factor << "x\n";
-    }
+    std::cout << "  Current (STREAMING):          " << std::setw(12) << format_size(metadata_mem) << "\n";
+    std::cout << "  Estimated FULL mode:          " << std::setw(12) << format_size(full_mem) << "\n";
+    std::cout << "  Reduction factor:             " << std::setw(12) << std::fixed << std::setprecision(1) << reduction_factor << "x\n";
     std::cout << "\n";
 
     // Recommendations
@@ -175,7 +170,7 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "  \"file\": {\n";
     std::cout << "    \"path\": \"" << input_file.string() << "\",\n";
     std::cout << "    \"size_bytes\": " << file_size << ",\n";
-    std::cout << "    \"storage_mode\": \"" << (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? "METADATA_ONLY" : "FULL") << "\"\n";
+    std::cout << "    \"storage_mode\": \"STREAMING\"\n";
     std::cout << "  },\n";
     std::cout << "  \"structure\": {\n";
     std::cout << "    \"n_symbols\": " << eds.length() << ",\n";
@@ -195,28 +190,15 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"empty_strings\": " << stats.num_empty_strings << "\n";
     std::cout << "  },\n";
     std::cout << "  \"memory\": {\n";
-    std::cout << "    \"current_bytes\": " << (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? metadata_mem : full_mem) << ",\n";
-    std::cout << "    \"current_mb\": " << std::fixed << std::setprecision(1) << ((eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY ? metadata_mem : full_mem) / 1024.0 / 1024.0) << ",\n";
-    if (eds.get_storing_mode() == EDS::StoringMode::METADATA_ONLY) {
-        std::cout << "    \"estimated_full_bytes\": " << full_mem << ",\n";
-        std::cout << "    \"estimated_full_mb\": " << std::fixed << std::setprecision(1) << (full_mem / 1024.0 / 1024.0) << ",\n";
-        std::cout << "    \"reduction_factor\": " << std::fixed << std::setprecision(1) << reduction_factor << "\n";
-    } else {
-        std::cout << "    \"mode\": \"FULL\"\n";
-    }
+    std::cout << "    \"current_bytes\": " << metadata_mem << ",\n";
+    std::cout << "    \"current_mb\": " << std::fixed << std::setprecision(1) << (metadata_mem / 1024.0 / 1024.0) << ",\n";
+    std::cout << "    \"estimated_full_bytes\": " << full_mem << ",\n";
+    std::cout << "    \"estimated_full_mb\": " << std::fixed << std::setprecision(1) << (full_mem / 1024.0 / 1024.0) << ",\n";
+    std::cout << "    \"reduction_factor\": " << std::fixed << std::setprecision(1) << reduction_factor << "\n";
     std::cout << "  },\n";
     std::cout << "  \"sources\": {\n";
     std::cout << "    \"loaded\": " << (eds.has_sources() ? "true" : "false") << ",\n";
-    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << ",\n";
-    if (eds.has_sources()) {
-        std::cout << "    \"num_paths\": " << stats.num_paths << ",\n";
-        std::cout << "    \"max_paths_per_string\": " << stats.max_paths_per_string << ",\n";
-        std::cout << "    \"avg_paths_per_string\": " << std::fixed << std::setprecision(2) << stats.avg_paths_per_string << "\n";
-    } else {
-        std::cout << "    \"num_paths\": 0,\n";
-        std::cout << "    \"max_paths_per_string\": 0,\n";
-        std::cout << "    \"avg_paths_per_string\": 0.0\n";
-    }
+    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << "\n";
     std::cout << "  },\n";
     std::cout << "  \"recommendations\": {\n";
     std::cout << "    \"needs_transformation\": " << (stats.min_context_length < 5 ? "true" : "false") << ",\n";
@@ -294,9 +276,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Load EDS with appropriate mode
-        EDS::StoringMode mode = use_full_mode ? EDS::StoringMode::FULL : EDS::StoringMode::METADATA_ONLY;
-
+        // Load EDS (always uses streaming mode)
         EDS eds;
         if (vm.count("sources")) {
             if (!std::filesystem::exists(sources_file)) {
@@ -304,10 +284,9 @@ int main(int argc, char** argv) {
                 print_performance();
                 return 1;
             }
-            // Load with sources (works in both FULL and METADATA_ONLY modes)
-            eds = EDS::load(input_file, sources_file, mode);
+            eds = EDS::load(input_file, sources_file);
         } else {
-            eds = EDS::load(input_file, mode);
+            eds = EDS::load(input_file);
         }
 
         // Output statistics
