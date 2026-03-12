@@ -275,6 +275,8 @@ std::set<int> Sources::read_source(size_t string_id) const {
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
     }
 
+    std::lock_guard<std::mutex> lock(io_mutex_);
+
     // Check cache first
     auto cache_it = cache_map_.find(string_id);
     if (cache_it != cache_map_.end()) {
@@ -308,6 +310,8 @@ const std::set<int>& Sources::read_source_ref(size_t string_id) const {
         throw std::out_of_range("String ID " + std::to_string(string_id) +
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
     }
+
+    std::lock_guard<std::mutex> lock(io_mutex_);
 
     // Cache hit: move to front and return reference (splice is iterator-stable)
     auto cache_it = cache_map_.find(string_id);
@@ -372,12 +376,14 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
     std::vector<std::set<int>> merged_sources;
 
     // Compute all valid combinations (LINEAR merge: filter by intersection)
-    // Use read_source_ref() to avoid copies on cache hits in this tight loop
+    // Use read_source() (value) instead of read_source_ref() because this is called
+    // from multiple threads: another thread can evict the cache entry between the
+    // outer read_source_ref() call and inner loop usage, causing a dangling reference.
     for (size_t i = 0; i < symbol1_size; ++i) {
-        const std::set<int>& sources1 = read_source_ref(symbol1_start + i);
+        std::set<int> sources1 = read_source(symbol1_start + i);
 
         for (size_t j = 0; j < symbol2_size; ++j) {
-            const std::set<int>& sources2 = read_source_ref(symbol2_start + j);
+            std::set<int> sources2 = read_source(symbol2_start + j);
 
             // Use static helper for intersection
             std::set<int> intersection = intersect_sources(sources1, sources2);

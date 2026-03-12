@@ -147,7 +147,7 @@ add_test(NAME test_vcf COMMAND test_vcf)
 # Test: CLI tool integration tests
 add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
 target_link_libraries(test_integration edsparser_lib)
-add_test(NAME test_integration COMMAND test_integration WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # Memory stress tests (built but NOT run automatically - too slow for CI)
 # Run manually when needed: ./test_memory_smoke or ./test_memory_stress

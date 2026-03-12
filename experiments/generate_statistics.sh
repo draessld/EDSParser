@@ -137,8 +137,11 @@ parse_json_to_csv() {
 
 generate_stats() {
     local eds_file="$1"
-    local input_dir_name="$3"
-    local basename=$(basename "$eds_file" .eds | basename -s .leds)
+    local input_dir_name="$2"
+    local basename
+    basename=$(basename "$eds_file")
+    basename="${basename%.eds}"
+    basename="${basename%.leds}"
 
     # Find corresponding .seds file
     local seds_file
@@ -334,14 +337,14 @@ main() {
 
         if [[ "$OUTPUT_FORMAT" != "table" ]] && [[ $THREADS -gt 1 ]]; then
             # Parallel for json/csv
-            printf "%s\n" "${found_files[@]}" | xargs -n 1 -P "$THREADS" -I {} \
+            printf "%s\n" "${found_files[@]}" | xargs -P "$THREADS" -I {} \
                 bash -c "generate_stats \"{}\" \"$input_dir\"" >> "$dir_output_file"
         else
             # Sequential for table or threads=1
             for eds_file in "${found_files[@]}"; do
                 generate_stats "$eds_file" "$input_dir" >> "$dir_output_file"
             done
-        done
+        fi
 
         log_success "Saved statistics to: $dir_output_file"
         OUTPUT_FILES+=("$dir_output_file")

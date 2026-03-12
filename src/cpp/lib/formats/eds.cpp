@@ -244,7 +244,14 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     eds.parse(eds_ifs);
 
     // Load sources using Sources class (always streaming)
-    eds.sources_ = Sources::load(seds_path, Sources::Format::SEDS);
+    auto sources = Sources::load(seds_path, Sources::Format::SEDS);
+
+    // Validate cardinality matches
+    if (!eds.is_empty_ && sources->cardinality() != eds.m_) {
+        throw std::invalid_argument("Sources cardinality (" + std::to_string(sources->cardinality()) +
+                                  ") does not match EDS cardinality (" + std::to_string(eds.m_) + ")");
+    }
+    eds.sources_ = std::move(sources);
 
     // Reuse the already-open stream (seek to beginning) instead of reopening
     eds_ifs.clear();
