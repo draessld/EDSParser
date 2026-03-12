@@ -265,18 +265,37 @@ namespace {
     }
 
     /**
+     * Result of streaming merged symbols to file.
+     * Contains the complete EDS::Metadata for the output file, built
+     * as a byproduct of the write — so the caller can skip re-reading
+     * the file to rebuild metadata for the next iteration.
+     *
+     * Requires eds_out to be a seekable stream (std::ofstream on a real file).
+     */
+    struct StreamResult {
+        EDS::Metadata metadata;
+        size_t n = 0;   // total symbols written
+        size_t m = 0;   // total strings written
+        size_t N = 0;   // total characters written
+    };
+
+    /**
      * Stream merged EDS symbols directly to file WITHOUT accumulating in memory.
      * This is the memory-efficient version that works with METADATA_ONLY mode.
      *
-     * Strategy: Read symbols on-demand, merge strings on-the-fly, write immediately, flush.
+     * Strategy: Read symbols on-demand, merge strings on-the-fly, write immediately.
      * No ostringstream accumulation - direct file writes prevent memory growth.
      *
-     * @param input_eds The original EDS (can be METADATA_ONLY mode)
+     * Also builds EDS::Metadata for the output file inline, so the caller can
+     * construct the next EDS object without a second parse of the written file.
+     *
+     * @param input_eds   The original EDS (can be METADATA_ONLY mode)
      * @param merge_metadata Vector of metadata-only merge results
-     * @param eds_out Output stream for EDS data
+     * @param eds_out     Output stream for EDS data (must be seekable)
      * @param sources_out Output stream for sources data (nullptr if no sources)
+     * @return StreamResult containing metadata for the written file
      */
-    void stream_merged_symbols_to_file(
+    StreamResult stream_merged_symbols_to_file(
         const EDS& input_eds,
         const std::vector<MergeMetadata>& merge_metadata,
         std::ostream& eds_out,
@@ -292,7 +311,22 @@ namespace {
         }
 
         bool has_sources = input_eds.has_sources();
-        const auto& metadata = input_eds.get_metadata();
+        const auto& in_meta = input_eds.get_metadata();
+
+        // ===== METADATA TRACKING =====
+        StreamResult result;
+        result.metadata.min_context_length = UINT32_MAX;
+        result.metadata.max_context_length = 0;
+        result.metadata.num_degenerate_symbols = 0;
+        result.metadata.num_common_chars = 0;
+        result.metadata.total_change_size = 0;
+        result.metadata.num_empty_strings = 0;
+        size_t total_context_length = 0;
+        size_t num_context_blocks = 0;
+        Position cumulative_common = 0;
+        int cumulative_degenerate = 0;
+        result.metadata.cum_common_positions.push_back(0);
+        result.metadata.cum_degenerate_counts.push_back(0);
 
         // Stream output symbol-by-symbol
         for (size_t pos = 0; pos < input_eds.length(); ++pos) {
@@ -300,9 +334,24 @@ namespace {
                 continue;  // Position was merged into previous
             }
 
+            // Capture file position before writing '{'
+            auto base_pos = static_cast<std::streampos>(eds_out.tellp());
+            result.metadata.base_positions.push_back(base_pos);
+            result.metadata.cum_set_sizes.push_back(result.m);
+
+            size_t sym_size;
+
             if (merge_map[pos] >= 0) {
                 // ===== MERGED POSITION =====
                 const auto& merge_meta = merge_metadata[merge_map[pos]];
+                sym_size = merge_meta.merged_size;
+
+                // Collect string lengths from merge metadata (no I/O needed)
+                for (Length len : merge_meta.merged_string_lengths) {
+                    result.metadata.string_lengths.push_back(len);
+                    result.N += len;
+                    if (len == 0) result.metadata.num_empty_strings++;
+                }
 
                 // Read BOTH symbols on-demand (METADATA_ONLY compatible)
                 StringSet set1 = input_eds.read_symbol(pos);
@@ -310,20 +359,16 @@ namespace {
 
                 // Write merged symbol to output
                 eds_out << '{';
-
                 bool first_string = true;
 
                 // Use pre-computed valid i,j indices for both CARTESIAN and LINEAR modes
-                // This ensures exact matching between metadata computation and reconstruction
                 for (size_t idx = 0; idx < merge_meta.valid_indices.size(); ++idx) {
                     auto [i, j] = merge_meta.valid_indices[idx];
 
-                    // Concatenate strings on-the-fly
                     if (!first_string) eds_out << ',';
                     eds_out << set1[i] << set2[j];
                     first_string = false;
 
-                    // Write pre-computed sources for this merged string (if sources exist)
                     if (sources_out) {
                         *sources_out << '{';
                         bool first_path = true;
@@ -341,10 +386,20 @@ namespace {
 
             } else {
                 // ===== UNMODIFIED POSITION =====
+                sym_size = in_meta.symbol_sizes[pos];
+                size_t global_idx = in_meta.cum_set_sizes[pos];
+
+                // Collect string lengths from input metadata (no I/O needed)
+                for (size_t k = 0; k < sym_size; ++k) {
+                    Length len = in_meta.string_lengths[global_idx + k];
+                    result.metadata.string_lengths.push_back(len);
+                    result.N += len;
+                    if (len == 0) result.metadata.num_empty_strings++;
+                }
+
                 // Read symbol on-demand and pass through
                 StringSet symbol = input_eds.read_symbol(pos);
 
-                // Write symbol
                 eds_out << '{';
                 for (size_t i = 0; i < symbol.size(); ++i) {
                     if (i > 0) eds_out << ',';
@@ -352,11 +407,8 @@ namespace {
                 }
                 eds_out << '}';
 
-                // Write sources if present
                 if (has_sources && sources_out) {
-                    size_t symbol_size = input_eds.get_symbol_size(pos);
-                    size_t global_idx = metadata.cum_set_sizes[pos];
-                    for (size_t i = 0; i < symbol_size; ++i) {
+                    for (size_t i = 0; i < sym_size; ++i) {
                         const std::set<int> src = input_eds.read_source(global_idx + i);
                         *sources_out << '{';
                         bool first = true;
@@ -369,7 +421,43 @@ namespace {
                     }
                 }
             }
+
+            // Update per-symbol metadata statistics
+            bool is_deg = (sym_size > 1);
+            result.metadata.symbol_sizes.push_back(static_cast<Length>(sym_size));
+            result.metadata.is_degenerate.push_back(is_deg);
+
+            if (is_deg) {
+                result.metadata.num_degenerate_symbols++;
+                result.metadata.total_change_size += (sym_size - 1);
+                cumulative_degenerate += static_cast<int>(sym_size);
+            } else {
+                Length ctx_len = result.metadata.string_lengths.back();
+                result.metadata.num_common_chars += ctx_len;
+                total_context_length += ctx_len;
+                num_context_blocks++;
+                cumulative_common += static_cast<Position>(ctx_len);
+                if (ctx_len < result.metadata.min_context_length)
+                    result.metadata.min_context_length = ctx_len;
+                if (ctx_len > result.metadata.max_context_length)
+                    result.metadata.max_context_length = ctx_len;
+            }
+
+            result.metadata.cum_common_positions.push_back(cumulative_common);
+            result.metadata.cum_degenerate_counts.push_back(cumulative_degenerate);
+
+            result.m += sym_size;
+            result.n++;
         }
+
+        // Finalize statistics
+        result.metadata.avg_context_length = (num_context_blocks > 0)
+            ? static_cast<double>(total_context_length) / num_context_blocks
+            : 0.0;
+        if (result.metadata.min_context_length == UINT32_MAX)
+            result.metadata.min_context_length = 0;
+
+        return result;
     }
 
 } // anonymous namespace
@@ -557,8 +645,9 @@ void eds_to_leds_linear(
         print_bar(total_pairs);
         std::cerr << "\n";
 
-        // Stream full result to file once (each position written exactly once)
-        stream_merged_symbols_to_file(
+        // Stream full result to file once (each position written exactly once).
+        // Also captures output metadata inline — avoids re-reading the file next iteration.
+        auto stream_result = stream_merged_symbols_to_file(
             eds,
             all_metadata,
             eds_out_stream,
@@ -570,11 +659,36 @@ void eds_to_leds_linear(
             seds_out_stream.close();
         }
 
-        // Replace EDS with temp file (still METADATA_ONLY mode)
-        // This keeps memory footprint constant across iterations
-        eds = has_sources
-            ? EDS::load(temp_eds_out, temp_seds_out)
-            : EDS::load(temp_eds_out);
+        // Log merge outcome and new metadata state
+        {
+            const auto& m = stream_result.metadata;
+            std::cerr << "[l-EDS]   Merged:   " << total_symbols << " → " << stream_result.n
+                      << " symbols (" << (total_symbols - stream_result.n) << " consumed)"
+                      << ", " << stream_result.m << " strings"
+                      << ", " << stream_result.N << " chars\n";
+            std::cerr << "[l-EDS]   Metadata: ctx min=" << m.min_context_length
+                      << " max=" << m.max_context_length
+                      << std::fixed << std::setprecision(1)
+                      << " avg=" << m.avg_context_length
+                      << " | degen=" << m.num_degenerate_symbols
+                      << " empty=" << m.num_empty_strings
+                      << " (built inline, no re-parse)\n";
+        }
+
+        // Replace EDS with temp file using pre-built metadata (no re-parse needed).
+        // Sources still require a re-read (Sources has its own index-building pass).
+        if (has_sources) {
+            std::cerr << "[l-EDS]   Sources: re-indexing " << temp_seds_out.filename().string() << "\n";
+            auto new_sources = Sources::load(temp_seds_out, Sources::Format::SEDS);
+            eds = EDS::from_metadata(std::move(stream_result.metadata),
+                                     stream_result.n, stream_result.m, stream_result.N,
+                                     temp_eds_out);
+            eds.set_sources_object(new_sources);
+        } else {
+            eds = EDS::from_metadata(std::move(stream_result.metadata),
+                                     stream_result.n, stream_result.m, stream_result.N,
+                                     temp_eds_out);
+        }
 
         // Delete previous iteration files immediately (Linux: fd valid after unlink)
         std::filesystem::remove(current_eds_file);
@@ -759,8 +873,9 @@ void eds_to_leds_cartesian(
         print_bar(total_pairs);
         std::cerr << "\n";
 
-        // Stream full result to file once (each position written exactly once)
-        stream_merged_symbols_to_file(
+        // Stream full result to file once (each position written exactly once).
+        // Also captures output metadata inline — avoids re-reading the file next iteration.
+        auto stream_result = stream_merged_symbols_to_file(
             eds,
             all_metadata,
             eds_out_stream,
@@ -769,9 +884,26 @@ void eds_to_leds_cartesian(
 
         eds_out_stream.close();
 
-        // Replace EDS with temp file (still METADATA_ONLY mode)
-        // This keeps memory footprint constant across iterations
-        eds = EDS::load(temp_eds_out);
+        // Log merge outcome and new metadata state
+        {
+            const auto& m = stream_result.metadata;
+            std::cerr << "[l-EDS]   Merged:   " << total_symbols << " → " << stream_result.n
+                      << " symbols (" << (total_symbols - stream_result.n) << " consumed)"
+                      << ", " << stream_result.m << " strings"
+                      << ", " << stream_result.N << " chars\n";
+            std::cerr << "[l-EDS]   Metadata: ctx min=" << m.min_context_length
+                      << " max=" << m.max_context_length
+                      << std::fixed << std::setprecision(1)
+                      << " avg=" << m.avg_context_length
+                      << " | degen=" << m.num_degenerate_symbols
+                      << " empty=" << m.num_empty_strings
+                      << " (built inline, no re-parse)\n";
+        }
+
+        // Replace EDS with temp file using pre-built metadata (no re-parse needed).
+        eds = EDS::from_metadata(std::move(stream_result.metadata),
+                                 stream_result.n, stream_result.m, stream_result.N,
+                                 temp_eds_out);
 
         // Delete previous iteration file immediately (Linux: fd valid after unlink)
         std::filesystem::remove(current_eds_file);

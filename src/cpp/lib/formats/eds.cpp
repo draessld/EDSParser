@@ -205,6 +205,27 @@ EDS EDS::from_string(const std::string& eds_string) {
     return EDS(eds_string);
 }
 
+// Factory: construct a METADATA_ONLY EDS from pre-built metadata + file path.
+// The file must already exist and contain the EDS data described by the metadata.
+EDS EDS::from_metadata(Metadata&& metadata,
+                       size_t n, size_t m, size_t N,
+                       const std::filesystem::path& file_path) {
+    EDS eds;
+    eds.metadata_  = std::move(metadata);
+    eds.n_         = n;
+    eds.m_         = m;
+    eds.N_         = N;
+    eds.is_empty_  = (n == 0);
+    eds.file_path_ = file_path;
+    // Open stream for on-demand symbol reads (METADATA_ONLY mode)
+    eds.stream_.open(file_path);
+    if (!eds.stream_) {
+        throw std::runtime_error("EDS::from_metadata: cannot open file: " + file_path.string());
+    }
+    // sets_ left empty → METADATA_ONLY mode (inferred by stream_.is_open())
+    return eds;
+}
+
 // ================================================================================
 // FILE LOADERS
 // ================================================================================
@@ -765,28 +786,36 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
         throw std::runtime_error("Failed to seek to position " + std::to_string(pos));
     }
 
-    // Parse one symbol
+    // Parse one symbol — supports both full ({str1,str2}) and compact (str) formats
     StringSet result;
     char ch;
     std::string current_str;
 
-    // Expect '{'
-    if (!stream_.get(ch) || ch != SET_OPEN) {
-        throw std::runtime_error("Expected '{' at position " + std::to_string(pos));
+    if (!stream_.get(ch)) {
+        throw std::runtime_error("Unexpected EOF reading symbol at position " + std::to_string(pos));
     }
 
-    // Parse strings in symbol
-    while (stream_.get(ch) && ch != SET_CLOSE) {
-        if (ch == SET_SEPARATOR) {
-            result.push_back(current_str);
-            current_str.clear();
-        } else if (!std::isspace(ch)) {  // Skip whitespace
+    if (ch == SET_OPEN) {
+        // Full bracket format: read comma-separated strings until '}'
+        while (stream_.get(ch) && ch != SET_CLOSE) {
+            if (ch == SET_SEPARATOR) {
+                result.push_back(current_str);
+                current_str.clear();
+            } else if (!std::isspace(ch)) {
+                current_str += ch;
+            }
+        }
+        result.push_back(current_str);
+    } else {
+        // Compact format: single non-degenerate string, read until '{', whitespace, or EOF
+        current_str += ch;
+        while (stream_.peek() != SET_OPEN && stream_.peek() != EOF &&
+               !std::isspace(static_cast<unsigned char>(stream_.peek()))) {
+            stream_.get(ch);
             current_str += ch;
         }
+        result.push_back(current_str);
     }
-
-    // Add last string
-    result.push_back(current_str);
 
     return result;
 }

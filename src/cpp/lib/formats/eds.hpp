@@ -102,6 +102,13 @@ public:
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
+
+    // Factory: construct a METADATA_ONLY EDS directly from pre-built metadata + file path.
+    // The file at file_path must already exist and contain the EDS data described by metadata.
+    // Use this to avoid re-parsing a file whose metadata was captured during writing.
+    static EDS from_metadata(Metadata&& metadata,
+                             size_t n, size_t m, size_t N,
+                             const std::filesystem::path& file_path);
     Statistics get_statistics() const;                           // Get statistics only
     void print_statistics(std::ostream& os = std::cout) const;
 
