@@ -114,7 +114,7 @@ TransformComplexity estimate_leds_complexity(
         oss << "  - High degenerate density (" << std::fixed << std::setprecision(1)
             << (degenerate_ratio * 100) << "% of symbols)\n";
         oss << "  - Large clusters (avg " << result.avg_degenerate_cluster_size << " consecutive)\n";
-        oss << "  - " << violations << " violations to resolve\n";
+        oss << "  - " << violations << " violations to resolve (out of " << eds.length() << " symbols)\n";
         oss << "  - Transformation may take VERY long time or not complete\n\n";
         oss << "Recommendations:\n";
         oss << "  1. Decrease context length (current: " << context_length << ") to reduce violations\n";
@@ -122,13 +122,13 @@ TransformComplexity estimate_leds_complexity(
         oss << "  3. Consider if l-EDS is necessary for your use case";
     } else if (result.warn_slow) {
         oss << "⚠ SLOW transformation expected\n";
-        oss << "  - " << violations << " violations to resolve\n";
+        oss << "  - " << violations << " violations to resolve (out of " << eds.length() << " symbols)\n";
         oss << "  - May take several minutes\n\n";
         oss << "Recommendation:\n";
         oss << "  Consider decreasing context length (current: " << context_length << ") to reduce violations";
     } else {
         oss << "✓ Transformation should complete quickly\n";
-        oss << "  - " << violations << " violations (manageable)\n";
+        oss << "  - " << violations << " violations out of " << eds.length() << " symbols (manageable)\n";
         oss << "  - Expected runtime: < 1 minute for moderate files";
     }
 
