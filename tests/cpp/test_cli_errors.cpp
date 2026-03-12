@@ -90,7 +90,8 @@ void test_file_not_found() {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
+    // Add check for argc to prevent segfault on argv[1]
+    if (argc < 2 || std::string(argv[1]).empty()) {
         std::cerr << "Usage: " << argv[0] << " <path_to_tools_dir>\n";
         return 1;
     }

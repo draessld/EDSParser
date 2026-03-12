@@ -769,13 +769,13 @@ void test_source_cache_functionality() {
     eds_file.close();
 
     std::ofstream seds_file(seds_path);
-    seds_file << "{0}{1}{2}{0}{1,2}";
+    seds_file << "{0}{1}{2}{0}{1,2}{1}";
     seds_file.close();
 
     // Load with sources
     edsparser::EDS eds = edsparser::EDS::load(eds_path, seds_path);
     assert(eds.has_sources());
-    assert(eds.cardinality() == 5);
+    assert(eds.cardinality() == 6);
 
     // Set small cache size to test LRU behavior
     eds.set_source_cache_capacity(2);

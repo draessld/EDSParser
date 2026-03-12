@@ -112,11 +112,16 @@ std::vector<size_t> generate_variant_positions(
 }
 
 /**
- * Build source sets where every string in every symbol carries all paths.
+ * Build source sets with realistic haplotype-style phasing.
  *
- * For degenerate symbols: every alternative gets all path IDs.
- * This guarantees that merging any two adjacent symbols always produces
- * a non-empty source intersection (all_paths ∩ all_paths = all_paths).
+ * For non-degenerate (context) symbols: all paths (every path traverses context).
+ * For degenerate symbols: each path is assigned to exactly ONE alternative,
+ * distributed round-robin across alternatives. This mirrors real phased data
+ * where each haplotype follows one specific variant.
+ *
+ * This ensures linear merge is efficient: only paths sharing the same
+ * alternative at both positions produce valid combinations (no combinatorial
+ * explosion from all-paths-in-every-alternative).
  *
  * Returns a vector of sets where sources[string_idx] = set of path IDs
  */
@@ -132,9 +137,21 @@ std::vector<std::set<int>> build_source_sets(
     }
 
     for (const auto& symbol : symbols) {
-        // Every string (degenerate or not) carries all paths
-        for (size_t alt_idx = 0; alt_idx < symbol.num_alternatives; ++alt_idx) {
+        if (!symbol.is_degenerate) {
+            // Context block: all paths traverse this symbol
             sources.push_back(all_paths);
+        } else {
+            // Degenerate symbol: assign each path to exactly one alternative
+            // Round-robin distribution: path p goes to alternative (p-1) % num_alternatives
+            size_t num_alts = symbol.num_alternatives;
+            std::vector<std::set<int>> alt_sources(num_alts);
+            for (size_t path_id = 1; path_id <= num_paths; ++path_id) {
+                size_t alt_idx = (path_id - 1) % num_alts;
+                alt_sources[alt_idx].insert(static_cast<int>(path_id));
+            }
+            for (size_t alt_idx = 0; alt_idx < num_alts; ++alt_idx) {
+                sources.push_back(alt_sources[alt_idx]);
+            }
         }
     }
 

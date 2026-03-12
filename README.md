@@ -45,8 +45,8 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 # Transform EDS to l-EDS
 eds2leds -i data.eds -s data.seds -l 10
 
-# Generate random EDS for testing
-genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+# Generate random EDS for testing (internal tool, not installed)
+build/tools/genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
 
 # View EDS statistics
 edsparser-stats -i data.eds
@@ -66,7 +66,7 @@ edsparser/
 │   │   ├── eds2leds            # EDS → l-EDS
 │   │   ├── edsparser-stats     # Statistics tool
 │   │   ├── edsparser-genpatterns  # Pattern generation tool
-│   │   └── genrandomeds        # Random EDS generation tool
+│   │   └── genrandomeds        # Random EDS generation (internal, not installed)
 │   └── test/                   # Unit tests
 ├── experiments/                # Experiment scripts
 │   ├── transform_to_eds.sh     # Transform MSA/VCF/EDS → EDS/l-EDS
@@ -206,23 +206,25 @@ edsparser-genpatterns -i data.leds -o patterns.txt -c 500 -l 15
 **Output:**
 Plain text file with one pattern per line (ACGT alphabet).
 
-### genrandomeds - Random EDS Generation
+### genrandomeds - Random EDS Generation (Internal Tool)
+
+> **Not installed** to `~/.local/bin/`. Run directly from `build/tools/genrandomeds` or use the experiment script `experiments/generate_random_dataset.sh`.
 
 Generate synthetic EDS files with controlled variability for testing and benchmarking:
 
 ```bash
 # Generate 100 MB EDS with 10% variability
-genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+build/tools/genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
 
 # Generate l-EDS with minimum context length
-genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds
+build/tools/genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds
 
 # High variability with more alternatives per variant
-genrandomeds --ref-size-mb 10 --variability 0.20 \
+build/tools/genrandomeds --ref-size-mb 10 --variability 0.20 \
   --min-alternatives 3 --max-alternatives 6 -o high_var.eds
 
 # Reproducible generation with seed
-genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
+build/tools/genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
 ```
 
 **Options:**
@@ -239,7 +241,7 @@ genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
 
 **Features:**
 - Automatically generates `.seds` (source) file alongside `.eds` file
-- **Coverage guarantee**: Every alternative in every degenerate symbol is used by at least one path
+- **Round-robin haplotype assignment**: each path is assigned to exactly one alternative per degenerate symbol, mirroring real phased genomic data. This prevents Cartesian product explosion during linear l-EDS merging.
 - Number of paths (samples) automatically calculated as `max(max_alternatives, 3)`
 - Generates realistic variation: SNPs, insertions, and deletions
 - Progress reporting and performance metrics
@@ -470,7 +472,9 @@ cd sdsl-lite
 
 **Two-Phase Loading**: EDS files are parsed for metadata first, then optionally loaded fully or streamed on-demand.
 
-**Separate Source Tracking**: Source information is stored separately (`.seds` files), allowing EDS usage without provenance overhead.
+**Separate Source Tracking**: Source information is stored separately (`.seds` files), allowing EDS usage without provenance overhead. The `Sources` class is **thread-safe for concurrent reads**: a mutex protects the shared file stream and LRU cache. `merge_adjacent_sources()` uses value-returning `read_source()` (not `read_source_ref()`) to avoid dangling references when called from multiple OpenMP threads.
+
+**Per-Process Temp Directories**: `eds2leds` creates a PID-scoped temp directory (`/tmp/edsparser_leds_<pid>/`) for intermediate iteration files. This allows multiple `eds2leds` instances to run in parallel (e.g. from experiment scripts) without interfering with each other's temp files.
 
 ## Performance Characteristics
 

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <filesystem>
 #include <stdexcept>
+#include <unistd.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -404,7 +405,8 @@ void eds_to_leds_linear(
     // with minimal memory footprint (~500MB for 100GB file)
 
     // Create temp directory for iteration files
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "edsparser_leds";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_leds_" + std::to_string(getpid()));
     std::filesystem::create_directories(temp_dir);
 
     // Save input stream to temp file (needed for METADATA_ONLY loading)
@@ -528,7 +530,13 @@ void eds_to_leds_linear(
             }
         }
 
-        // Process pairs in batches to control parallel memory usage
+        // Compute all merge metadata first (batched for parallel memory control),
+        // then stream the full result once. stream_merged_symbols_to_file iterates
+        // over ALL positions, so calling it once per batch would write every
+        // unmodified symbol N-times (once per batch).
+        std::vector<MergeMetadata> all_metadata;
+        all_metadata.reserve(pairs.size());
+
         for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
             print_bar(batch_start);
 
@@ -541,18 +549,21 @@ void eds_to_leds_linear(
             // Compute merge metadata (NO string data, minimal memory)
             auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
 
-            // Stream output directly to file (immediate flush, no accumulation)
-            stream_merged_symbols_to_file(
-                eds,
-                batch_metadata,
-                eds_out_stream,
-                has_sources ? &seds_out_stream : nullptr
-            );
-
-            // batch_metadata freed here automatically (RAII)
+            // Accumulate metadata across batches
+            all_metadata.insert(all_metadata.end(),
+                                 std::make_move_iterator(batch_metadata.begin()),
+                                 std::make_move_iterator(batch_metadata.end()));
         }
         print_bar(total_pairs);
         std::cerr << "\n";
+
+        // Stream full result to file once (each position written exactly once)
+        stream_merged_symbols_to_file(
+            eds,
+            all_metadata,
+            eds_out_stream,
+            has_sources ? &seds_out_stream : nullptr
+        );
 
         eds_out_stream.close();
         if (has_sources) {
@@ -630,7 +641,8 @@ void eds_to_leds_cartesian(
     // Same architecture as linear mode, but without source handling
 
     // Create temp directory for iteration files
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "edsparser_leds_cart";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_leds_cart_" + std::to_string(getpid()));
     std::filesystem::create_directories(temp_dir);
 
     // Save input stream to temp file (needed for METADATA_ONLY loading)
@@ -720,7 +732,13 @@ void eds_to_leds_cartesian(
             throw std::runtime_error("Failed to create temp output file: " + temp_eds_out.string());
         }
 
-        // Process pairs in batches to control parallel memory usage
+        // Compute all merge metadata first (batched for parallel memory control),
+        // then stream the full result once. stream_merged_symbols_to_file iterates
+        // over ALL positions, so calling it once per batch would write every
+        // unmodified symbol N-times (once per batch).
+        std::vector<MergeMetadata> all_metadata;
+        all_metadata.reserve(pairs.size());
+
         for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
             print_bar(batch_start);
 
@@ -733,18 +751,21 @@ void eds_to_leds_cartesian(
             // Compute merge metadata (NO string data, minimal memory)
             auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
 
-            // Stream output directly to file (immediate flush, no accumulation)
-            stream_merged_symbols_to_file(
-                eds,
-                batch_metadata,
-                eds_out_stream,
-                nullptr  // No sources in cartesian mode
-            );
-
-            // batch_metadata freed here automatically (RAII)
+            // Accumulate metadata across batches
+            all_metadata.insert(all_metadata.end(),
+                                 std::make_move_iterator(batch_metadata.begin()),
+                                 std::make_move_iterator(batch_metadata.end()));
         }
         print_bar(total_pairs);
         std::cerr << "\n";
+
+        // Stream full result to file once (each position written exactly once)
+        stream_merged_symbols_to_file(
+            eds,
+            all_metadata,
+            eds_out_stream,
+            nullptr  // No sources in cartesian mode
+        );
 
         eds_out_stream.close();
 

@@ -154,22 +154,23 @@ void Sources::parse_seds(std::istream& is) {
         base_positions_.reserve(cardinality_);
     }
 
-    // Use a byte offset counter instead of tellg() to avoid virtual call overhead
-    size_t byte_offset = 0;
     size_t string_count = 0;
     char ch;
 
-    // Single-pass scan to build index
-    while (is.get(ch)) {
-        byte_offset++;
+    // Single-pass scan to build index.
+    // Record position using tellg() BEFORE consuming '{' so the stored
+    // streampos values are valid for seekg() calls in read_from_seds().
+    while (is) {
+        std::streampos pos_before = is.tellg();
+        if (!is.get(ch)) break;
+
         if (ch == SET_OPEN) {
-            // Record starting position of this source set (points to '{')
-            base_positions_.push_back(static_cast<std::streampos>(byte_offset - 1));
+            // Record the position of '{' (obtained from tellg before consuming)
+            base_positions_.push_back(pos_before);
 
             // Skip until matching '}'
             int depth = 1;
             while (depth > 0 && is.get(ch)) {
-                byte_offset++;
                 if (ch == SET_OPEN) depth++;
                 else if (ch == SET_CLOSE) depth--;
             }
@@ -179,7 +180,6 @@ void Sources::parse_seds(std::istream& is) {
             throw std::runtime_error("Unexpected character in sEDS file: " +
                                    std::string(1, ch));
         }
-        // whitespace: byte_offset already incremented, continue
     }
 
     if (cardinality_ == 0) {
@@ -275,6 +275,8 @@ std::set<int> Sources::read_source(size_t string_id) const {
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
     }
 
+    std::lock_guard<std::mutex> lock(io_mutex_);
+
     // Check cache first
     auto cache_it = cache_map_.find(string_id);
     if (cache_it != cache_map_.end()) {
@@ -308,6 +310,8 @@ const std::set<int>& Sources::read_source_ref(size_t string_id) const {
         throw std::out_of_range("String ID " + std::to_string(string_id) +
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
     }
+
+    std::lock_guard<std::mutex> lock(io_mutex_);
 
     // Cache hit: move to front and return reference (splice is iterator-stable)
     auto cache_it = cache_map_.find(string_id);
@@ -372,12 +376,14 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
     std::vector<std::set<int>> merged_sources;
 
     // Compute all valid combinations (LINEAR merge: filter by intersection)
-    // Use read_source_ref() to avoid copies on cache hits in this tight loop
+    // Use read_source() (value) instead of read_source_ref() because this is called
+    // from multiple threads: another thread can evict the cache entry between the
+    // outer read_source_ref() call and inner loop usage, causing a dangling reference.
     for (size_t i = 0; i < symbol1_size; ++i) {
-        const std::set<int>& sources1 = read_source_ref(symbol1_start + i);
+        std::set<int> sources1 = read_source(symbol1_start + i);
 
         for (size_t j = 0; j < symbol2_size; ++j) {
-            const std::set<int>& sources2 = read_source_ref(symbol2_start + j);
+            std::set<int> sources2 = read_source(symbol2_start + j);
 
             // Use static helper for intersection
             std::set<int> intersection = intersect_sources(sources1, sources2);

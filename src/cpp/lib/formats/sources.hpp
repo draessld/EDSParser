@@ -10,6 +10,7 @@
 #include <list>
 #include <unordered_map>
 #include <cstdint>
+#include <mutex>
 
 /**
  * Sources class - Manages provenance/source tracking for EDS strings
@@ -126,6 +127,9 @@ private:
     mutable std::list<CacheEntry> cache_;
     mutable std::unordered_map<size_t, std::list<CacheEntry>::iterator> cache_map_;
     size_t cache_capacity_;                 // Default: 10000
+
+    // Mutex protecting stream_ and cache_ for thread-safe concurrent reads
+    mutable std::mutex io_mutex_;
 
     // Format-specific parsing (builds index only)
     void parse_seds(std::istream& is);

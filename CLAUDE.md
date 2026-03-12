@@ -101,7 +101,8 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
   - **Memory-Stable Architecture** for 100GB+ files:
     - Uses METADATA_ONLY mode (only metadata in RAM, ~100MB for 100GB file)
     - Iterative temp file chaining (iteration N → temp file → iteration N+1)
-    - Batch processing (default: 1000 pairs/batch) to control parallel memory
+    - **Per-process unique temp directory** (`/tmp/edsparser_leds_<pid>/`) — prevents conflicts when multiple `eds2leds` instances run in parallel (e.g. from experiment scripts)
+    - Batch metadata accumulation: all `MergeMetadata` is collected across batches before `stream_merged_symbols_to_file` is called once — avoids writing every unmodified symbol once per batch
     - Streaming output with immediate flushing (no ostringstream accumulation)
     - Memory footprint: O(metadata + batch) instead of O(file_size × iterations × threads)
     - Typical reduction: 2TB → 500MB peak memory for 100GB EDS with 1000 pairs and 16 threads
@@ -122,6 +123,10 @@ Transformation tools (each focused on a specific conversion):
 Utility tools:
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
 - `edsparser-genpatterns`: Generate random patterns for benchmarking
+- `genrandomeds` (**internal/not installed**): Generate synthetic EDS files with controlled variability for testing/benchmarking
+  - Requires `--ref-size-mb` (size) and `-o` (output); key options: `-v` (variability), `--min-context`, `--seed`
+  - Automatically generates paired `.seds` source file using **round-robin haplotype assignment**: each path is assigned to exactly one alternative per degenerate symbol, matching real phased data. This prevents Cartesian product explosion during linear merge.
+  - Not installed to `~/.local/bin/` — run from `build/tools/genrandomeds` or via `experiments/generate_random_dataset.sh`
 
 **Performance Output**: All tools write runtime and peak memory to stderr on completion:
 ```
@@ -157,12 +162,17 @@ Utility tools:
 
 Key methods:
 - `Sources::load()` — factory method, returns `shared_ptr<Sources>`
-- `Sources::read_source(idx)` — access with automatic LRU caching
-- `Sources::merge_adjacent_sources()` / `intersect_sources()` — set operations for l-EDS
+- `Sources::read_source(idx)` — access with automatic LRU caching; **returns by value** (thread-safe copy)
+- `Sources::read_source_ref(idx)` — returns a const reference into the LRU cache for single-threaded use only; **do not use in parallel contexts** — another thread can evict the cache entry, dangling the reference
+- `Sources::merge_adjacent_sources()` / `intersect_sources()` — set operations for l-EDS; uses `read_source()` (not `read_source_ref()`) to avoid dangling references across OpenMP threads
 - `EDS::set_sources_object()` / `get_sources_object()` — attach/retrieve Sources on EDS
 - `EDS::read_source(idx)` — delegates to Sources (works in both FULL and METADATA_ONLY modes)
 
+**Thread safety**: `Sources` has a `mutable std::mutex io_mutex_` protecting the shared `stream_` and LRU cache from concurrent access. Both `read_source()` and `read_source_ref()` acquire this mutex. However, `read_source_ref()` releases the mutex before returning — the reference is only safe while no other thread calls any `Sources` method. In practice: always use `read_source()` in parallel code paths.
+
 **Note**: `EDS::get_sources()` throws a helpful error in METADATA_ONLY mode. Use `read_source(idx)` instead.
+
+**Cardinality validation**: `EDS::load(eds_path, seds_path)` validates that `Sources::cardinality()` matches `EDS::m_` at load time; throws `std::invalid_argument` on mismatch. This catches stale or mismatched `.seds` files early.
 
 **Pipe Streaming** ([src/cpp/lib/pipe_buffer.hpp](src/cpp/lib/pipe_buffer.hpp), [src/cpp/lib/pipe_stream.hpp](src/cpp/lib/pipe_stream.hpp)): Thread-safe circular buffer implementing `std::streambuf` to connect producer/consumer threads without intermediate temp files:
 - `PipeOutputStream` / `PipeInputStream` — stream wrappers for producer and consumer threads

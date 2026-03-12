@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Exit on error and on pipe failure
+set -eo pipefail
+
 # Generate Random EDS Dataset
 # Creates synthetic EDS datasets with controlled parameters for benchmarking
 
@@ -146,23 +149,24 @@ generate_single_eds() {
     local start_time=$SECONDS
 
     # Build genrandomeds command
-    local cmd
-    cmd="$GENRANDOMEDS_TOOL"
-    cmd+=" --output \"$output_file\""
-    cmd+=" --ref-size-mb $REF_SIZE_MB"
-    cmd+=" --variability $VARIABILITY"
-    cmd+=" --min-alternatives $MIN_ALTERNATIVES"
-    cmd+=" --max-alternatives $MAX_ALTERNATIVES"
-    cmd+=" --variant-length-max $VARIANT_LENGTH_MAX"
-    cmd+=" --snp-ratio $SNP_RATIO"
-    cmd+=" --alphabet \"$ALPHABET\""
-    cmd+=" --min-context $MIN_CONTEXT"
-    cmd+=" --seed $seed_value"
+    local cmd_args=(
+        "$GENRANDOMEDS_TOOL"
+        --output "$output_file"
+        --ref-size-mb "$REF_SIZE_MB"
+        --variability "$VARIABILITY"
+        --min-alternatives "$MIN_ALTERNATIVES"
+        --max-alternatives "$MAX_ALTERNATIVES"
+        --variant-length-max "$VARIANT_LENGTH_MAX"
+        --snp-ratio "$SNP_RATIO"
+        --alphabet "$ALPHABET"
+        --min-context "$MIN_CONTEXT"
+        --seed "$seed_value"
+    )
 
     # Execute with output to log file
     local log_file
     log_file="${output_file}.log"
-    if eval "$cmd" > "$log_file" 2>&1; then
+    if "${cmd_args[@]}" > "$log_file" 2>&1; then
         local elapsed=$((SECONDS - start_time))
         log_success "Generated $basename (${elapsed}s)"
         rm -f "$log_file"  # Clean up log on success

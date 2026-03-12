@@ -73,6 +73,40 @@ size_t estimate_metadata_memory(size_t m, size_t n) {
     return total + overhead;
 }
 
+// Source path statistics
+struct SourceStats {
+    size_t num_paths = 0;
+    size_t max_paths_per_string = 0;
+    double avg_paths_per_string = 0.0;
+};
+
+SourceStats compute_source_stats(const EDS& eds) {
+    SourceStats result;
+    if (!eds.has_sources()) return result;
+
+    auto sources = eds.get_sources_object();
+    size_t cardinality = sources->cardinality();
+    if (cardinality == 0) return result;
+
+    std::set<int> all_paths;
+    size_t total_set_size = 0;
+
+    for (size_t i = 0; i < cardinality; ++i) {
+        auto paths = sources->read_source(i);
+        // {0} is the universal marker — treat it as a single counted element
+        all_paths.insert(paths.begin(), paths.end());
+        if (paths.size() > result.max_paths_per_string)
+            result.max_paths_per_string = paths.size();
+        total_set_size += paths.size();
+    }
+
+    // Exclude universal marker 0 from path count (it means "all paths", not a real genome ID)
+    all_paths.erase(0);
+    result.num_paths = all_paths.size();
+    result.avg_paths_per_string = static_cast<double>(total_set_size) / cardinality;
+    return result;
+}
+
 // Print statistics in standard format
 void print_standard(const EDS& eds, const std::filesystem::path& input_file, bool verbose, bool has_sources_file) {
     auto stats = eds.get_statistics();
@@ -126,9 +160,12 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     }
 
     if (eds.has_sources()) {
+        auto src_stats = compute_source_stats(eds);
         std::cout << "Sources (pangenome paths):\n";
         std::cout << "  Strings with source info:     " << std::setw(12) << format_number(eds.get_sources_object()->cardinality()) << "\n";
-        std::cout << "  Mode: Streaming (loaded from file)\n";
+        std::cout << "  Total paths (genomes):        " << std::setw(12) << format_number(src_stats.num_paths) << "\n";
+        std::cout << "  Max paths per string:         " << std::setw(12) << format_number(src_stats.max_paths_per_string) << "\n";
+        std::cout << "  Avg paths per string:         " << std::setw(12) << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
         std::cout << "\n";
     } else if (has_sources_file) {
         std::cout << "Sources: File provided but parsing failed\n";
@@ -157,9 +194,9 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 }
 
 // Print statistics in JSON format
-void print_json(const EDS& eds, const std::filesystem::path& input_file, bool has_sources_file) {
+void print_json(const EDS& eds, const std::filesystem::path& input_file, bool has_sources_file,
+                double runtime_s, double peak_memory_mb) {
     auto stats = eds.get_statistics();
-    auto metadata = eds.get_metadata();
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
@@ -169,8 +206,7 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "{\n";
     std::cout << "  \"file\": {\n";
     std::cout << "    \"path\": \"" << input_file.string() << "\",\n";
-    std::cout << "    \"size_bytes\": " << file_size << ",\n";
-    std::cout << "    \"storage_mode\": \"STREAMING\"\n";
+    std::cout << "    \"size_bytes\": " << file_size << "\n";
     std::cout << "  },\n";
     std::cout << "  \"structure\": {\n";
     std::cout << "    \"n_symbols\": " << eds.length() << ",\n";
@@ -196,9 +232,13 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"estimated_full_mb\": " << std::fixed << std::setprecision(1) << (full_mem / 1024.0 / 1024.0) << ",\n";
     std::cout << "    \"reduction_factor\": " << std::fixed << std::setprecision(1) << reduction_factor << "\n";
     std::cout << "  },\n";
+    auto src_stats = compute_source_stats(eds);
     std::cout << "  \"sources\": {\n";
     std::cout << "    \"loaded\": " << (eds.has_sources() ? "true" : "false") << ",\n";
-    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << "\n";
+    std::cout << "    \"file_provided\": " << (has_sources_file ? "true" : "false") << ",\n";
+    std::cout << "    \"num_paths\": " << src_stats.num_paths << ",\n";
+    std::cout << "    \"max_paths_per_string\": " << src_stats.max_paths_per_string << ",\n";
+    std::cout << "    \"avg_paths_per_string\": " << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
     std::cout << "  },\n";
     std::cout << "  \"recommendations\": {\n";
     std::cout << "    \"needs_transformation\": " << (stats.min_context_length < 5 ? "true" : "false") << ",\n";
@@ -207,8 +247,60 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"suggested_command\": \"" << (stats.min_context_length < 5
                   ? "edsparser-transform -i " + input_file.filename().string() + " -l 5"
                   : "ready for indexing") << "\"\n";
+    std::cout << "  },\n";
+    std::cout << "  \"performance\": {\n";
+    std::cout << "    \"runtime_s\": " << std::fixed << std::setprecision(2) << runtime_s << ",\n";
+    std::cout << "    \"peak_memory_mb\": " << std::fixed << std::setprecision(1) << peak_memory_mb << "\n";
     std::cout << "  }\n";
     std::cout << "}\n";
+}
+
+// Print statistics in CSV format
+void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has_sources_file,
+               double runtime_s, double peak_memory_mb) {
+    auto stats = eds.get_statistics();
+    uintmax_t file_size = std::filesystem::file_size(input_file);
+
+    size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
+    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
+
+    auto src_stats = compute_source_stats(eds);
+
+    // Header
+    std::cout << "file,file_size_bytes"
+              << ",n_symbols,N_characters,m_strings,degenerate_symbols,regular_symbols"
+              << ",context_min,context_max,context_avg"
+              << ",total_change_size,common_characters,empty_strings"
+              << ",memory_current_bytes,memory_estimated_full_bytes,memory_reduction_factor"
+              << ",sources_loaded,num_paths,max_paths_per_string,avg_paths_per_string"
+              << ",runtime_s,peak_memory_mb"
+              << "\n";
+
+    // Data row
+    std::cout << input_file.string() << "," << file_size
+              << "," << eds.length()
+              << "," << eds.size()
+              << "," << eds.cardinality()
+              << "," << stats.num_degenerate_symbols
+              << "," << (eds.length() - stats.num_degenerate_symbols)
+              << "," << stats.min_context_length
+              << "," << stats.max_context_length
+              << "," << std::fixed << std::setprecision(2) << stats.avg_context_length
+              << "," << stats.total_change_size
+              << "," << stats.num_common_chars
+              << "," << stats.num_empty_strings
+              << "," << metadata_mem
+              << "," << full_mem
+              << "," << std::fixed << std::setprecision(1) << reduction_factor
+              << "," << (eds.has_sources() ? "true" : "false")
+              << "," << src_stats.num_paths
+              << "," << src_stats.max_paths_per_string
+              << "," << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string
+              << "," << std::fixed << std::setprecision(2) << runtime_s
+              << "," << std::fixed << std::setprecision(1) << peak_memory_mb
+              << "\n";
+    (void)has_sources_file;
 }
 
 int main(int argc, char** argv) {
@@ -216,8 +308,8 @@ int main(int argc, char** argv) {
     Timer timer;
     timer.start();
 
-    // Helper to print performance info to stderr
-    auto print_performance = [&timer]() {
+    // Print performance to stderr (used only in non-structured output modes and on error)
+    auto print_perf_stderr = [&timer]() {
         timer.stop();
         double runtime = timer.elapsed_seconds();
         double memory_mb = get_peak_memory_mb();
@@ -231,8 +323,8 @@ int main(int argc, char** argv) {
     try {
         std::filesystem::path input_file;
         std::filesystem::path sources_file;
-        bool use_full_mode = false;
         bool json_output = false;
+        bool csv_output = false;
         bool verbose = false;
 
         po::options_description desc("Display statistics for EDS/l-EDS file");
@@ -240,8 +332,8 @@ int main(int argc, char** argv) {
             ("help,h", "Show help message")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file")
             ("sources,s", po::value<std::filesystem::path>(&sources_file), "Source file (.seds) - optional")
-            ("full,f", po::bool_switch(&use_full_mode), "Use FULL mode (load all strings)")
             ("json,j", po::bool_switch(&json_output), "Output in JSON format")
+            ("csv,c", po::bool_switch(&csv_output), "Output in CSV format")
             ("verbose,v", po::bool_switch(&verbose), "Show detailed statistics");
 
         po::variables_map vm;
@@ -257,31 +349,38 @@ int main(int argc, char** argv) {
             std::cout << "  edsparser-stats -i data.eds -s data.seds\n\n";
             std::cout << "  # Show statistics in JSON format:\n";
             std::cout << "  edsparser-stats -i data.eds --json\n\n";
-            std::cout << "  # Use FULL mode (loads all strings, more memory):\n";
-            std::cout << "  edsparser-stats -i data.eds --full --verbose\n\n";
-            std::cout << "Storage Modes:\n";
-            std::cout << "  METADATA_ONLY (default): Uses ~10% memory of FULL mode, fast for large files\n";
-            std::cout << "                           Sources are loaded as metadata (minimal memory impact)\n";
-            std::cout << "  FULL (--full):           Loads all strings into RAM, enables detailed inspection\n";
-            print_performance();
+            std::cout << "  # Show statistics in CSV format:\n";
+            std::cout << "  edsparser-stats -i data.eds --csv\n\n";
+            std::cout << "  # Show verbose statistics:\n";
+            std::cout << "  edsparser-stats -i data.eds --verbose\n\n";
+            std::cout << "Note:\n";
+            std::cout << "  Uses streaming (metadata-only) mode for memory-efficient access to large files.\n";
+            std::cout << "  JSON and CSV output include performance metrics inline.\n";
+            print_perf_stderr();
             return 0;
         }
 
         po::notify(vm);
 
+        if (json_output && csv_output) {
+            std::cerr << "Error: --json and --csv are mutually exclusive\n";
+            return 1;
+        }
+
         // Check if input file exists
         if (!std::filesystem::exists(input_file)) {
             std::cerr << "Error: Input file '" << input_file << "' not found\n";
-            print_performance();
+            print_perf_stderr();
             return 1;
         }
 
         // Load EDS (always uses streaming mode)
         EDS eds;
-        if (vm.count("sources")) {
+        bool has_sources = vm.count("sources") > 0;
+        if (has_sources) {
             if (!std::filesystem::exists(sources_file)) {
                 std::cerr << "Error: Source file '" << sources_file << "' not found\n";
-                print_performance();
+                print_perf_stderr();
                 return 1;
             }
             eds = EDS::load(input_file, sources_file);
@@ -289,19 +388,30 @@ int main(int argc, char** argv) {
             eds = EDS::load(input_file);
         }
 
+        // Stop timer before output so performance data is captured accurately
+        timer.stop();
+        double runtime = timer.elapsed_seconds();
+        double memory_mb = get_peak_memory_mb();
+
         // Output statistics
         if (json_output) {
-            print_json(eds, input_file, vm.count("sources") > 0);
+            print_json(eds, input_file, has_sources, runtime, memory_mb);
+        } else if (csv_output) {
+            print_csv(eds, input_file, has_sources, runtime, memory_mb);
         } else {
-            print_standard(eds, input_file, verbose, vm.count("sources") > 0);
+            print_standard(eds, input_file, verbose, has_sources);
+            std::cerr << "[Performance] Runtime: " << std::fixed << std::setprecision(2) << runtime << "s";
+            if (memory_mb > 0.0) {
+                std::cerr << " | Peak Memory: " << std::fixed << std::setprecision(1) << memory_mb << " MB";
+            }
+            std::cerr << "\n";
         }
 
-        print_performance();
         return 0;
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
-        print_performance();
+        print_perf_stderr();
         return 1;
     }
 }

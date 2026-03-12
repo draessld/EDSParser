@@ -108,10 +108,13 @@ check_tool() {
 
 generate_patterns() {
     local eds_file="$1"
-    local input_dir_name="$3"
-    local count="$4"
-    local length="$5"
-    local basename=$(basename "$eds_file" .eds | basename -s .leds)
+    local input_dir_name="$2"
+    local count="$3"
+    local length="$4"
+    local basename
+    basename=$(basename "$eds_file")
+    basename="${basename%.eds}"
+    basename="${basename%.leds}"
 
     # Create pattern folder inside the input directory: <input_dir>/patterns_<count>_<length>/
     local input_dir_path="${dataset_path}/${input_dir_name}"
@@ -280,7 +283,7 @@ main() {
 
                 # Process each file with this count/length combination
                 # Use xargs for simple and effective parallelization
-                printf "%s\n" "${found_files[@]}" | xargs -n 1 -P "$THREADS" -I {} \
+                printf "%s\n" "${found_files[@]}" | xargs -P "$THREADS" -I {} \
                     bash -c "generate_patterns \"{}\" \"$input_dir\" \"$count\" \"$length\""
 
                 # The old sequential way:
