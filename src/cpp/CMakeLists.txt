@@ -59,7 +59,7 @@ else()
 endif()
 
 find_library(SDSL_LIBRARY
-    NAMES sdsl
+    NAMES sdsl sdsl-lite
     PATHS
         ${CMAKE_LIBRARY_PATH}
         $ENV{HOME}/lib
