@@ -12,32 +12,26 @@ namespace edsparser {
 // ================================================================================
 
 // Stream-based constructor (EDS only, no sources)
+// Keeps strings in sets_ so read_symbol() works without a file.
 EDS::EDS(std::istream& eds_stream) : is_empty_(false), sources_(nullptr) {
-    parse(eds_stream);
+    parse(eds_stream, /*with_strings=*/true);
 }
 
 // String-based constructor (EDS only, no sources)
-// Uses std::istringstream to avoid temp file I/O
+// Keeps strings in sets_ so read_symbol() works without a file.
 EDS::EDS(const std::string& eds_string) : is_empty_(false), sources_(nullptr) {
-    // Normalize the input string
     std::string normalized = normalize_eds_format(eds_string);
-    // Remove whitespace
     normalized.erase(std::remove_if(normalized.begin(), normalized.end(), ::isspace), normalized.end());
-    
-    // Use a string stream for in-memory parsing
     std::istringstream iss(normalized);
-    // Parse metadata
-    parse(iss);
-    // Note: read_symbol() will not work for objects created from a string,
-    // as there is no persistent stream. This constructor is for in-memory representation.
+    parse(iss, /*with_strings=*/true);
 }
 
-void EDS::parse(std::istream& is) {
-    // Streaming parser: builds an index without loading file content into memory.
-    // Handles both compact (ACGT{A,C}) and full ({ACGT}{A,C}) formats.
-    // Uses a byte offset counter instead of tellg() to avoid per-character virtual calls.
+void EDS::parse(std::istream& is, bool with_strings) {
+    // Streaming parser: builds metadata index.
+    // When with_strings=true also populates sets_ for in-memory read_symbol() access.
 
     // Clear all data structures
+    sets_.clear();
     metadata_.base_positions.clear();
     metadata_.symbol_sizes.clear();
     metadata_.string_lengths.clear();
@@ -70,13 +64,16 @@ void EDS::parse(std::istream& is) {
         if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
 
         size_t symbol_size = 0;
+        StringSet sym;  // populated only when with_strings=true
+
         if (is_bracketed) {
-            // Manual comma scan instead of stringstream — no heap allocation per segment
+            // Manual comma scan — no heap allocation per segment
             if (token.empty()) {
                 // Empty set {} means one empty string ""
                 metadata_.string_lengths.push_back(0);
                 symbol_size = 1;
                 metadata_.num_empty_strings++;
+                if (with_strings) sym.push_back("");
             } else {
                 size_t start = 0;
                 for (size_t pos = 0; pos <= token.size(); ++pos) {
@@ -85,6 +82,7 @@ void EDS::parse(std::istream& is) {
                         metadata_.string_lengths.push_back(len);
                         N_ += len;
                         if (len == 0) metadata_.num_empty_strings++;
+                        if (with_strings) sym.push_back(token.substr(start, len));
                         symbol_size++;
                         start = pos + 1;
                     }
@@ -96,7 +94,10 @@ void EDS::parse(std::istream& is) {
             N_ += len;
             if (len == 0) metadata_.num_empty_strings++;
             symbol_size = 1;
+            if (with_strings) sym.push_back(token);
         }
+
+        if (with_strings) sets_.push_back(std::move(sym));
 
         bool is_deg = (symbol_size > 1);
         metadata_.symbol_sizes.push_back(symbol_size);
@@ -825,6 +826,9 @@ StringSet EDS::read_symbol(Position pos) const {
     if (pos >= n_) {
         throw std::out_of_range("Position " + std::to_string(pos) + " out of range");
     }
+    // In-memory mode: EDS was constructed from a stream/string, sets_ is populated
+    if (!sets_.empty()) return sets_[pos];
+    // File-backed mode: EDS was loaded from a file via EDS::load()
     return read_symbol_from_stream(pos);
 }
 
