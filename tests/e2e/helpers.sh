@@ -63,6 +63,19 @@ assert_file_contains() {
     fi
 }
 
+assert_file_equal() {
+    local actual="$1" expected="$2" msg="$3"
+    if [ ! -f "$expected" ]; then
+        echo -e "  ${RED}FAIL${NC}: $msg — expected file not found: $expected"
+        return 1
+    fi
+    if ! diff -q "$actual" "$expected" >/dev/null 2>&1; then
+        echo -e "  ${RED}FAIL${NC}: $msg — output differs from expected"
+        diff "$actual" "$expected" | head -10 | sed 's/^/    /'
+        return 1
+    fi
+}
+
 assert_line_count() {
     local path="$1" expected="$2" msg="$3"
     local actual

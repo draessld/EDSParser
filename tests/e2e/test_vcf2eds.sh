@@ -4,12 +4,13 @@ EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
+EXPECTED_DIR="$SCRIPT_DIR/expected/vcf2eds"
 TOOL=$(find_tool "vcf2eds") || { echo "ERROR: vcf2eds not found"; exit 1; }
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-VCF="$DATA_DIR/vcf/small.vcf"
-REF="$DATA_DIR/vcf/small.fa"
+VCF="$DATA_DIR/small.vcf"
+REF="$DATA_DIR/small.fa"
 
 echo "=== vcf2eds ==="
 
@@ -18,6 +19,7 @@ test_basic_conversion() {
     assert_exit_code 0 $? "exits 0 on valid VCF+reference" || return 1
     assert_file_exists "$TMPDIR/out.eds" ".eds output file created" || return 1
     assert_not_empty "$TMPDIR/out.eds" ".eds output not empty" || return 1
+    assert_file_equal "$TMPDIR/out.eds" "$EXPECTED_DIR/small.eds" "EDS output matches expected" || return 1
 }
 
 test_sources_file_created() {
@@ -25,6 +27,7 @@ test_sources_file_created() {
     assert_exit_code 0 $? "exits 0" || return 1
     assert_file_exists "$TMPDIR/src.seds" ".seds source file created" || return 1
     assert_not_empty "$TMPDIR/src.seds" ".seds source file not empty" || return 1
+    assert_file_equal "$TMPDIR/src.seds" "$EXPECTED_DIR/small.seds" "SEDS output matches expected" || return 1
 }
 
 test_eds_format_valid() {
@@ -39,14 +42,16 @@ test_leds_with_context_length() {
     assert_exit_code 0 $? "exits 0 with -l 5" || return 1
     assert_file_exists "$TMPDIR/out.leds" ".leds output created with context length" || return 1
     assert_not_empty "$TMPDIR/out.leds" ".leds output not empty" || return 1
+    assert_file_equal "$TMPDIR/out.leds" "$EXPECTED_DIR/small.l5.leds" "l-EDS output matches expected" || return 1
 }
 
 test_overlapping_variants() {
-    local vcf="$DATA_DIR/vcf/test_overlaps.vcf"
-    local ref="$DATA_DIR/vcf/test_overlaps.fa"
+    local vcf="$DATA_DIR/test_overlaps.vcf"
+    local ref="$DATA_DIR/test_overlaps.fa"
     "$TOOL" -i "$vcf" -r "$ref" -o "$TMPDIR/overlaps.eds"
     assert_exit_code 0 $? "exits 0 on overlapping variants VCF" || return 1
     assert_file_exists "$TMPDIR/overlaps.eds" ".eds output created for overlapping variants" || return 1
+    assert_file_equal "$TMPDIR/overlaps.eds" "$EXPECTED_DIR/test_overlaps.eds" "overlaps EDS output matches expected" || return 1
 }
 
 test_missing_reference_fails() {

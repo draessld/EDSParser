@@ -364,26 +364,56 @@ make -j$(nproc)
 
 ### Running Tests
 
+EDSParser has two test layers: **unit tests** (C++, fast) and **end-to-end tests** (shell, full CLI).
+
+#### Unit Tests
+
 ```bash
 cd build/src/cpp
 
-# Run all tests
+# Run all unit tests
 ctest --output-on-failure
 
-# Run specific test
+# Run a specific test executable
 ./test_eds
 ./test_msa
 ./test_vcf
 ```
 
-Available tests:
-- `test_eds` - EDS parsing and operations
-- `test_sources` - Source tracking
-- `test_stats` - Statistics computation
-- `test_merge` - Symbol merging algorithms
-- `test_transform` - EDS transformations
-- `test_msa` - MSA parsing
-- `test_vcf` - VCF parsing
+Available unit tests:
+
+| Executable | Coverage |
+|---|---|
+| `test_eds` | EDS parsing and operations |
+| `test_sources` | Source tracking |
+| `test_stats` | Statistics computation |
+| `test_merge` | Symbol merging algorithms |
+| `test_transform` | EDS transformations |
+| `test_msa` | MSA parsing |
+| `test_vcf` | VCF parsing |
+| `test_integration` | End-to-end CLI tool workflows |
+| `test_cli_errors` | CLI graceful failure on invalid input |
+| `test_memory_smoke` | Quick memory validation (~1-2 min) |
+
+#### End-to-End Tests
+
+Shell-based tests that invoke the installed CLI tools against reference data. Requires the tools to be installed (run `./INSTALL.sh` first, or ensure `~/.local/bin` is on `PATH`).
+
+```bash
+# Run all e2e suites
+bash tests/e2e/run_all.sh
+
+# Run a single suite
+bash tests/e2e/test_msa2eds.sh
+bash tests/e2e/test_vcf2eds.sh
+bash tests/e2e/test_eds2leds.sh
+bash tests/e2e/test_stats.sh
+bash tests/e2e/test_genpatterns.sh
+```
+
+Each suite reports individual test results and a per-suite pass/fail summary. `run_all.sh` reports overall suite counts.
+
+> **Note:** Some `test_eds2leds.sh` tests currently fail intentionally — they document a known compact-output bug (see `TODO`). Expected output files already contain the correct format and will pass once the bug is fixed.
 
 ## Using as a Library
 
