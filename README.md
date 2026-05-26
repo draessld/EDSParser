@@ -45,8 +45,8 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 # Transform EDS to l-EDS
 eds2leds -i data.eds -s data.seds -l 10
 
-# Generate random EDS for testing (internal tool, not installed)
-build/tools/genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+# Generate random EDS for testing
+genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
 
 # View EDS statistics
 edsparser-stats -i data.eds
@@ -60,14 +60,16 @@ edsparser/
 │   ├── lib/                    # Core library
 │   │   ├── formats/            # EDS, MSA, VCF parsers
 │   │   └── transforms/         # Transformation algorithms
-│   ├── tools/                  # Command-line tools
-│   │   ├── msa2eds             # MSA → EDS/l-EDS
-│   │   ├── vcf2eds             # VCF → EDS/l-EDS
-│   │   ├── eds2leds            # EDS → l-EDS
-│   │   ├── edsparser-stats     # Statistics tool
-│   │   ├── edsparser-genpatterns  # Pattern generation tool
-│   │   └── genrandomeds        # Random EDS generation (internal, not installed)
-│   └── test/                   # Unit tests
+│   └── tools/                  # Command-line tools
+│       ├── msa2eds             # MSA → EDS/l-EDS
+│       ├── vcf2eds             # VCF → EDS/l-EDS
+│       ├── eds2leds            # EDS → l-EDS
+│       ├── edsparser-stats     # Statistics tool
+│       ├── edsparser-genpatterns  # Pattern generation tool
+│       └── genrandomeds        # Random EDS generation (internal)
+├── tests/
+│   ├── unit/                   # C++ unit tests
+│   └── e2e/                    # Shell-based end-to-end tests
 ├── experiments/                # Experiment scripts
 │   ├── transform_to_eds.sh     # Transform MSA/VCF/EDS → EDS/l-EDS
 │   ├── generate_patterns.sh   # Pattern generation wrapper
@@ -171,9 +173,17 @@ edsparser-stats -i data.eds -s data.seds
 # JSON output
 edsparser-stats -i data.eds --json
 
-# Full mode (load all strings)
-edsparser-stats -i data.eds --full
+# CSV output
+edsparser-stats -i data.eds --csv
+
+# Verbose output (detailed statistics)
+edsparser-stats -i data.eds --verbose
 ```
+
+**Options:**
+- `-j, --json` - Output in JSON format
+- `-c, --csv` - Output in CSV format
+- `-v, --verbose` - Show detailed statistics
 
 **Output:**
 - Number of symbols, characters, and strings
@@ -188,43 +198,43 @@ Generate random patterns from EDS files for benchmarking:
 
 ```bash
 # Generate 100 patterns of length 10
-edsparser-genpatterns -i data.eds -o patterns.txt -c 100 -l 10
+edsparser-genpatterns -i data.eds -o patterns.txt -n 100 -l 10
 
 # Generate 1000 patterns of length 20
-edsparser-genpatterns -i data.eds -o patterns.txt -c 1000 -l 20
+edsparser-genpatterns -i data.eds -o patterns.txt -n 1000 -l 20
 
 # From l-EDS files
-edsparser-genpatterns -i data.leds -o patterns.txt -c 500 -l 15
+edsparser-genpatterns -i data.leds -o patterns.txt -n 500 -l 15
 ```
 
 **Options:**
 - `-i, --input` - Input EDS/l-EDS file
 - `-o, --output` - Output pattern file
-- `-c, --count` - Number of patterns to generate (default: 100)
+- `-n, --count` - Number of patterns to generate (default: 100)
 - `-l, --length` - Pattern length (default: 10)
 
 **Output:**
 Plain text file with one pattern per line (ACGT alphabet).
 
-### genrandomeds - Random EDS Generation (Internal Tool)
+### genrandomeds - Random EDS Generation
 
-> **Not installed** to `~/.local/bin/`. Run directly from `build/tools/genrandomeds` or use the experiment script `experiments/generate_random_dataset.sh`.
+Installed to `~/.local/bin/genrandomeds` by `./INSTALL.sh`.
 
 Generate synthetic EDS files with controlled variability for testing and benchmarking:
 
 ```bash
 # Generate 100 MB EDS with 10% variability
-build/tools/genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
+genrandomeds --ref-size-mb 100 --variability 0.10 -o random.eds
 
 # Generate l-EDS with minimum context length
-build/tools/genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds
+genrandomeds --ref-size-mb 50 --variability 0.05 --min-context 50 -o random.leds
 
 # High variability with more alternatives per variant
-build/tools/genrandomeds --ref-size-mb 10 --variability 0.20 \
+genrandomeds --ref-size-mb 10 --variability 0.20 \
   --min-alternatives 3 --max-alternatives 6 -o high_var.eds
 
 # Reproducible generation with seed
-build/tools/genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
+genrandomeds --ref-size-mb 10 --variability 0.10 --seed 42 -o test.eds
 ```
 
 **Options:**
@@ -275,7 +285,7 @@ ACGT{A,ACA}CGT{T,TG}
 - Each `{...}` represents a symbol (set of alternative strings)
 - Single strings: non-degenerate symbols
 - Multiple strings: degenerate symbols (variants)
-- Both formats are supported for reading; output format controlled by `--compact` flag
+- Both formats are supported for reading; output is compact by default — use `--full` to force full format
 
 ### SEDS Format (`.seds`)
 
@@ -319,17 +329,17 @@ The `experiments/` directory provides automated scripts for batch processing:
 ```bash
 cd experiments
 
-# Run full experiment on SARS-CoV-2 dataset (32 MSA files)
-./run_experiment.sh --dataset SARS_cov2 --format msa
+# Transform MSA/VCF/EDS datasets to EDS/l-EDS
+./transform_to_eds.sh --dataset <dataset_dir> --format msa
 
-# Custom length values
-./run_experiment.sh --dataset SARS_cov2 --format msa --lengths 3,5,10,15,20
+# Generate patterns for benchmarking
+./generate_patterns.sh --dataset <dataset_dir>
 
-# Process specific files
-./run_experiment.sh --dataset SARS_cov2 --format msa --pattern "20*"
+# Compute EDS statistics
+./generate_statistics.sh --dataset <dataset_dir>
 
 # Clean up generated outputs
-./clean_experiments.sh SARS_cov2
+./clean_experiments.sh <dataset_dir>
 ```
 
 See [experiments/README.md](experiments/README.md) for detailed documentation.
@@ -382,18 +392,17 @@ ctest --output-on-failure
 
 Available unit tests:
 
-| Executable | Coverage |
-|---|---|
-| `test_eds` | EDS parsing and operations |
-| `test_sources` | Source tracking |
-| `test_stats` | Statistics computation |
-| `test_merge` | Symbol merging algorithms |
-| `test_transform` | EDS transformations |
-| `test_msa` | MSA parsing |
-| `test_vcf` | VCF parsing |
-| `test_integration` | End-to-end CLI tool workflows |
-| `test_cli_errors` | CLI graceful failure on invalid input |
-| `test_memory_smoke` | Quick memory validation (~1-2 min) |
+| Executable | Coverage | Auto (ctest) |
+|---|---|---|
+| `test_eds` | EDS parsing and operations | Yes |
+| `test_sources` | Source tracking | Yes |
+| `test_stats` | Statistics computation | Yes |
+| `test_merge` | Symbol merging algorithms | Yes |
+| `test_msa` | MSA parsing | Yes |
+| `test_vcf` | VCF parsing | Yes |
+| `test_integration` | End-to-end CLI tool workflows | Yes |
+| `test_memory_smoke` | Quick memory validation (~1-2 min) | **No — run manually** |
+| `test_memory_stress` | Full memory stress + leak detection (~30+ min) | **No — run manually** |
 
 #### End-to-End Tests
 
@@ -414,6 +423,26 @@ bash tests/e2e/test_genpatterns.sh
 Each suite reports individual test results and a per-suite pass/fail summary. `run_all.sh` reports overall suite counts.
 
 > **Note:** Some `test_eds2leds.sh` tests currently fail intentionally — they document a known compact-output bug (see `TODO`). Expected output files already contain the correct format and will pass once the bug is fixed.
+
+#### Benchmarks
+
+Shell-based performance measurement for all CLI tools. Requires installed tools.
+
+```bash
+# Quick smoke run (~10 s, N=1)
+bash tests/bench/bench.sh --size quick
+
+# Standard run with median of 3 reps (~2 min)
+bash tests/bench/bench.sh --size standard
+
+# Check for regressions against stored baseline
+bash tests/bench/bench_compare.sh
+```
+
+Results are written to `tests/bench/results/YYYY-MM-DD_HH-MM-SS.csv` with columns:
+`timestamp, preset, scenario, tool, input_size_mb, runtime_s, peak_memory_mb, throughput_mb_s`.
+
+On first run, `bench_compare.sh` bootstraps `baseline.csv` from the latest result. To promote a new baseline after an intentional performance change: `cp tests/bench/results/LATEST.csv tests/bench/baseline.csv`.
 
 ## Using as a Library
 

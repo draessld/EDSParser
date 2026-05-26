@@ -373,29 +373,61 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
     size_t symbol1_start, size_t symbol1_size,
     size_t symbol2_start, size_t symbol2_size
 ) const {
+    // Preload both symbols' sources once — eliminates repeated read_source() mutex/cache
+    // overhead that would otherwise occur symbol1_size times per symbol2 entry.
+    std::vector<std::set<int>> src1(symbol1_size), src2(symbol2_size);
+    for (size_t i = 0; i < symbol1_size; ++i)
+        src1[i] = read_source(symbol1_start + i);
+    for (size_t j = 0; j < symbol2_size; ++j)
+        src2[j] = read_source(symbol2_start + j);
+
+    // Bitset fast path: if all path IDs fit in [1, 63], represent each source set as
+    // a uint64_t bitmask (bit k-1 = path k); universal marker {0} → ~0ULL.
+    bool use_bits = true;
+    for (size_t i = 0; i < symbol1_size && use_bits; ++i)
+        for (int id : src1[i]) if (id > 63) { use_bits = false; break; }
+    for (size_t j = 0; j < symbol2_size && use_bits; ++j)
+        for (int id : src2[j]) if (id > 63) { use_bits = false; break; }
+
+    auto to_bits = [](const std::set<int>& s) -> uint64_t {
+        if (s.count(0)) return ~0ULL;
+        uint64_t b = 0;
+        for (int id : s) b |= (1ULL << (id - 1));
+        return b;
+    };
+    auto bits_to_set = [](uint64_t b) -> std::set<int> {
+        if (b == ~0ULL) return {0};
+        std::set<int> s;
+        for (int k = 0; k < 63; ++k)
+            if (b & (1ULL << k)) s.insert(k + 1);
+        return s;
+    };
+
+    std::vector<uint64_t> bits1, bits2;
+    if (use_bits) {
+        bits1.resize(symbol1_size); bits2.resize(symbol2_size);
+        for (size_t i = 0; i < symbol1_size; ++i) bits1[i] = to_bits(src1[i]);
+        for (size_t j = 0; j < symbol2_size; ++j) bits2[j] = to_bits(src2[j]);
+    }
+
     std::vector<std::set<int>> merged_sources;
+    merged_sources.reserve(symbol1_size * symbol2_size);
 
-    // Compute all valid combinations (LINEAR merge: filter by intersection)
-    // Use read_source() (value) instead of read_source_ref() because this is called
-    // from multiple threads: another thread can evict the cache entry between the
-    // outer read_source_ref() call and inner loop usage, causing a dangling reference.
     for (size_t i = 0; i < symbol1_size; ++i) {
-        std::set<int> sources1 = read_source(symbol1_start + i);
-
         for (size_t j = 0; j < symbol2_size; ++j) {
-            std::set<int> sources2 = read_source(symbol2_start + j);
-
-            // Use static helper for intersection
-            std::set<int> intersection = intersect_sources(sources1, sources2);
-
-            // Only keep non-empty intersections
-            if (!intersection.empty()) {
-                merged_sources.push_back(intersection);
+            if (use_bits) {
+                uint64_t a = bits1[i], b = bits2[j];
+                uint64_t isect = (a == ~0ULL) ? b : (b == ~0ULL) ? a : a & b;
+                if (isect == 0) continue;
+                merged_sources.push_back(bits_to_set(isect));
+            } else {
+                std::set<int> isect = intersect_sources(src1[i], src2[j]);
+                if (isect.empty()) continue;
+                merged_sources.push_back(std::move(isect));
             }
         }
     }
 
-    // Validation: merged set must not be empty
     if (merged_sources.empty()) {
         throw std::runtime_error(
             "Merging symbols results in empty set (no valid source intersections)"

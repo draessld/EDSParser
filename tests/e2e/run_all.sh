@@ -13,6 +13,7 @@ SUITES=(
     test_eds2leds.sh
     test_stats.sh
     test_genpatterns.sh
+    test_genrandomeds.sh
 )
 
 SUITES_PASSED=0

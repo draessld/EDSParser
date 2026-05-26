@@ -204,30 +204,71 @@ namespace {
                     }
                 }
             } else {
-                // LINEAR merge: only count valid combinations (non-empty source intersection)
+                // LINEAR merge: only keep valid combinations (non-empty source intersection).
+
+                // Preload all source sets for both symbols once — eliminates repeated
+                // read_source() mutex/cache overhead from the inner loop.
+                std::vector<std::set<int>> src1(set1_size), src2(set2_size);
+                for (size_t i = 0; i < set1_size; ++i)
+                    src1[i] = eds.read_source(global_string_idx1 + i);
+                for (size_t j = 0; j < set2_size; ++j)
+                    src2[j] = eds.read_source(global_string_idx2 + j);
+
+                // Bitset fast path: if all path IDs fit in [1, 63], represent each
+                // source set as a uint64_t bitmask (bit k-1 = path k).
+                // Universal marker {0} maps to ~0ULL.  Intersection = bitwise AND: O(1).
+                bool use_bits = true;
+                for (size_t i = 0; i < set1_size && use_bits; ++i)
+                    for (int id : src1[i]) if (id > 63) { use_bits = false; break; }
+                for (size_t j = 0; j < set2_size && use_bits; ++j)
+                    for (int id : src2[j]) if (id > 63) { use_bits = false; break; }
+
+                auto to_bits = [](const std::set<int>& s) -> uint64_t {
+                    if (s.count(0)) return ~0ULL;  // universal
+                    uint64_t b = 0;
+                    for (int id : s) b |= (1ULL << (id - 1));
+                    return b;
+                };
+                auto bits_to_set = [](uint64_t b) -> std::set<int> {
+                    if (b == ~0ULL) return {0};
+                    std::set<int> s;
+                    for (int k = 0; k < 63; ++k)
+                        if (b & (1ULL << k)) s.insert(k + 1);
+                    return s;
+                };
+
+                std::vector<uint64_t> bits1, bits2;
+                if (use_bits) {
+                    bits1.resize(set1_size); bits2.resize(set2_size);
+                    for (size_t i = 0; i < set1_size; ++i) bits1[i] = to_bits(src1[i]);
+                    for (size_t j = 0; j < set2_size; ++j) bits2[j] = to_bits(src2[j]);
+                }
+
+                result.merged_sources.reserve(set1_size * set2_size);
+                result.merged_string_lengths.reserve(set1_size * set2_size);
+                result.valid_indices.reserve(set1_size * set2_size);
+
                 for (size_t i = 0; i < set1_size; ++i) {
-                    const std::set<int> sources1 = eds.read_source(global_string_idx1 + i);
                     Length len1 = metadata.string_lengths[global_string_idx1 + i];
-
                     for (size_t j = 0; j < set2_size; ++j) {
-                        const std::set<int> sources2 = eds.read_source(global_string_idx2 + j);
                         Length len2 = metadata.string_lengths[global_string_idx2 + j];
-
-                        // Use Sources static helper for intersection
-                        std::set<int> intersection = Sources::intersect_sources(sources1, sources2);
-
-                        // Only keep if intersection is non-empty
-                        if (!intersection.empty()) {
-                            result.merged_sources.push_back(intersection);
-                            result.merged_string_lengths.push_back(len1 + len2);
-                            result.valid_indices.push_back({i, j});  // Store which i,j combination is valid
+                        if (use_bits) {
+                            uint64_t a = bits1[i], b = bits2[j];
+                            uint64_t isect = (a == ~0ULL) ? b : (b == ~0ULL) ? a : a & b;
+                            if (isect == 0) continue;
+                            result.merged_sources.push_back(bits_to_set(isect));
+                        } else {
+                            std::set<int> isect = Sources::intersect_sources(src1[i], src2[j]);
+                            if (isect.empty()) continue;
+                            result.merged_sources.push_back(std::move(isect));
                         }
+                        result.merged_string_lengths.push_back(len1 + len2);
+                        result.valid_indices.push_back({i, j});
                     }
                 }
 
                 result.merged_size = result.merged_sources.size();
 
-                // Validation: merged set must not be empty
                 if (result.merged_size == 0) {
                     throw std::runtime_error(
                         "Merging positions " + std::to_string(pair.pos1) + " and " +

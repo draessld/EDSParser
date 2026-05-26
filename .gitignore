@@ -56,6 +56,10 @@ htmlcov/
 tests/unit/test_*
 !tests/unit/test_*.cpp
 
+# Benchmark results (keep .gitkeep and baseline.csv)
+tests/bench/results/*
+!tests/bench/results/.gitkeep
+
 # Documentation
 docs/_build/
 *.pdf.bak
