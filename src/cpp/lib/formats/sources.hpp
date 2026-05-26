@@ -59,6 +59,12 @@ public:
     // triggers further cache mutations (safe for tight loops that read, then act).
     const std::set<int>& read_source_ref(size_t string_id) const;
 
+    // Bulk byte-copy: writes the raw SEDS bytes for strings [start_idx, start_idx+count)
+    // directly to `out` without parsing or reformatting.  One seek + sequential reads;
+    // avoids per-string read_source() calls and std::set allocations.
+    // Only valid for SEDS format sources that were loaded from a file.
+    void copy_range_to_stream(size_t start_idx, size_t count, std::ostream& out) const;
+
     // Static helpers for source merging
     /**
      * Compute source set intersection when merging two string alternatives.

@@ -154,36 +154,41 @@ void Sources::parse_seds(std::istream& is) {
         base_positions_.reserve(cardinality_);
     }
 
-    size_t string_count = 0;
-    char ch;
+    // Bulk-read approach: avoids per-character get()+tellg() calls.
+    // Read in 64KB chunks and scan in memory; track absolute byte offset manually
+    // so seekg-compatible positions can be recorded without calling tellg().
+    constexpr std::streamsize CHUNK = 64 * 1024;
+    std::vector<char> buf(CHUNK);
+    std::streamoff file_offset = 0;
+    int depth = 0;
 
-    // Single-pass scan to build index.
-    // Record position using tellg() BEFORE consuming '{' so the stored
-    // streampos values are valid for seekg() calls in read_from_seds().
     while (is) {
-        std::streampos pos_before = is.tellg();
-        if (!is.get(ch)) break;
+        is.read(buf.data(), CHUNK);
+        std::streamsize n = is.gcount();
+        if (n <= 0) break;
 
-        if (ch == SET_OPEN) {
-            // Record the position of '{' (obtained from tellg before consuming)
-            base_positions_.push_back(pos_before);
-
-            // Skip until matching '}'
-            int depth = 1;
-            while (depth > 0 && is.get(ch)) {
-                if (ch == SET_OPEN) depth++;
-                else if (ch == SET_CLOSE) depth--;
+        for (std::streamsize i = 0; i < n; ++i) {
+            const char ch = buf[i];
+            if (ch == SET_OPEN) {
+                if (depth == 0) {
+                    base_positions_.push_back(
+                        static_cast<std::streampos>(file_offset + i));
+                }
+                ++depth;
+            } else if (ch == SET_CLOSE) {
+                --depth;
+            } else if (depth == 0 && !std::isspace(static_cast<unsigned char>(ch))) {
+                throw std::runtime_error(
+                    "Unexpected character in sEDS file: " + std::string(1, ch));
             }
-
-            string_count++;
-        } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-            throw std::runtime_error("Unexpected character in sEDS file: " +
-                                   std::string(1, ch));
         }
+
+        file_offset += n;
     }
 
+    const size_t string_count = base_positions_.size();
+
     if (cardinality_ == 0) {
-        // Auto-detect mode: set cardinality from parsed count
         cardinality_ = string_count;
     } else if (string_count != cardinality_) {
         throw std::runtime_error("sEDS: Source count (" +
@@ -267,6 +272,95 @@ std::set<int> Sources::read_from_edz_compressed(size_t string_id) const {
 // ================================================================================
 // PUBLIC ACCESS
 // ================================================================================
+
+void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream& out) const {
+    if (count == 0) return;
+    if (format_ != Format::SEDS) {
+        // Fallback for non-SEDS formats: use read_source per entry
+        for (size_t i = 0; i < count; ++i) {
+            const std::set<int> src = read_source(start_idx + i);
+            out << '{';
+            bool first = true;
+            for (int p : src) {
+                if (!first) out << ',';
+                out << p;
+                first = false;
+            }
+            out << '}';
+        }
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(io_mutex_);
+
+    if (start_idx >= base_positions_.size()) {
+        throw std::out_of_range("copy_range_to_stream: start_idx out of range");
+    }
+
+    auto target = base_positions_[start_idx];
+
+    // Fast path: the index has a position for start_idx+count, so we know the exact
+    // byte range without brace-counting.  Read precisely those bytes (no over-read),
+    // leaving the stream at base_positions_[start_idx+count] for the next call.
+    // When calls arrive in sequential order the tellg check eliminates the seekg syscall.
+    if (start_idx + count < base_positions_.size()) {
+        auto end_pos   = base_positions_[start_idx + count];
+        auto byte_count = static_cast<std::streamoff>(end_pos)
+                        - static_cast<std::streamoff>(target);
+        if (byte_count > 0) {
+            if (!stream_.good() || stream_.tellg() != target) {
+                stream_.clear();
+                stream_.seekg(target);
+            }
+            constexpr std::streamsize CHUNK = 64 * 1024;
+            char buf[CHUNK];
+            std::streamoff remaining = byte_count;
+            while (remaining > 0 && stream_.good()) {
+                std::streamsize to_read = static_cast<std::streamsize>(
+                    std::min(remaining, static_cast<std::streamoff>(CHUNK)));
+                stream_.read(buf, to_read);
+                std::streamsize n = stream_.gcount();
+                if (n <= 0) break;
+                out.write(buf, n);
+                remaining -= n;
+            }
+        }
+        return;
+    }
+
+    // Fallback for last batch: brace-count to find the exact end.
+    if (!stream_.good() || stream_.tellg() != target) {
+        stream_.clear();
+        stream_.seekg(target);
+    }
+
+    constexpr std::streamsize CHUNK = 64 * 1024;
+    char buf[CHUNK];
+    int sets_remaining = static_cast<int>(count);
+    int depth = 0;
+
+    while (sets_remaining > 0 && stream_.good()) {
+        stream_.read(buf, CHUNK);
+        std::streamsize n = stream_.gcount();
+        if (n <= 0) break;
+
+        std::streamsize cutoff = n;
+        for (std::streamsize i = 0; i < n; ++i) {
+            if (buf[i] == SET_OPEN)  ++depth;
+            else if (buf[i] == SET_CLOSE) {
+                --depth;
+                if (depth == 0) {
+                    --sets_remaining;
+                    if (sets_remaining == 0) {
+                        cutoff = i + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        out.write(buf, cutoff);
+    }
+}
 
 std::set<int> Sources::read_source(size_t string_id) const {
     // Validation

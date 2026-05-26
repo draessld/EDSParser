@@ -1,0 +1,71 @@
+# EDSParser – known issues and planned work
+
+## Optimizations
+
+### ~~[OPT] genrandomeds uses excessive memory (~64× output file size)~~ FIXED
+- **Fixed in:** `src/cpp/tools/genrandomeds.cpp`
+- **Root cause:** full reference string + full `ostringstream` output accumulated in
+  RAM before any disk write; variant position vector also stored up-front
+- **Fix:** rewrote as a streaming function (`generate_and_stream_eds`) that writes
+  each EDS symbol and SEDS entry directly to `ostream&` handles as generated.
+  Two independent PRNGs (`ref_gen(seed)` / `var_gen(seed^0x9e3779b9)`) allow
+  interleaving reference-character generation with variant decisions without
+  buffering. No position vector: `min_context==0` uses per-position Bernoulli
+  trials; `min_context>0` processes one segment at a time.
+- **Result:** peak RSS ~4 MB constant regardless of output size (was ~64× output)
+
+### [ARCH] eds2leds per-symbol throughput scales inversely with variability
+- **Observed:** 1% variability → 173 MB/s cartesian; 10% variability → 2.9 MB/s (60× drop)
+  even when input already satisfies the l-EDS constraint (--min-context ≥ l, no merging needed)
+- **Root cause:** not raw disk I/O — it is per-symbol parsing/seek/rewrite overhead in
+  METADATA_ONLY streaming mode; 10% variability produces ~10× more symbols than 1%
+- **Decision:** do NOT add block-parallel processing to recover this throughput
+  Rationale: parallel blocks require holding multiple blocks in RAM simultaneously,
+  contradicting the core design goal of constant memory for arbitrarily large files.
+  **Memory stability is higher priority than transformation speed.**
+- **Acceptable tradeoff:** a one-time transformation of a 100 GB file taking extra
+  minutes is fine; running out of memory on a laptop is not
+
+### ~~[OPT] eds2leds linear merge is slower than cartesian~~ LARGELY FIXED
+- **Original:** linear ~0.85 MB/s vs cartesian ~3.0 MB/s (3.58× gap) on 10% variability,
+  4-path data with --min-context 5
+- **Root cause (confirmed 2026-05):** I/O bottleneck, not computation. `strace` showed
+  ~1.5M syscalls per run: 983K `lseek` + 592K `read`. Three sources:
+  1. `read_symbol_from_stream()` called `seekg()` unconditionally before every symbol,
+     causing lseek + buffer-invalidation read per call (~800K syscalls)
+  2. `Sources::copy_range_to_stream()` read 64KB per symbol call but only used ~12 bytes,
+     then had to seek back on the next call (~400K unnecessary lseeks)
+  3. `Sources::parse_seds()` re-indexing (called once per iteration) used per-char
+     `get()` + `tellg()` — 2M function calls for a 2MB SEDS file (~0.2s user time)
+- **Fix (2026-05-26):**
+  1. `eds.cpp`: skip `seekg()` in `read_symbol_from_stream()` when stream is already
+     at target (check `!stream_.good() || stream_.tellg() != target` guard)
+  2. `sources.cpp`: `copy_range_to_stream()` fast path uses `base_positions_[start+count]`
+     to compute exact byte range, reads precisely those bytes, leaves stream positioned
+     at the start of the next entry (no over-read, no backward seek on next call)
+  3. `eds_transforms.cpp`: batch consecutive unmodified SEDS ranges in
+     `stream_merged_symbols_to_file()` — one `copy_range_to_stream()` call per run
+     of unmodified symbols instead of per-symbol (reduces calls from ~200K to ~2727)
+  4. `sources.cpp`: rewrote `parse_seds()` to use 64KB bulk reads + in-memory brace
+     counting instead of per-char `get()` + `tellg()` — ~32 syscalls vs ~2M
+- **Result:** linear ~4.32 MB/s vs cartesian ~5.43 MB/s (1.26× gap, down from 3.58×)
+  Cartesian also improved (5.43 MB/s vs original 3.03 MB/s) from the seek fix.
+  All 7 unit tests and 9/9 eds2leds e2e tests pass. Output byte-identical to pre-fix.
+- **Remaining gap (1.26×):** inherent — linear writes an extra SEDS output file per
+  iteration and must copy the input SEDS through; cartesian writes no SEDS data.
+  Further reduction would require eliminating the intermediate SEDS temp files or
+  switching to in-memory source tracking (different architecture).
+
+## Bugs
+
+### ~~[BUG] eds2leds compact output incorrectly wraps regular symbols in brackets~~ FIXED
+- **Fixed in:** `src/cpp/lib/transforms/eds_transforms.cpp`
+- **Root cause:** `eds_to_leds_linear` / `eds_to_leds_cartesian` never applied
+  the `compact` flag — the final output was a verbatim copy of the last
+  intermediate temp file (full-bracket format, required for METADATA_ONLY seeks)
+- **Fix:** added a compact serialisation step at the final-output point of both
+  functions; intermediate temp files remain in full-bracket format throughout;
+  single-alternative symbols are written without brackets only in the final output
+- **Tests:** `test_basic_cartesian`, `test_linear_with_sources`,
+  `test_larger_context_length`, `test_iterative_merging`,
+  `test_iterative_linear_merging` all pass; `tests/e2e/test_eds2leds.sh` is 9/9

@@ -779,12 +779,15 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
         throw std::runtime_error("File stream not available for reading symbol");
     }
 
-    // Seek to symbol position
-    stream_.clear();  // Clear any error flags
-    stream_.seekg(metadata_.base_positions[pos]);
-
-    if (!stream_) {
-        throw std::runtime_error("Failed to seek to position " + std::to_string(pos));
+    // Seek only when not already positioned here — sequential access avoids the lseek
+    // syscall and buffer invalidation that seekg() causes on every call.
+    auto target = metadata_.base_positions[pos];
+    if (!stream_.good() || stream_.tellg() != target) {
+        stream_.clear();
+        stream_.seekg(target);
+        if (!stream_) {
+            throw std::runtime_error("Failed to seek to position " + std::to_string(pos));
+        }
     }
 
     // Parse one symbol — supports both full ({str1,str2}) and compact (str) formats

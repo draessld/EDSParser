@@ -366,8 +366,25 @@ namespace {
         size_t num_context_blocks = 0;
         Position cumulative_common = 0;
         int cumulative_degenerate = 0;
+
         result.metadata.cum_common_positions.push_back(0);
         result.metadata.cum_degenerate_counts.push_back(0);
+
+        // SEDS batching: accumulate consecutive unmodified symbols and flush in one
+        // copy_range_to_stream() call instead of one call per symbol.  This lets
+        // copy_range_to_stream() use the exact-byte-range fast path (index lookup),
+        // read sequential data without seeking, and leave the SEDS stream positioned
+        // at the start of the next entry so the following call also skips its seek.
+        size_t seds_batch_start = 0;
+        size_t seds_batch_count = 0;
+
+        auto flush_seds_batch = [&]() {
+            if (has_sources && sources_out && seds_batch_count > 0) {
+                input_eds.get_sources_object()->copy_range_to_stream(
+                    seds_batch_start, seds_batch_count, *sources_out);
+                seds_batch_count = 0;
+            }
+        };
 
         // Stream output symbol-by-symbol
         for (size_t pos = 0; pos < input_eds.length(); ++pos) {
@@ -384,6 +401,9 @@ namespace {
 
             if (merge_map[pos] >= 0) {
                 // ===== MERGED POSITION =====
+                // Flush any accumulated unmodified SEDS before writing merged sources
+                flush_seds_batch();
+
                 const auto& merge_meta = merge_metadata[merge_map[pos]];
                 sym_size = merge_meta.merged_size;
 
@@ -448,18 +468,10 @@ namespace {
                 }
                 eds_out << '}';
 
+                // Accumulate SEDS entries into batch (flushed at merged positions and at end)
                 if (has_sources && sources_out) {
-                    for (size_t i = 0; i < sym_size; ++i) {
-                        const std::set<int> src = input_eds.read_source(global_idx + i);
-                        *sources_out << '{';
-                        bool first = true;
-                        for (int path_id : src) {
-                            if (!first) *sources_out << ',';
-                            *sources_out << path_id;
-                            first = false;
-                        }
-                        *sources_out << '}';
-                    }
+                    if (seds_batch_count == 0) seds_batch_start = global_idx;
+                    seds_batch_count += sym_size;
                 }
             }
 
@@ -490,6 +502,9 @@ namespace {
             result.m += sym_size;
             result.n++;
         }
+
+        // Flush any remaining accumulated SEDS entries
+        flush_seds_batch();
 
         // Finalize statistics
         result.metadata.avg_context_length = (num_context_blocks > 0)
