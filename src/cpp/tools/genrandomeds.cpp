@@ -6,39 +6,10 @@
 #include <filesystem>
 #include <iomanip>
 #include <random>
-#include <sstream>
 #include <algorithm>
-#include <set>
-#include <vector>
-#include <map>
 
 namespace po = boost::program_options;
 using namespace edsparser;
-
-/**
- * Metadata for tracking degenerate symbols during generation
- */
-struct SymbolMetadata {
-    bool is_degenerate;
-    size_t num_alternatives;
-
-    SymbolMetadata() : is_degenerate(false), num_alternatives(1) {}
-    SymbolMetadata(bool deg, size_t num_alts)
-        : is_degenerate(deg), num_alternatives(num_alts) {}
-};
-
-/**
- * Generate a random DNA sequence of given length from alphabet
- */
-std::string generate_random_sequence(size_t length, const std::string& alphabet, std::mt19937& gen) {
-    std::uniform_int_distribution<> dist(0, alphabet.size() - 1);
-    std::string seq;
-    seq.reserve(length);
-    for (size_t i = 0; i < length; ++i) {
-        seq += alphabet[dist(gen)];
-    }
-    return seq;
-}
 
 /**
  * Get a random character from alphabet different from the given character
@@ -51,145 +22,25 @@ char get_different_base(char base, const std::string& alphabet, std::mt19937& ge
         }
     }
     if (alternatives.empty()) {
-        return base; // Fallback if alphabet has only one character
+        return base;
     }
     std::uniform_int_distribution<> dist(0, alternatives.size() - 1);
     return alternatives[dist(gen)];
 }
 
 /**
- * Generate random variant positions with optional minimum context spacing
- */
-std::vector<size_t> generate_variant_positions(
-    size_t total_length,
-    size_t num_variants,
-    size_t min_context,
-    std::mt19937& gen
-) {
-    std::vector<size_t> positions;
-
-    if (num_variants == 0) {
-        return positions;
-    }
-
-    if (min_context == 0) {
-        // No spacing constraint - randomly sample positions
-        std::set<size_t> unique_positions;
-        std::uniform_int_distribution<size_t> dist(0, total_length - 1);
-
-        while (unique_positions.size() < num_variants && unique_positions.size() < total_length) {
-            unique_positions.insert(dist(gen));
-        }
-
-        positions.assign(unique_positions.begin(), unique_positions.end());
-    } else {
-        // With spacing constraint - ensure min_context between variants
-        size_t max_possible_variants = total_length / (min_context + 1);
-        size_t actual_variants = std::min(num_variants, max_possible_variants);
-
-        if (actual_variants < num_variants) {
-            std::cerr << "Warning: Can only fit " << actual_variants
-                      << " variants with min-context=" << min_context
-                      << " (requested: " << num_variants << ")\n";
-        }
-
-        // Divide sequence into segments and place one variant per segment
-        size_t segment_size = total_length / actual_variants;
-        std::uniform_int_distribution<size_t> offset_dist(0, std::min(segment_size - 1, min_context));
-
-        for (size_t i = 0; i < actual_variants; ++i) {
-            size_t base_pos = i * segment_size + min_context;
-            if (base_pos < total_length) {
-                size_t offset = offset_dist(gen);
-                size_t pos = std::min(base_pos + offset, total_length - 1);
-                positions.push_back(pos);
-            }
-        }
-    }
-
-    std::sort(positions.begin(), positions.end());
-    return positions;
-}
-
-/**
- * Build source sets with realistic haplotype-style phasing.
+ * Stream-generate EDS and SEDS with O(1) memory.
  *
- * For non-degenerate (context) symbols: all paths (every path traverses context).
- * For degenerate symbols: each path is assigned to exactly ONE alternative,
- * distributed round-robin across alternatives. This mirrors real phased data
- * where each haplotype follows one specific variant.
+ * Two independent PRNGs:
+ *   ref_gen(seed)              — reference character sampling only
+ *   var_gen(seed ^ 0x9e3779b9) — all variant-structure decisions
  *
- * This ensures linear merge is efficient: only paths sharing the same
- * alternative at both positions produce valid combinations (no combinatorial
- * explosion from all-paths-in-every-alternative).
+ * For min_context==0: per-position Bernoulli trial (expected count = total_bp * variability).
+ * For min_context>0:  one variant per segment, O(1) memory (no position vector).
  *
- * Returns a vector of sets where sources[string_idx] = set of path IDs
+ * Writes EDS symbols and SEDS entries incrementally as each position is decided.
  */
-std::vector<std::set<int>> build_source_sets(
-    const std::vector<SymbolMetadata>& symbols,
-    size_t num_paths
-) {
-    std::vector<std::set<int>> sources;
-
-    std::set<int> all_paths;
-    for (size_t path_id = 1; path_id <= num_paths; ++path_id) {
-        all_paths.insert(static_cast<int>(path_id));
-    }
-
-    for (const auto& symbol : symbols) {
-        if (!symbol.is_degenerate) {
-            // Context block: all paths traverse this symbol
-            sources.push_back(all_paths);
-        } else {
-            // Degenerate symbol: assign each path to exactly one alternative
-            // Round-robin distribution: path p goes to alternative (p-1) % num_alternatives
-            size_t num_alts = symbol.num_alternatives;
-            std::vector<std::set<int>> alt_sources(num_alts);
-            for (size_t path_id = 1; path_id <= num_paths; ++path_id) {
-                size_t alt_idx = (path_id - 1) % num_alts;
-                alt_sources[alt_idx].insert(static_cast<int>(path_id));
-            }
-            for (size_t alt_idx = 0; alt_idx < num_alts; ++alt_idx) {
-                sources.push_back(alt_sources[alt_idx]);
-            }
-        }
-    }
-
-    return sources;
-}
-
-/**
- * Write sources to .seds file
- */
-void write_seds_file(
-    const std::filesystem::path& seds_path,
-    const std::vector<std::set<int>>& sources
-) {
-    std::ofstream outfile(seds_path);
-    if (!outfile) {
-        throw std::runtime_error("Cannot open sources file: " + seds_path.string());
-    }
-
-    for (const auto& source_set : sources) {
-        outfile << "{";
-        bool first = true;
-        for (int path_id : source_set) {
-            if (!first) {
-                outfile << ",";
-            }
-            outfile << path_id;
-            first = false;
-        }
-        outfile << "}";
-    }
-
-    outfile.close();
-}
-
-/**
- * Generate EDS with random variants and track metadata for source generation
- */
-std::pair<std::string, std::vector<SymbolMetadata>> generate_random_eds_with_metadata(
+void generate_and_stream_eds(
     size_t ref_size_mb,
     double variability,
     size_t min_alternatives,
@@ -199,25 +50,40 @@ std::pair<std::string, std::vector<SymbolMetadata>> generate_random_eds_with_met
     const std::string& alphabet,
     size_t min_context,
     unsigned seed,
-    size_t& num_paths
+    size_t& num_paths,
+    std::ostream& eds_out,
+    std::ostream& seds_out
 ) {
-    std::mt19937 gen(seed);
-    std::ostringstream eds;
-    std::vector<SymbolMetadata> symbols;
+    std::mt19937 ref_gen(seed);
+    std::mt19937 var_gen(seed ^ 0x9e3779b9u);
 
-    // Calculate total length in base pairs
-    size_t total_bp = ref_size_mb * 1000000;
-
-    // Calculate number of variant sites
-    size_t num_variants = static_cast<size_t>(total_bp * variability);
-
-    // Calculate number of paths: ensure enough to cover all alternatives
+    const size_t total_bp = ref_size_mb * 1000000;
+    const size_t num_variants = static_cast<size_t>(total_bp * variability);
     num_paths = std::max(max_alternatives, size_t(3));
 
-    std::cerr << "Generating random EDS:\n";
+    std::uniform_int_distribution<> ref_char_dist(0, alphabet.size() - 1);
+    std::uniform_int_distribution<size_t> num_alt_dist(min_alternatives, max_alternatives);
+    std::uniform_int_distribution<size_t> indel_length_dist(1, variant_length_max);
+    std::uniform_real_distribution<double> variant_type_dist(0.0, 1.0);
+    std::uniform_real_distribution<double> indel_type_dist(0.0, 1.0);
+    std::uniform_real_distribution<double> bernoulli_dist(0.0, 1.0);
+
+    // Precompute all-paths SEDS entry (written once per context block)
+    std::string all_paths_seds;
+    {
+        all_paths_seds.reserve(2 + num_paths * 3);
+        all_paths_seds += '{';
+        for (size_t p = 1; p <= num_paths; ++p) {
+            if (p > 1) all_paths_seds += ',';
+            all_paths_seds += std::to_string(p);
+        }
+        all_paths_seds += '}';
+    }
+
+    std::cerr << "Generating random EDS (streaming, O(1) memory):\n";
     std::cerr << "  Reference size: " << ref_size_mb << " MB (" << total_bp << " bp)\n";
     std::cerr << "  Variability: " << (variability * 100) << "%\n";
-    std::cerr << "  Number of variant sites: " << num_variants << "\n";
+    std::cerr << "  Expected variant sites: " << num_variants << "\n";
     std::cerr << "  Alternatives per variant: [" << min_alternatives << ", " << max_alternatives << "]\n";
     std::cerr << "  Max variant length: " << variant_length_max << " bp\n";
     std::cerr << "  SNP ratio: " << (snp_ratio * 100) << "%\n";
@@ -226,108 +92,132 @@ std::pair<std::string, std::vector<SymbolMetadata>> generate_random_eds_with_met
         std::cerr << "  Minimum context: " << min_context << " bp (l-EDS mode)\n";
     }
 
-    // Generate reference sequence
-    std::cerr << "Generating reference sequence...\n";
-    std::string reference = generate_random_sequence(total_bp, alphabet, gen);
+    // Helper: write a context block [from, to) and its SEDS entry
+    auto write_context_block = [&](size_t len) {
+        if (len == 0) return;
+        eds_out << '{';
+        for (size_t i = 0; i < len; ++i)
+            eds_out << alphabet[ref_char_dist(ref_gen)];
+        eds_out << '}';
+        seds_out << all_paths_seds;
+    };
 
-    // Generate variant positions
-    std::cerr << "Placing variant sites...\n";
-    std::vector<size_t> variant_positions = generate_variant_positions(
-        total_bp, num_variants, min_context, gen
-    );
+    // Helper: write a degenerate symbol and its SEDS round-robin entries.
+    // ref_char must already be generated (and consumed from ref_gen).
+    auto write_variant = [&](char ref_char) {
+        const size_t num_alts = num_alt_dist(var_gen);
 
-    std::cerr << "Building EDS with " << variant_positions.size() << " variant sites...\n";
+        eds_out << '{' << ref_char;
+        for (size_t alt = 1; alt < num_alts; ++alt) {
+            eds_out << ',';
+            if (variant_type_dist(var_gen) < snp_ratio) {
+                eds_out << get_different_base(ref_char, alphabet, var_gen);
+            } else {
+                if (indel_type_dist(var_gen) < 0.5) {
+                    // insertion: ref base + extra chars
+                    eds_out << ref_char;
+                    const size_t ins_len = indel_length_dist(var_gen);
+                    for (size_t i = 0; i < ins_len; ++i)
+                        eds_out << alphabet[ref_char_dist(ref_gen)];
+                }
+                // else deletion: empty string between commas
+            }
+        }
+        eds_out << '}';
 
-    // Distributions
-    std::uniform_int_distribution<size_t> num_alt_dist(min_alternatives, max_alternatives);
-    std::uniform_int_distribution<size_t> indel_length_dist(1, variant_length_max);
-    std::uniform_real_distribution<double> variant_type_dist(0.0, 1.0);
-    std::uniform_real_distribution<double> indel_type_dist(0.0, 1.0);
+        // SEDS: round-robin assignment — path p → alternative (p-1) % num_alts
+        for (size_t a = 0; a < num_alts; ++a) {
+            seds_out << '{';
+            bool first = true;
+            for (size_t p = a + 1; p <= num_paths; p += num_alts) {
+                if (!first) seds_out << ',';
+                seds_out << p;
+                first = false;
+            }
+            seds_out << '}';
+        }
+    };
 
-    size_t pos = 0;
-    size_t var_idx = 0;
-    size_t progress_interval = std::max(size_t(1), total_bp / 100); // Report every 1%
+    const size_t progress_interval = std::max(size_t(1), total_bp / 100);
     size_t last_progress = 0;
 
-    while (pos < total_bp) {
-        // Progress reporting
+    auto report_progress = [&](size_t pos) {
         if (pos - last_progress >= progress_interval) {
-            double percent = (100.0 * pos) / total_bp;
             std::cerr << "  Progress: " << std::fixed << std::setprecision(1)
-                      << percent << "%\r" << std::flush;
+                      << (100.0 * pos / total_bp) << "%\r" << std::flush;
             last_progress = pos;
         }
+    };
 
-        // Check if current position is a variant site
-        if (var_idx < variant_positions.size() && pos == variant_positions[var_idx]) {
-            // Generate degenerate symbol
-            size_t num_alternatives = num_alt_dist(gen);
+    if (min_context == 0) {
+        // --- Case A: no spacing constraint; per-position Bernoulli ---
+        size_t pos = 0;
+        size_t context_len = 0;
 
-            // Track metadata
-            symbols.emplace_back(true, num_alternatives);
+        while (pos < total_bp) {
+            report_progress(pos);
 
-            eds << "{";
-
-            // First alternative is always the reference base
-            char ref_base = reference[pos];
-            eds << ref_base;
-
-            // Generate additional alternatives
-            for (size_t alt_idx = 1; alt_idx < num_alternatives; ++alt_idx) {
-                eds << ",";
-
-                double type_rand = variant_type_dist(gen);
-
-                if (type_rand < snp_ratio) {
-                    // SNP: different base
-                    char alt_base = get_different_base(ref_base, alphabet, gen);
-                    eds << alt_base;
-                } else {
-                    // Indel
-                    double indel_rand = indel_type_dist(gen);
-
-                    if (indel_rand < 0.5) {
-                        // Insertion: reference + extra bases
-                        eds << ref_base;
-                        size_t ins_length = indel_length_dist(gen);
-                        eds << generate_random_sequence(ins_length, alphabet, gen);
-                    } else {
-                        // Deletion: empty string
-                        // Leave empty (nothing between commas)
-                    }
-                }
+            if (bernoulli_dist(var_gen) < variability) {
+                write_context_block(context_len);
+                context_len = 0;
+                write_variant(alphabet[ref_char_dist(ref_gen)]);
+            } else {
+                // Advance ref_gen for this context character later (in write_context_block)
+                ++context_len;
             }
-
-            eds << "}";
-            pos++;
-            var_idx++;
-        } else {
-            // Generate non-degenerate symbol (context block)
-            size_t next_variant_pos = (var_idx < variant_positions.size())
-                                       ? variant_positions[var_idx]
-                                       : total_bp;
-            size_t block_length = next_variant_pos - pos;
-
-            // Track metadata
-            symbols.emplace_back(false, 1);
-
-            eds << "{" << reference.substr(pos, block_length) << "}";
-            pos += block_length;
+            ++pos;
         }
+        write_context_block(context_len);
+
+    } else {
+        // --- Case B: min_context spacing; segment-based, one variant per segment ---
+        if (num_variants == 0) {
+            write_context_block(total_bp);
+            std::cerr << "  Progress: 100.0%\n";
+            return;
+        }
+
+        const size_t max_possible = total_bp / (min_context + 1);
+        const size_t actual_variants = std::min(num_variants, max_possible);
+
+        if (actual_variants < num_variants) {
+            std::cerr << "Warning: Can only fit " << actual_variants
+                      << " variants with min-context=" << min_context
+                      << " (requested: " << num_variants << ")\n";
+        }
+
+        const size_t segment_size = total_bp / actual_variants;
+        std::uniform_int_distribution<size_t> offset_dist(
+            0, std::min(segment_size - 1, min_context));
+
+        size_t pos = 0;
+
+        for (size_t seg = 0; seg < actual_variants; ++seg) {
+            report_progress(pos);
+
+            const size_t base_pos = seg * segment_size + min_context;
+            if (base_pos >= total_bp) break;
+
+            const size_t var_pos = std::min(base_pos + offset_dist(var_gen), total_bp - 1);
+
+            // Context from current pos up to var_pos
+            write_context_block(var_pos - pos);
+            write_variant(alphabet[ref_char_dist(ref_gen)]);
+            pos = var_pos + 1;
+        }
+
+        // Trailing context
+        write_context_block(total_bp - pos);
     }
 
     std::cerr << "  Progress: 100.0%\n";
     std::cerr << "EDS generation complete\n";
-
-    return {eds.str(), symbols};
 }
 
 int main(int argc, char** argv) {
-    // Start performance tracking
     Timer timer;
     timer.start();
 
-    // Helper to print performance info to stderr
     auto print_performance = [&timer]() {
         timer.stop();
         double runtime = timer.elapsed_seconds();
@@ -357,7 +247,7 @@ int main(int argc, char** argv) {
             ("output,o", po::value<std::filesystem::path>(&output_file)->required(),
              "Output EDS file (.eds or .leds)")
             ("ref-size-mb", po::value<size_t>(&ref_size_mb)->required(),
-             "Reference size in megabytes (1 MB = 1,000,000 bp)")
+             "Reference size in megabases (1 MB = 1,000,000 bp)")
             ("variability,v", po::value<double>(&variability)->default_value(0.10),
              "Fraction of positions with variants (e.g., 0.10 = 10%)")
             ("min-alternatives", po::value<size_t>(&min_alternatives)->default_value(2),
@@ -390,85 +280,61 @@ int main(int argc, char** argv) {
 
         po::notify(vm);
 
-        // Validate parameters
         if (ref_size_mb == 0) {
             std::cerr << "Error: Reference size must be greater than 0 MB\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (variability < 0.0 || variability > 1.0) {
             std::cerr << "Error: Variability must be between 0.0 and 1.0\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (min_alternatives < 2) {
             std::cerr << "Error: Minimum alternatives must be at least 2\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (max_alternatives < min_alternatives) {
             std::cerr << "Error: Maximum alternatives must be >= minimum alternatives\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (variant_length_max == 0) {
             std::cerr << "Error: Variant length max must be greater than 0\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (snp_ratio < 0.0 || snp_ratio > 1.0) {
             std::cerr << "Error: SNP ratio must be between 0.0 and 1.0\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
-
         if (alphabet.empty()) {
             std::cerr << "Error: Alphabet cannot be empty\n";
-            print_performance();
-            return 1;
+            print_performance(); return 1;
         }
 
-        // Generate random EDS with metadata
-        size_t num_paths = 0;
-        auto [eds_string, symbols] = generate_random_eds_with_metadata(
-            ref_size_mb,
-            variability,
-            min_alternatives,
-            max_alternatives,
-            variant_length_max,
-            snp_ratio,
-            alphabet,
-            min_context,
-            seed,
-            num_paths
-        );
-
-        // Build source sets (all paths on every string)
-        std::cerr << "Generating source paths...\n";
-        auto sources = build_source_sets(symbols, num_paths);
-
-        // Write EDS file
-        std::cerr << "Writing to file: " << output_file << "\n";
-        std::ofstream outfile(output_file);
-        if (!outfile) {
-            std::cerr << "Error: Cannot open output file: " << output_file << "\n";
-            print_performance();
-            return 1;
-        }
-        outfile << eds_string;
-        outfile.close();
-
-        // Write sources file (.seds)
         std::filesystem::path seds_path = output_file;
         seds_path.replace_extension(".seds");
 
-        std::cerr << "Writing sources to file: " << seds_path << "\n";
-        write_seds_file(seds_path, sources);
+        std::ofstream eds_file(output_file);
+        if (!eds_file) {
+            std::cerr << "Error: Cannot open output file: " << output_file << "\n";
+            print_performance(); return 1;
+        }
+
+        std::ofstream seds_file(seds_path);
+        if (!seds_file) {
+            std::cerr << "Error: Cannot open sources file: " << seds_path << "\n";
+            print_performance(); return 1;
+        }
+
+        size_t num_paths = 0;
+        generate_and_stream_eds(
+            ref_size_mb, variability,
+            min_alternatives, max_alternatives,
+            variant_length_max, snp_ratio,
+            alphabet, min_context,
+            seed, num_paths,
+            eds_file, seds_file);
+
+        eds_file.close();
+        seds_file.close();
 
         std::cerr << "Successfully generated random EDS with sources\n";
         std::cerr << "Output written to: " << output_file << "\n";

@@ -37,7 +37,7 @@ cd build/src/cpp && ctest --output-on-failure
 # Run specific test
 cd build/src/cpp && ./test_eds
 
-# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_transform, test_msa, test_vcf, test_integration, test_cli_errors, test_memory_smoke
+# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration
 
 # Manual memory stress tests (too slow for CI, run manually):
 cd build/src/cpp && ./test_memory_stress
@@ -123,10 +123,12 @@ Transformation tools (each focused on a specific conversion):
 Utility tools:
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
 - `edsparser-genpatterns`: Generate random patterns for benchmarking
-- `genrandomeds` (**internal/not installed**): Generate synthetic EDS files with controlled variability for testing/benchmarking
+- `genrandomeds`: Generate synthetic EDS files with controlled variability for testing/benchmarking
   - Requires `--ref-size-mb` (size) and `-o` (output); key options: `-v` (variability), `--min-context`, `--seed`
   - Automatically generates paired `.seds` source file using **round-robin haplotype assignment**: each path is assigned to exactly one alternative per degenerate symbol, matching real phased data. This prevents Cartesian product explosion during linear merge.
-  - Not installed to `~/.local/bin/` — run from `build/tools/genrandomeds` or via `experiments/generate_random_dataset.sh`
+  - **O(1) memory**: streams EDS and SEDS directly to disk symbol-by-symbol; peak RSS ~4 MB constant regardless of output size. Uses two independent PRNGs (`ref_gen(seed)` / `var_gen(seed^0x9e3779b9)`) — same `--seed` is reproducible but produces different output than pre-2026-05 builds.
+  - `min_context==0`: per-position Bernoulli trials (expected variant count = `total_bp × variability`); `min_context>0`: one variant per segment, processed iteratively.
+  - Installed to `~/.local/bin/` by `./INSTALL.sh`; also available at `build/tools/genrandomeds`
 
 **Performance Output**: All tools write runtime and peak memory to stderr on completion:
 ```
@@ -537,10 +539,9 @@ jupyter notebook experiments/datasets/SARS_cov2/03_eds_statistics.ipynb
 
 | Test | Auto (ctest) | Purpose |
 |------|-------------|---------|
-| `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_transform`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
+| `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
-| `test_cli_errors` | Yes | CLI graceful failure on invalid input, non-zero exit codes |
-| `test_memory_smoke` | Yes | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
+| `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
 | `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
 
 ### Running Memory Tests Manually

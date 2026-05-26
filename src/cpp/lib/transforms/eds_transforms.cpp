@@ -749,12 +749,29 @@ void eds_to_leds_linear(
     }
 
     // Copy final result to output streams
-    {
+    if (!compact) {
         std::ifstream final_eds(current_eds_file);
         if (!final_eds) {
             throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
         }
         output << final_eds.rdbuf();
+    } else {
+        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
+        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+        // seeks); compact serialisation is only applied to the final output stream.
+        for (size_t i = 0; i < eds.length(); ++i) {
+            const StringSet sym = eds.read_symbol(i);
+            if (sym.size() == 1) {
+                output << sym[0];
+            } else {
+                output << '{';
+                for (size_t j = 0; j < sym.size(); ++j) {
+                    if (j > 0) output << ',';
+                    output << sym[j];
+                }
+                output << '}';
+            }
+        }
     }
 
     if (phasing_output && has_sources) {
@@ -960,12 +977,29 @@ void eds_to_leds_cartesian(
     }
 
     // Copy final result to output stream
-    {
+    if (!compact) {
         std::ifstream final_eds(current_eds_file);
         if (!final_eds) {
             throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
         }
         output << final_eds.rdbuf();
+    } else {
+        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
+        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+        // seeks); compact serialisation is only applied to the final output stream.
+        for (size_t i = 0; i < eds.length(); ++i) {
+            const StringSet sym = eds.read_symbol(i);
+            if (sym.size() == 1) {
+                output << sym[0];
+            } else {
+                output << '{';
+                for (size_t j = 0; j < sym.size(); ++j) {
+                    if (j > 0) output << ',';
+                    output << sym[j];
+                }
+                output << '}';
+            }
+        }
     }
 
     // Cleanup temp directory
