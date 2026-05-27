@@ -14,9 +14,13 @@ show_help() {
     cat <<EOF
 Usage: bench.sh [--size PRESET]
 
-  --size quick      N=1, EDS 1-5 MB,    transform at 1 MB   (~10 s)
-  --size standard   N=3, EDS 1-10 MB,   transform at 5 MB   (~2 min)  [default]
-  --size large      N=3, EDS 5-50 MB,   transform at 20 MB  (~15 min)
+  --size quick      N=1, EDS 1-5 MB,    transform at 1+5 MB        (~30 s)
+  --size standard   N=3, EDS 1-10 MB,   transform at 1+5+10 MB     (~5 min)  [default]
+  --size large      N=3, EDS 5-50 MB,   transform at 5+10+20+50 MB (~25 min)
+
+All tools (eds2leds cartesian/linear, edsparser-genpatterns) are run across
+the full SIZES_MB array so that the size-sweep plot shows trend lines, not
+single points.
 
 Sweep scenarios (variability, context length, path count) are included in
 standard and large presets but skipped in quick.
@@ -38,8 +42,6 @@ case "$PRESET" in
     quick)
         N_REPS=1
         SIZES_MB=(1 5)
-        TRANSFORM_CART_MB=1
-        TRANSFORM_LINEAR_MB=1
         VAR_SWEEP_MB=0          # 0 = skip sweep scenarios
         CTX_SWEEP_MB=0
         PATH_SWEEP_MB=0
@@ -47,8 +49,6 @@ case "$PRESET" in
     standard)
         N_REPS=3
         SIZES_MB=(1 5 10)
-        TRANSFORM_CART_MB=5
-        TRANSFORM_LINEAR_MB=5
         VAR_SWEEP_MB=5          # variability sweep input size
         CTX_SWEEP_MB=5          # context length sweep input size
         PATH_SWEEP_MB=5         # path count sweep input size
@@ -59,8 +59,6 @@ case "$PRESET" in
     large)
         N_REPS=3
         SIZES_MB=(5 10 20 50)
-        TRANSFORM_CART_MB=20
-        TRANSFORM_LINEAR_MB=10
         VAR_SWEEP_MB=10
         CTX_SWEEP_MB=10
         PATH_SWEEP_MB=10
@@ -82,15 +80,15 @@ bench_log "EDSParser benchmark — preset=$PRESET  N=$N_REPS"
 bench_log "Results → $CSV_FILE"
 echo ""
 
-run_scenario_genrandomeds        "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
+run_scenario_genrandomeds          "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
 echo ""
-run_scenario_eds2leds_cartesian  "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "$TRANSFORM_CART_MB"
+run_scenario_eds2leds_cartesian    "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
 echo ""
-run_scenario_eds2leds_linear     "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "$TRANSFORM_LINEAR_MB"
+run_scenario_eds2leds_linear       "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
 echo ""
-run_scenario_edsparser_stats     "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
+run_scenario_edsparser_stats       "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
 echo ""
-run_scenario_edsparser_genpatterns "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[-1]}"
+run_scenario_edsparser_genpatterns "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"
 
 if [ "$VAR_SWEEP_MB" -gt 0 ]; then
     echo ""
@@ -116,3 +114,13 @@ fi
 echo ""
 bench_log "Done. Results written to: $CSV_FILE"
 bench_log "Run bench_compare.sh to check for regressions."
+
+echo ""
+if python3 -c "import matplotlib, pandas" 2>/dev/null; then
+    bench_log "Generating plots..."
+    python3 "$SCRIPT_DIR/bench_plot.py" "$CSV_FILE" && \
+        bench_log "Plots → $RESULTS_DIR/plots/$(basename "${CSV_FILE%.csv}")/"
+else
+    bench_log "Skipping plots — install matplotlib and pandas to enable:"
+    bench_log "  pip install matplotlib pandas"
+fi
