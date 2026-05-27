@@ -1,0 +1,47 @@
+{
+  "file": {
+    "path": "/home/draesdom/Documents/uni_projects/biofmi/external/edsparser/tests/e2e/data/eds/simple.eds",
+    "size_bytes": 25
+  },
+  "structure": {
+    "n_symbols": 4,
+    "N_characters": 14,
+    "m_strings": 6,
+    "degenerate_symbols": 2,
+    "regular_symbols": 2
+  },
+  "context_lengths": {
+    "min": 3,
+    "max": 4,
+    "avg": 3.50
+  },
+  "variations": {
+    "total_change_size": 2,
+    "common_characters": 7,
+    "empty_strings": 0
+  },
+  "memory": {
+    "current_bytes": 171,
+    "current_mb": 0.0,
+    "estimated_full_bytes": 362,
+    "estimated_full_mb": 0.0,
+    "reduction_factor": 2.1
+  },
+  "sources": {
+    "loaded": false,
+    "file_provided": false,
+    "num_paths": 0,
+    "max_paths_per_string": 0,
+    "avg_paths_per_string": 0.00
+  },
+  "recommendations": {
+    "needs_transformation": true,
+    "ready_for_indexing": false,
+    "min_context_length": 3,
+    "suggested_command": "edsparser-transform -i simple.eds -l 5"
+  },
+  "performance": {
+    "runtime_s": 0.00,
+    "peak_memory_mb": 3.9
+  }
+}

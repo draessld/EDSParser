@@ -204,30 +204,71 @@ namespace {
                     }
                 }
             } else {
-                // LINEAR merge: only count valid combinations (non-empty source intersection)
+                // LINEAR merge: only keep valid combinations (non-empty source intersection).
+
+                // Preload all source sets for both symbols once — eliminates repeated
+                // read_source() mutex/cache overhead from the inner loop.
+                std::vector<std::set<int>> src1(set1_size), src2(set2_size);
+                for (size_t i = 0; i < set1_size; ++i)
+                    src1[i] = eds.read_source(global_string_idx1 + i);
+                for (size_t j = 0; j < set2_size; ++j)
+                    src2[j] = eds.read_source(global_string_idx2 + j);
+
+                // Bitset fast path: if all path IDs fit in [1, 63], represent each
+                // source set as a uint64_t bitmask (bit k-1 = path k).
+                // Universal marker {0} maps to ~0ULL.  Intersection = bitwise AND: O(1).
+                bool use_bits = true;
+                for (size_t i = 0; i < set1_size && use_bits; ++i)
+                    for (int id : src1[i]) if (id > 63) { use_bits = false; break; }
+                for (size_t j = 0; j < set2_size && use_bits; ++j)
+                    for (int id : src2[j]) if (id > 63) { use_bits = false; break; }
+
+                auto to_bits = [](const std::set<int>& s) -> uint64_t {
+                    if (s.count(0)) return ~0ULL;  // universal
+                    uint64_t b = 0;
+                    for (int id : s) b |= (1ULL << (id - 1));
+                    return b;
+                };
+                auto bits_to_set = [](uint64_t b) -> std::set<int> {
+                    if (b == ~0ULL) return {0};
+                    std::set<int> s;
+                    for (int k = 0; k < 63; ++k)
+                        if (b & (1ULL << k)) s.insert(k + 1);
+                    return s;
+                };
+
+                std::vector<uint64_t> bits1, bits2;
+                if (use_bits) {
+                    bits1.resize(set1_size); bits2.resize(set2_size);
+                    for (size_t i = 0; i < set1_size; ++i) bits1[i] = to_bits(src1[i]);
+                    for (size_t j = 0; j < set2_size; ++j) bits2[j] = to_bits(src2[j]);
+                }
+
+                result.merged_sources.reserve(set1_size * set2_size);
+                result.merged_string_lengths.reserve(set1_size * set2_size);
+                result.valid_indices.reserve(set1_size * set2_size);
+
                 for (size_t i = 0; i < set1_size; ++i) {
-                    const std::set<int> sources1 = eds.read_source(global_string_idx1 + i);
                     Length len1 = metadata.string_lengths[global_string_idx1 + i];
-
                     for (size_t j = 0; j < set2_size; ++j) {
-                        const std::set<int> sources2 = eds.read_source(global_string_idx2 + j);
                         Length len2 = metadata.string_lengths[global_string_idx2 + j];
-
-                        // Use Sources static helper for intersection
-                        std::set<int> intersection = Sources::intersect_sources(sources1, sources2);
-
-                        // Only keep if intersection is non-empty
-                        if (!intersection.empty()) {
-                            result.merged_sources.push_back(intersection);
-                            result.merged_string_lengths.push_back(len1 + len2);
-                            result.valid_indices.push_back({i, j});  // Store which i,j combination is valid
+                        if (use_bits) {
+                            uint64_t a = bits1[i], b = bits2[j];
+                            uint64_t isect = (a == ~0ULL) ? b : (b == ~0ULL) ? a : a & b;
+                            if (isect == 0) continue;
+                            result.merged_sources.push_back(bits_to_set(isect));
+                        } else {
+                            std::set<int> isect = Sources::intersect_sources(src1[i], src2[j]);
+                            if (isect.empty()) continue;
+                            result.merged_sources.push_back(std::move(isect));
                         }
+                        result.merged_string_lengths.push_back(len1 + len2);
+                        result.valid_indices.push_back({i, j});
                     }
                 }
 
                 result.merged_size = result.merged_sources.size();
 
-                // Validation: merged set must not be empty
                 if (result.merged_size == 0) {
                     throw std::runtime_error(
                         "Merging positions " + std::to_string(pair.pos1) + " and " +
@@ -295,25 +336,168 @@ namespace {
      * @param sources_out Output stream for sources data (nullptr if no sources)
      * @return StreamResult containing metadata for the written file
      */
+// ─────────────────────────────────────────────────────────────────────────────
+// stream_merged_symbols_to_file — write one iteration's EDS (and SEDS) output
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// BIG PICTURE — where this function sits in the overall pipeline
+//
+//   eds_to_leds_linear() iteratively transforms an EDS into an l-EDS by
+//   merging adjacent symbols that violate the l-context rule.  Each iteration
+//   looks like this:
+//
+//     1. select_independent_merge_pairs() — find which pairs to merge (metadata only)
+//     2. compute_merge_metadata()         — compute what the merged symbols look like
+//     3. THIS FUNCTION                    — write the new EDS (and SEDS if applicable)
+//     4. EDS::from_metadata()             — create a new EDS object pointing at the
+//                                          temp file just written, using the metadata
+//                                          returned by this function (no re-parse)
+//
+//   This function is the single place where I/O happens for a complete iteration.
+//   All symbols (merged and unmodified alike) are written exactly once.
+//
+// INPUTS
+//
+//   input_eds       The EDS from the previous iteration (or the original input).
+//                   Loaded in METADATA_ONLY mode: only the index is in RAM; the
+//                   actual character data is read on demand from the temp file.
+//
+//   merge_metadata  A vector of MergeMetadata structs, one per merge pair.  Each
+//                   struct contains:
+//                     • original_pos1, original_pos2 — the two positions to merge
+//                     • merged_size                  — number of strings in the result
+//                     • merged_string_lengths        — length of each result string
+//                     • valid_indices                — list of (i, j) pairs giving
+//                       which alternative from symbol1 concatenates with which from
+//                       symbol2 (for CARTESIAN: all pairs; for LINEAR: only pairs
+//                       whose source sets intersect non-trivially)
+//                     • merged_sources               — for each valid (i,j) pair,
+//                       the resulting source set (intersection of the two inputs)
+//
+//   eds_out         Output stream for the new EDS temp file.
+//
+//   sources_out     Output stream for the new SEDS temp file, or nullptr if this
+//                   is a cartesian transform (no source tracking).
+//
+// OUTPUTS
+//
+//   Returns a StreamResult containing:
+//     • metadata   — a fully populated EDS::Metadata struct describing the output
+//                    file, built *inline* as we write.  This lets the caller create
+//                    the next EDS object via EDS::from_metadata() without re-reading
+//                    the file.
+//     • n          — symbol count in the output
+//     • m          — total string count (sum of all symbol sizes)
+//     • N          — total character count
+//
+// THE MERGE MAP — how we navigate merged vs unmodified positions
+//
+//   Before entering the main loop we build two lookup tables over the input
+//   positions [0, input_eds.length()):
+//
+//   merge_map[pos]:  if pos is the *first* position of a merge pair, this holds
+//                    the index into merge_metadata[]; otherwise -1.
+//
+//   skip[pos]:       true if pos is the *second* position of a merge pair (i.e.
+//                    it has been absorbed into its predecessor and should produce
+//                    no output symbol of its own).
+//
+//   Every position falls into exactly one of three categories:
+//     • skip[pos] == true           → consumed; produce no output, skip.
+//     • merge_map[pos] >= 0         → first of a merge pair; produce one merged
+//                                    output symbol by concatenating pos and pos+1.
+//     • otherwise (both false)      → unmodified; copy symbol verbatim.
+//
+// THE SEDS BATCHING OPTIMISATION
+//
+//   When source tracking is enabled, for each output symbol we must write the
+//   corresponding source sets to `sources_out`.  For unmodified symbols the
+//   source data exists unchanged in the *input* SEDS file; we need only copy
+//   the raw bytes.  For merged symbols the new source sets are the computed
+//   intersection sets from merge_metadata, and we serialise them character by
+//   character.
+//
+//   The key insight: consecutive unmodified symbols have consecutive source
+//   entries in the input SEDS file.  If positions p, p+1, p+2 are all
+//   unmodified, their SEDS entries sit at
+//     base_positions_[cum_set_sizes[p]]  …  base_positions_[cum_set_sizes[p+3]]
+//   — a single contiguous byte range.  Instead of calling copy_range_to_stream()
+//   once per symbol (one seek + one tiny read each time), we can accumulate the
+//   range across the entire run of consecutive unmodified symbols and issue a
+//   single call at the boundary.
+//
+//   Concretely, the pattern is:
+//     for each unmodified pos:
+//         extend the pending batch by sym_size string entries
+//     when a merged pos is encountered (or the loop ends):
+//         flush the batch: copy_range_to_stream(batch_start, batch_count, out)
+//         reset batch state
+//
+//   With 10% variability and 2 727 merge pairs per iteration, the number of
+//   copy_range_to_stream() calls drops from ~200 000 (one per symbol) to ~2 727
+//   (one per merge boundary).  Combined with copy_range_to_stream()'s own
+//   sequential seek elimination, this cuts SEDS I/O from ~400 000 syscalls to
+//   ~5 000 syscalls per iteration.
+//
+// METADATA TRACKING — building the next iteration's index inline
+//
+//   As we write each output symbol we simultaneously build the EDS::Metadata
+//   struct for the output file.  The key fields:
+//
+//   base_positions[]     byte offset of each symbol's '{' in eds_out.
+//                        Captured via eds_out.tellp() just before writing '{'.
+//
+//   symbol_sizes[]       number of alternatives per output symbol.
+//
+//   string_lengths[]     character length of each individual string alternative.
+//                        For unmodified symbols: copied from input metadata.
+//                        For merged symbols: taken from merge_meta.merged_string_lengths.
+//
+//   cum_set_sizes[]      cumulative count of strings before each symbol (prefix sum
+//                        of symbol_sizes); used to find the global string index for
+//                        a given symbol position.
+//
+//   is_degenerate[]      true if sym_size > 1.
+//
+//   cum_common_positions[], cum_degenerate_counts[]:
+//                        per-symbol cumulative position counters used by
+//                        locate() in the index.
+//
+//   min/max/avg_context_length, num_degenerate_symbols, etc.:
+//                        aggregate statistics for --verbose output and compliance
+//                        checking.
+//
+//   Because all these values are derived from the symbol we are writing right
+//   now (not from re-reading the output file), this inline metadata building
+//   avoids a costly re-parse pass after writing, matching the "Sources still
+//   require a re-read" note in eds_to_leds_linear().
+//
+// ─────────────────────────────────────────────────────────────────────────────
     StreamResult stream_merged_symbols_to_file(
         const EDS& input_eds,
         const std::vector<MergeMetadata>& merge_metadata,
         std::ostream& eds_out,
         std::ostream* sources_out
     ) {
-        // Build mapping: position -> merge metadata index (or -1 if not merged)
+        // ── Build the merge/skip lookup tables ───────────────────────────────
+        // merge_map[pos] = index into merge_metadata if pos is the leading
+        //                  position of a merge pair, else -1.
+        // skip[pos]      = true if pos is the trailing position of a merge pair
+        //                  (it has been absorbed and produces no output).
         std::vector<int> merge_map(input_eds.length(), -1);
         std::vector<bool> skip(input_eds.length(), false);
 
         for (size_t i = 0; i < merge_metadata.size(); ++i) {
             merge_map[merge_metadata[i].original_pos1] = static_cast<int>(i);
-            skip[merge_metadata[i].original_pos2] = true;  // Second position consumed by merge
+            skip[merge_metadata[i].original_pos2] = true;
         }
 
         bool has_sources = input_eds.has_sources();
-        const auto& in_meta = input_eds.get_metadata();
+        const auto& in_meta = input_eds.get_metadata();  // input index, read-only
 
-        // ===== METADATA TRACKING =====
+        // ── Initialise the output metadata accumulator ───────────────────────
+        // min_context_length starts at UINT32_MAX so the first real context
+        // length (which may be small) correctly replaces it via std::min logic.
         StreamResult result;
         result.metadata.min_context_length = UINT32_MAX;
         result.metadata.max_context_length = 0;
@@ -321,54 +505,146 @@ namespace {
         result.metadata.num_common_chars = 0;
         result.metadata.total_change_size = 0;
         result.metadata.num_empty_strings = 0;
-        size_t total_context_length = 0;
-        size_t num_context_blocks = 0;
-        Position cumulative_common = 0;
-        int cumulative_degenerate = 0;
+        size_t total_context_length = 0;   // used to compute avg at the end
+        size_t num_context_blocks = 0;     // number of non-degenerate symbols seen
+        Position cumulative_common = 0;    // cumulative non-degenerate char count
+        int cumulative_degenerate = 0;     // cumulative degenerate string count
+
+        // The cum_* arrays have one extra leading entry at index 0 representing
+        // the state *before* any symbol.  The entry for symbol i is pushed at
+        // the *end* of processing symbol i, so after the loop these arrays have
+        // length n+1 (one per symbol, plus the sentinel).
         result.metadata.cum_common_positions.push_back(0);
         result.metadata.cum_degenerate_counts.push_back(0);
 
-        // Stream output symbol-by-symbol
+        // ── SEDS batch state ─────────────────────────────────────────────────
+        // We accumulate consecutive unmodified symbols' source index ranges here
+        // instead of calling copy_range_to_stream() once per symbol.
+        // seds_batch_start  = global string index (into the input SEDS file) of
+        //                     the first string in the current pending batch.
+        // seds_batch_count  = total number of strings accumulated so far.
+        //
+        // When seds_batch_count > 0 there is a pending batch that has not yet
+        // been written to sources_out.  The batch covers string indices
+        //   [seds_batch_start, seds_batch_start + seds_batch_count).
+        size_t seds_batch_start = 0;
+        size_t seds_batch_count = 0;
+
+        // flush_seds_batch() is called:
+        //   (a) just before writing a merged symbol — the merged symbol's own
+        //       SEDS data is written inline, not via copy_range_to_stream(), so
+        //       we must first flush whatever unmodified data preceded it.
+        //   (b) at the very end of the loop, after the last symbol, to drain
+        //       any trailing batch that was never terminated by a merge.
+        //
+        // If seds_batch_count is 0 there is nothing to flush; the guard avoids
+        // an unnecessary function call.
+        auto flush_seds_batch = [&]() {
+            if (has_sources && sources_out && seds_batch_count > 0) {
+                // Write all accumulated source entries in one I/O call.
+                // copy_range_to_stream() uses the exact-byte-range fast path
+                // when start_idx + count < base_positions_.size(), reading
+                // precisely the needed bytes and leaving the SEDS stream
+                // positioned at the start of the next entry.
+                input_eds.get_sources_object()->copy_range_to_stream(
+                    seds_batch_start, seds_batch_count, *sources_out);
+                seds_batch_count = 0;  // reset; seds_batch_start is overwritten on next use
+            }
+        };
+
+        // ════════════════════════════════════════════════════════════════════
+        // MAIN LOOP — iterate over every input position in order
+        // ════════════════════════════════════════════════════════════════════
         for (size_t pos = 0; pos < input_eds.length(); ++pos) {
+
+            // ── Skip absorbed positions ──────────────────────────────────────
+            // When position pos+1 is the second element of a merge pair that
+            // starts at pos, it is marked skip[pos+1]=true.  The merged output
+            // for that pair has already been written when we processed pos, so
+            // pos+1 must produce no output at all.
             if (skip[pos]) {
-                continue;  // Position was merged into previous
+                continue;
             }
 
-            // Capture file position before writing '{'
+            // ── Record the output file position for this symbol ──────────────
+            // eds_out.tellp() returns the current write position in the output
+            // stream, which is the byte offset where the '{' we are about to
+            // write will land.  We store this so the EDS object created from the
+            // output file (via EDS::from_metadata()) knows where to seekg() to
+            // find this symbol.
             auto base_pos = static_cast<std::streampos>(eds_out.tellp());
             result.metadata.base_positions.push_back(base_pos);
+
+            // cum_set_sizes[i] = total number of strings in symbols 0..i-1.
+            // We push result.m (the running total so far) before updating it.
             result.metadata.cum_set_sizes.push_back(result.m);
 
-            size_t sym_size;
+            size_t sym_size;  // will be set in either branch below
 
+            // ════════════════════════════════════════════════════════════════
+            // BRANCH A: MERGED POSITION
+            // The pre-computed merge plan says to fuse symbols pos and pos+1.
+            // ════════════════════════════════════════════════════════════════
             if (merge_map[pos] >= 0) {
-                // ===== MERGED POSITION =====
-                const auto& merge_meta = merge_metadata[merge_map[pos]];
-                sym_size = merge_meta.merged_size;
 
-                // Collect string lengths from merge metadata (no I/O needed)
+                // Before writing this merged symbol's SEDS data, flush whatever
+                // unmodified SEDS data has been accumulating in the batch.
+                // The output SEDS file must contain entries in the same order as
+                // the EDS symbols they describe, so the batch for symbols before
+                // this merge must be written before the merge's own entries.
+                flush_seds_batch();
+
+                const auto& merge_meta = merge_metadata[merge_map[pos]];
+                sym_size = merge_meta.merged_size;  // number of output alternatives
+
+                // ── String lengths: from metadata, no I/O ───────────────────
+                // merge_meta.merged_string_lengths holds the pre-computed length
+                // of each output string: len(set1[i]) + len(set2[j]) for each
+                // valid (i,j) pair.  We record them here for the output metadata
+                // and accumulate the total character count result.N.
                 for (Length len : merge_meta.merged_string_lengths) {
                     result.metadata.string_lengths.push_back(len);
                     result.N += len;
                     if (len == 0) result.metadata.num_empty_strings++;
                 }
 
-                // Read BOTH symbols on-demand (METADATA_ONLY compatible)
+                // ── Read both input symbols ──────────────────────────────────
+                // read_symbol() calls read_symbol_from_stream() in METADATA_ONLY
+                // mode.  The sequential-seek optimisation in that function means:
+                //   • The first call (for pos) may need to seek if pos was not
+                //     immediately after the previous output symbol.
+                //   • The second call (for pos+1) will find the stream already
+                //     sitting at base_positions[pos+1] (the stream landed there
+                //     after parsing pos), so it skips its own seekg().
+                // Two symbols, at most one lseek.
                 StringSet set1 = input_eds.read_symbol(pos);
                 StringSet set2 = input_eds.read_symbol(pos + 1);
 
-                // Write merged symbol to output
+                // ── Write the merged EDS symbol ──────────────────────────────
+                // Format: {concat1,concat2,...,concatK}
+                // valid_indices contains the (i,j) pairs pre-selected by
+                // compute_merge_metadata():
+                //   CARTESIAN mode: all (i,j) in [0,|set1|) × [0,|set2|)
+                //   LINEAR mode:    only (i,j) where intersect_sources(i,j) ≠ ∅
                 eds_out << '{';
                 bool first_string = true;
 
-                // Use pre-computed valid i,j indices for both CARTESIAN and LINEAR modes
                 for (size_t idx = 0; idx < merge_meta.valid_indices.size(); ++idx) {
                     auto [i, j] = merge_meta.valid_indices[idx];
 
                     if (!first_string) eds_out << ',';
+                    // Concatenate the two strings directly into the output stream;
+                    // no intermediate buffer needed.
                     eds_out << set1[i] << set2[j];
                     first_string = false;
 
+                    // ── Write the merged SEDS entry for this output string ───
+                    // The source set for the merged string is
+                    //   intersect_sources(sources_of_set1[i], sources_of_set2[j])
+                    // pre-computed in merge_meta.merged_sources[idx].
+                    // We serialise it here as {p1,p2,...} because the byte
+                    // layout of merged SEDS entries cannot be copied verbatim
+                    // from the input — the merged strings are new creations.
                     if (sources_out) {
                         *sources_out << '{';
                         bool first_path = true;
@@ -385,11 +661,21 @@ namespace {
                 eds_out << '}';
 
             } else {
-                // ===== UNMODIFIED POSITION =====
+                // ════════════════════════════════════════════════════════════
+                // BRANCH B: UNMODIFIED POSITION
+                // This symbol is not involved in any merge; write it verbatim.
+                // ════════════════════════════════════════════════════════════
+
                 sym_size = in_meta.symbol_sizes[pos];
+
+                // global_idx is the index of this symbol's first string in the
+                // flat string array (and in the SEDS file).  It is the starting
+                // point for the SEDS batch we are about to extend.
                 size_t global_idx = in_meta.cum_set_sizes[pos];
 
-                // Collect string lengths from input metadata (no I/O needed)
+                // ── String lengths: from input metadata, no I/O ─────────────
+                // All string lengths for this symbol are already in in_meta;
+                // we copy them into the output metadata and update counters.
                 for (size_t k = 0; k < sym_size; ++k) {
                     Length len = in_meta.string_lengths[global_idx + k];
                     result.metadata.string_lengths.push_back(len);
@@ -397,9 +683,25 @@ namespace {
                     if (len == 0) result.metadata.num_empty_strings++;
                 }
 
-                // Read symbol on-demand and pass through
+                // ── Read and re-write the EDS symbol ────────────────────────
+                // read_symbol() triggers read_symbol_from_stream() in
+                // METADATA_ONLY mode.  Because we process positions in order
+                // (0, 1, 2, …) and the input file has symbols in the same order,
+                // the sequential-seek guard in read_symbol_from_stream() fires
+                // for nearly every call: after reading symbol pos the stream
+                // sits at base_positions[pos+1], so the next call for pos+1
+                // skips its seekg().
+                // Exception: after a merged pair, skip[pos+1] fires and the
+                // loop jumps to pos+2; the stream is at base_positions[pos+1]
+                // but we want base_positions[pos+2], so one seek is needed.
                 StringSet symbol = input_eds.read_symbol(pos);
 
+                // Write in full-bracket format {str1,str2,...}.  Intermediate
+                // temp files always use full-bracket format (required for
+                // METADATA_ONLY seeking) even for non-degenerate symbols.
+                // The compact serialisation (bare string without brackets for
+                // non-degenerate symbols) is applied only to the final output
+                // in eds_to_leds_linear(), not here.
                 eds_out << '{';
                 for (size_t i = 0; i < symbol.size(); ++i) {
                     if (i > 0) eds_out << ',';
@@ -407,31 +709,50 @@ namespace {
                 }
                 eds_out << '}';
 
+                // ── Extend the SEDS batch ────────────────────────────────────
+                // Rather than calling copy_range_to_stream() immediately (one
+                // seek + one tiny read per symbol), we record the range in the
+                // batch accumulators.  This batch will be flushed in one call
+                // when we either encounter a merged symbol or reach the end of
+                // the loop.
+                //
+                // Invariant: consecutive unmodified symbols have consecutive
+                // SEDS entries (cum_set_sizes is strictly increasing and the
+                // SEDS file mirrors the string order of the EDS file), so the
+                // batch always represents a single contiguous byte range in the
+                // input SEDS.  copy_range_to_stream() can therefore copy it
+                // with a single seek + a single sequential read.
                 if (has_sources && sources_out) {
-                    for (size_t i = 0; i < sym_size; ++i) {
-                        const std::set<int> src = input_eds.read_source(global_idx + i);
-                        *sources_out << '{';
-                        bool first = true;
-                        for (int path_id : src) {
-                            if (!first) *sources_out << ',';
-                            *sources_out << path_id;
-                            first = false;
-                        }
-                        *sources_out << '}';
+                    if (seds_batch_count == 0) {
+                        // Start of a new batch: record where in the SEDS file
+                        // this run of unmodified symbols begins.
+                        seds_batch_start = global_idx;
                     }
+                    // Extend the batch by this symbol's string count.
+                    // After the loop, seds_batch_start to seds_batch_start +
+                    // seds_batch_count covers all the accumulated unmodified
+                    // strings.
+                    seds_batch_count += sym_size;
                 }
             }
 
-            // Update per-symbol metadata statistics
+            // ── Update per-symbol metadata statistics ────────────────────────
+            // A symbol is "degenerate" (a variant set) if it has more than one
+            // alternative string.  A non-degenerate symbol is a context block
+            // with exactly one string.
             bool is_deg = (sym_size > 1);
             result.metadata.symbol_sizes.push_back(static_cast<Length>(sym_size));
             result.metadata.is_degenerate.push_back(is_deg);
 
             if (is_deg) {
                 result.metadata.num_degenerate_symbols++;
+                // total_change_size counts the number of *extra* alternatives
+                // beyond the first: a symbol with 4 alternatives contributes 3.
                 result.metadata.total_change_size += (sym_size - 1);
                 cumulative_degenerate += static_cast<int>(sym_size);
             } else {
+                // Non-degenerate: update context-length statistics.
+                // ctx_len is the length of the single string in this symbol.
                 Length ctx_len = result.metadata.string_lengths.back();
                 result.metadata.num_common_chars += ctx_len;
                 total_context_length += ctx_len;
@@ -443,17 +764,32 @@ namespace {
                     result.metadata.max_context_length = ctx_len;
             }
 
+            // Push the running cumulative totals — one entry per output symbol.
+            // These arrays are used by the locate() implementation to map
+            // positions between the EDS index and the common/changes indexes.
             result.metadata.cum_common_positions.push_back(cumulative_common);
             result.metadata.cum_degenerate_counts.push_back(cumulative_degenerate);
 
-            result.m += sym_size;
-            result.n++;
+            result.m += sym_size;  // advance the total string counter
+            result.n++;            // advance the output symbol counter
         }
+        // ════════════════════════════════════════════════════════════════════
+        // END OF MAIN LOOP
+        // ════════════════════════════════════════════════════════════════════
 
-        // Finalize statistics
+        // Drain any SEDS batch that was still accumulating when the loop ended.
+        // This covers the common case where the final symbols of the EDS are all
+        // unmodified (no merge at the very end of the file).
+        flush_seds_batch();
+
+        // ── Finalise aggregate statistics ────────────────────────────────────
         result.metadata.avg_context_length = (num_context_blocks > 0)
             ? static_cast<double>(total_context_length) / num_context_blocks
             : 0.0;
+
+        // If no non-degenerate symbol was ever seen, min_context_length was
+        // never updated from its sentinel value UINT32_MAX.  Reset to 0 so
+        // callers see a sensible value rather than an enormous integer.
         if (result.metadata.min_context_length == UINT32_MAX)
             result.metadata.min_context_length = 0;
 
@@ -708,12 +1044,29 @@ void eds_to_leds_linear(
     }
 
     // Copy final result to output streams
-    {
+    if (!compact) {
         std::ifstream final_eds(current_eds_file);
         if (!final_eds) {
             throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
         }
         output << final_eds.rdbuf();
+    } else {
+        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
+        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+        // seeks); compact serialisation is only applied to the final output stream.
+        for (size_t i = 0; i < eds.length(); ++i) {
+            const StringSet sym = eds.read_symbol(i);
+            if (sym.size() == 1) {
+                output << sym[0];
+            } else {
+                output << '{';
+                for (size_t j = 0; j < sym.size(); ++j) {
+                    if (j > 0) output << ',';
+                    output << sym[j];
+                }
+                output << '}';
+            }
+        }
     }
 
     if (phasing_output && has_sources) {
@@ -919,12 +1272,29 @@ void eds_to_leds_cartesian(
     }
 
     // Copy final result to output stream
-    {
+    if (!compact) {
         std::ifstream final_eds(current_eds_file);
         if (!final_eds) {
             throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
         }
         output << final_eds.rdbuf();
+    } else {
+        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
+        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+        // seeks); compact serialisation is only applied to the final output stream.
+        for (size_t i = 0; i < eds.length(); ++i) {
+            const StringSet sym = eds.read_symbol(i);
+            if (sym.size() == 1) {
+                output << sym[0];
+            } else {
+                output << '{';
+                for (size_t j = 0; j < sym.size(); ++j) {
+                    if (j > 0) output << ',';
+                    output << sym[j];
+                }
+                output << '}';
+            }
+        }
     }
 
     // Cleanup temp directory

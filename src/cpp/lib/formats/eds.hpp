@@ -173,7 +173,8 @@ private:
     std::shared_ptr<Sources> sources_;  // nullptr if no sources loaded
 
     // Helper methods
-    void parse(std::istream& is);
+    // with_strings=true: also populate sets_ for in-memory access (stream/string ctors)
+    void parse(std::istream& is, bool with_strings = false);
     void calculate_statistics();
     std::string normalize_eds_format(const std::string& input) const;
 

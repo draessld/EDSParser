@@ -1,0 +1,8 @@
+timestamp,preset,scenario,tool,input_size_mb,runtime_s,peak_memory_mb,throughput_mb_s
+2026-04-30_14-50-50,quick,genrandomeds_1mb,genrandomeds,1.847,0.13,63.7,14.208
+2026-04-30_14-50-50,quick,genrandomeds_5mb,genrandomeds,9.229,0.62,302.8,14.885
+2026-04-30_14-50-50,quick,eds2leds_cartesian_1mb,eds2leds,1.847,0.61,28.8,3.028
+2026-04-30_14-50-50,quick,eds2leds_linear_1mb,eds2leds,1.845,2.18,48.0,0.846
+2026-04-30_14-50-50,quick,edsparser_stats_1mb,edsparser-stats,1.846,0.02,13.7,92.300
+2026-04-30_14-50-50,quick,edsparser_stats_5mb,edsparser-stats,9.229,0.10,55.8,92.290
+2026-04-30_14-50-50,quick,edsparser_genpatterns_5mb,edsparser-genpatterns,9.229,0.12,55.6,76.908

@@ -112,7 +112,7 @@ add_subdirectory(lib)
 add_subdirectory(tools)
 
 # Add test executables
-set(TEST_DIR ${CMAKE_SOURCE_DIR}/tests/cpp)
+set(TEST_DIR ${CMAKE_SOURCE_DIR}/tests/unit)
 
 # Test: EDS parsing
 add_executable(test_eds ${TEST_DIR}/test_eds.cpp)

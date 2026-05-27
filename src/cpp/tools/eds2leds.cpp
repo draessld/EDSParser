@@ -149,6 +149,12 @@ int main(int argc, char** argv) {
         std::ifstream* sources_in = nullptr;
         std::ofstream* sources_out = nullptr;
 
+        // Intended final path for the output sources file (used for rename below).
+        std::filesystem::path output_sources;
+        // Actual path written to during the transform (may be a temp file).
+        std::filesystem::path actual_sources_out_path;
+        bool rename_sources_after = false;
+
         if (!sources_file.empty()) {
             // Input sources file
             sources_in = new std::ifstream(sources_file);
@@ -157,15 +163,33 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Cannot open sources file: " + sources_file.string());
             }
 
-            // Generate output sources filename
-            std::filesystem::path output_sources = output_file;
+            // Generate output sources filename (same stem as output .leds, .seds extension).
+            output_sources = output_file;
             output_sources.replace_extension(".seds");
 
-            sources_out = new std::ofstream(output_sources);
+            // Guard against self-overwrite: if output_sources resolves to the same file as
+            // sources_file, opening it for writing (O_TRUNC) would zero out the input before
+            // eds_to_leds_linear can copy it to its temp directory.  Detect this and write
+            // to a temp path instead, then rename to the final destination afterwards.
+            actual_sources_out_path = output_sources;
+            try {
+                if (std::filesystem::exists(output_sources) &&
+                    std::filesystem::equivalent(output_sources, sources_file)) {
+                    actual_sources_out_path =
+                        output_sources.parent_path() /
+                        (output_sources.stem().string() + ".eds2leds_tmp.seds");
+                    rename_sources_after = true;
+                }
+            } catch (const std::filesystem::filesystem_error&) {
+                // Files on different filesystems — no conflict possible.
+            }
+
+            sources_out = new std::ofstream(actual_sources_out_path);
             if (!*sources_out) {
                 delete sources_in;
                 delete sources_out;
-                throw std::runtime_error("Cannot create output sources file: " + output_sources.string());
+                throw std::runtime_error("Cannot create output sources file: " +
+                                         actual_sources_out_path.string());
             }
 
             std::cout << "  Output sources: " << output_sources << "\n";
@@ -195,9 +219,16 @@ int main(int argc, char** argv) {
                 );
             }
 
-            // Cleanup
+            // Cleanup streams before rename (file must be closed on some platforms).
             delete sources_in;
+            sources_in = nullptr;
             delete sources_out;
+            sources_out = nullptr;
+
+            // If we wrote to a temp file to avoid self-overwrite, rename it now.
+            if (rename_sources_after) {
+                std::filesystem::rename(actual_sources_out_path, output_sources);
+            }
 
             std::cout << "Transformation complete!\n";
             print_performance();
@@ -207,6 +238,11 @@ int main(int argc, char** argv) {
             // Cleanup on exception
             delete sources_in;
             delete sources_out;
+            // Remove temp file if rename did not happen
+            if (rename_sources_after &&
+                std::filesystem::exists(actual_sources_out_path)) {
+                std::filesystem::remove(actual_sources_out_path);
+            }
             throw;
         }
 

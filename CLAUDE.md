@@ -37,7 +37,7 @@ cd build/src/cpp && ctest --output-on-failure
 # Run specific test
 cd build/src/cpp && ./test_eds
 
-# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_transform, test_msa, test_vcf, test_integration, test_cli_errors, test_memory_smoke
+# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration
 
 # Manual memory stress tests (too slow for CI, run manually):
 cd build/src/cpp && ./test_memory_stress
@@ -113,6 +113,7 @@ Transformation tools (each focused on a specific conversion):
 - `eds2leds`: Transform EDS to l-EDS with linear or cartesian merging
   - **`--full` flag**: Force full bracket format output (default: compact)
   - Runs complexity estimation before transformation and warns on exponential-growth risk
+  - **Linear vs cartesian throughput**: after I/O optimizations (2026-05-26) the gap is 1.26× (linear ~4.3 MB/s vs cartesian ~5.4 MB/s on 10% variability, 4-path, --min-context 5 data). Remaining difference is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data.
 - `msa2eds`: Transform MSA to EDS/l-EDS with source tracking
 - `vcf2eds`: Transform VCF to EDS/l-EDS with sample-level source tracking (requires reference FASTA)
   - **`--block-size` parameter**: Control memory usage for large VCF files (default: 10M bases)
@@ -123,10 +124,12 @@ Transformation tools (each focused on a specific conversion):
 Utility tools:
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
 - `edsparser-genpatterns`: Generate random patterns for benchmarking
-- `genrandomeds` (**internal/not installed**): Generate synthetic EDS files with controlled variability for testing/benchmarking
+- `genrandomeds`: Generate synthetic EDS files with controlled variability for testing/benchmarking
   - Requires `--ref-size-mb` (size) and `-o` (output); key options: `-v` (variability), `--min-context`, `--seed`
   - Automatically generates paired `.seds` source file using **round-robin haplotype assignment**: each path is assigned to exactly one alternative per degenerate symbol, matching real phased data. This prevents Cartesian product explosion during linear merge.
-  - Not installed to `~/.local/bin/` — run from `build/tools/genrandomeds` or via `experiments/generate_random_dataset.sh`
+  - **O(1) memory**: streams EDS and SEDS directly to disk symbol-by-symbol; peak RSS ~4 MB constant regardless of output size. Uses two independent PRNGs (`ref_gen(seed)` / `var_gen(seed^0x9e3779b9)`) — same `--seed` is reproducible but produces different output than pre-2026-05 builds.
+  - `min_context==0`: per-position Bernoulli trials (expected variant count = `total_bp × variability`); `min_context>0`: one variant per segment, processed iteratively.
+  - Installed to `~/.local/bin/` by `./INSTALL.sh`; also available at `build/tools/genrandomeds`
 
 **Performance Output**: All tools write runtime and peak memory to stderr on completion:
 ```
@@ -354,8 +357,9 @@ Total Memory = metadata + (batch_size × metadata_per_pair) + streaming_buffer
 
 **Implementation Details**:
 - **Metadata-only merge** ([eds_transforms.cpp:140-225](src/cpp/lib/transforms/eds_transforms.cpp#L140-L225)): Computes all merge logic without touching string data
-- **Streaming reconstruction** ([eds_transforms.cpp:477-557](src/cpp/lib/transforms/eds_transforms.cpp#L477-L557)): Reads merged positions on-the-fly, concatenates, writes immediately
-- **Temp directory**: `std::filesystem::temp_directory_path() / "edsparser_leds"`
+- **Streaming reconstruction** (`stream_merged_symbols_to_file()`): Reads merged positions on-the-fly, concatenates, writes immediately. **SEDS batching**: consecutive unmodified symbols accumulate into one `copy_range_to_stream()` call per run (one call per merge boundary instead of one per symbol — ~2727 calls vs ~200K for 10% variability).
+- **Sequential seek elimination** (`read_symbol_from_stream()` in `eds.cpp`): skips `seekg()` when stream is already at the target position. Since symbols are processed in order, almost all seeks are eliminated (down to ~5K per iteration from ~400K).
+- **Temp directory**: `std::filesystem::temp_directory_path() / "edsparser_leds_<pid>"`
 - **Automatic cleanup**: Temp files removed on completion or error
 
 **When to Use**:
@@ -384,9 +388,10 @@ eds2leds -i large_100GB.eds -s large_100GB.seds -l 10 --threads 16
 **Solution**: `Sources` class with streaming + LRU cache (implemented in [sources.hpp](src/cpp/lib/formats/sources.hpp) / [sources.cpp](src/cpp/lib/formats/sources.cpp)):
 
 **Architecture**:
-1. **Index building**: Single-pass scan records file position of each source set (`m × 8 bytes`; e.g., 3M strings = 24MB)
+1. **Index building** (`parse_seds()`): Bulk reads (64KB chunks) + in-memory brace scanning to record position of each `{`. ~32 `read()` syscalls for a 2MB file. Avoids the original per-char `get()`+`tellg()` approach that caused ~2M function calls per index build.
 2. **On-demand reading**: `read_source(idx)` seeks to indexed position, parses one `{path_id1,...}` set
 3. **LRU cache**: Default 10K sets (~400KB), 98% hit rate due to locality in merge operations
+4. **Bulk copy** (`copy_range_to_stream()`): Uses `base_positions_[start+count]` to compute exact byte range — reads precisely those bytes with no over-read, leaves stream at the start of the next entry. Sequential calls skip `seekg()` entirely (position-cache check). Falls back to brace-counting for the last batch only.
 
 **Memory Footprint**:
 ```
@@ -537,10 +542,9 @@ jupyter notebook experiments/datasets/SARS_cov2/03_eds_statistics.ipynb
 
 | Test | Auto (ctest) | Purpose |
 |------|-------------|---------|
-| `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_transform`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
+| `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
-| `test_cli_errors` | Yes | CLI graceful failure on invalid input, non-zero exit codes |
-| `test_memory_smoke` | Yes | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
+| `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
 | `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
 
 ### Running Memory Tests Manually
