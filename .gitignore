@@ -84,6 +84,10 @@ Thumbs.db
 !CLAUDE.md
 .claude/
 !docs/*.md
+!tests/bench/README.md
+!tests/bench/requirements.txt
+!tests/bench/docs/
+!tests/bench/docs/*.png
 
 # Experiment outputs - exclude all dataset content
 experiments/datasets/**
