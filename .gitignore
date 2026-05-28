@@ -83,6 +83,7 @@ Thumbs.db
 *.md
 !CLAUDE.md
 .claude/
+!docs/*.md
 
 # Experiment outputs - exclude all dataset content
 experiments/datasets/**
