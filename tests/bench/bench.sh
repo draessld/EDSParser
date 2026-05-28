@@ -124,6 +124,7 @@ if python3 -c "import matplotlib, pandas" 2>/dev/null; then
     python3 "$SCRIPT_DIR/bench_plot.py" "$CSV_FILE" && \
         bench_log "Plots → $RESULTS_DIR/plots/$(basename "${CSV_FILE%.csv}")/"
 else
-    bench_log "Skipping plots — install matplotlib and pandas to enable:"
-    bench_log "  pip install matplotlib pandas"
+    bench_log "Skipping plots — install Python dependencies to enable:"
+    bench_log "  pip install -r tests/bench/requirements.txt"
+    bench_log "  # or inside a venv: python3 -m venv .venv && source .venv/bin/activate && pip install -r tests/bench/requirements.txt"
 fi
