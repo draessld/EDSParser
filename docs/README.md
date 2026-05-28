@@ -13,7 +13,7 @@
 | [algorithms.md](algorithms.md) | Algorithm deep-dives: merging, MSA 3-pass, VCF blocks, l-EDS iteration |
 | [performance.md](performance.md) | Memory profiles, throughput numbers, tuning guidelines |
 | [testing.md](testing.md) | Unit, integration, e2e, memory and benchmark test suites |
-| [experiments.md](experiments.md) | Experiment framework for batch MSA/VCF/EDS processing |
+| [experiments.md](experiments.md) | Experiment scripts (moved to biofmi/experiments/) |
 
 ---
 
@@ -128,7 +128,6 @@ edsparser/
 │   ├── e2e/                    # Shell end-to-end tests
 │   ├── stress/                 # Stress test data generators
 │   └── bench/                  # Performance benchmarks
-├── experiments/                # Batch experiment scripts
 ├── docs/                       # ← You are here
 ├── CMakeLists.txt
 ├── INSTALL.sh

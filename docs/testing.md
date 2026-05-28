@@ -212,9 +212,6 @@ bool leaked = mon.detect_memory_leak(2.0);  // 2 MB/sec threshold
 
 ## 5. Benchmarks
 
-See [benchmarks section in experiments.md](experiments.md#benchmarks) for
-the full benchmark suite documentation.
-
 Quick reference:
 
 ```bash
