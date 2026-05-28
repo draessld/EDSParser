@@ -13,7 +13,6 @@
 | [algorithms.md](algorithms.md) | Algorithm deep-dives: merging, MSA 3-pass, VCF blocks, l-EDS iteration |
 | [performance.md](performance.md) | Memory profiles, throughput numbers, tuning guidelines |
 | [testing.md](testing.md) | Unit, integration, e2e, memory and benchmark test suites |
-| [experiments.md](experiments.md) | Experiment scripts (moved to biofmi/experiments/) |
 
 ---
 
