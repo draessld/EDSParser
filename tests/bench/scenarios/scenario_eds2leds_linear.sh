@@ -28,7 +28,7 @@ run_scenario_eds2leds_linear() {
         throughput=$(compute_throughput "$size_mb" "$BENCH_RUNTIME_S")
 
         write_csv_row "$csv" "$ts" "$preset" "$scenario" \
-            "eds2leds" "$size_mb" "$BENCH_RUNTIME_S" "$BENCH_PEAK_MEMORY_MB" "$throughput"
-        bench_log "  runtime=${BENCH_RUNTIME_S}s  memory=${BENCH_PEAK_MEMORY_MB}MB  throughput=${throughput}MB/s"
+            "eds2leds" "$size_mb" "$n_reps" "$throughput"
+        bench_log "  median=${BENCH_RUNTIME_S}s  ±${BENCH_RUNTIME_STDDEV_S}s  p99=${BENCH_RUNTIME_P99_S}s  mem=${BENCH_PEAK_MEMORY_MB}MB  throughput=${throughput}MB/s"
     done
 }

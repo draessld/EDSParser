@@ -40,14 +40,14 @@ done
 
 case "$PRESET" in
     quick)
-        N_REPS=1
+        N_REPS=5
         SIZES_MB=(1 5)
         VAR_SWEEP_MB=0          # 0 = skip sweep scenarios
         CTX_SWEEP_MB=0
         PATH_SWEEP_MB=0
         ;;
     standard)
-        N_REPS=3
+        N_REPS=30
         SIZES_MB=(1 5 10)
         VAR_SWEEP_MB=5          # variability sweep input size
         CTX_SWEEP_MB=5          # context length sweep input size
@@ -57,7 +57,7 @@ case "$PRESET" in
         PATH_SWEEP_CFGS=(2:2 2:4 2:8)
         ;;
     large)
-        N_REPS=3
+        N_REPS=30
         SIZES_MB=(5 10 20 50)
         VAR_SWEEP_MB=10
         CTX_SWEEP_MB=10
@@ -78,6 +78,9 @@ CSV_FILE="$RESULTS_DIR/${TIMESTAMP}.csv"
 
 bench_log "EDSParser benchmark — preset=$PRESET  N=$N_REPS"
 bench_log "Results → $CSV_FILE"
+echo ""
+
+bench_check_environment
 echo ""
 
 run_scenario_genrandomeds          "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" "${SIZES_MB[@]}"

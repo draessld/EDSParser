@@ -35,8 +35,8 @@ run_scenario_context_length_sweep() {
         local tp_cart
         tp_cart=$(compute_throughput "$size_mb" "$BENCH_RUNTIME_S")
         write_csv_row "$csv" "$ts" "$preset" "$scenario_cart" \
-            "eds2leds" "$size_mb" "$BENCH_RUNTIME_S" "$BENCH_PEAK_MEMORY_MB" "$tp_cart"
-        bench_log "  [cartesian l=$l] runtime=${BENCH_RUNTIME_S}s  memory=${BENCH_PEAK_MEMORY_MB}MB  throughput=${tp_cart}MB/s"
+            "eds2leds" "$size_mb" "$n_reps" "$tp_cart"
+        bench_log "  [cartesian l=$l] median=${BENCH_RUNTIME_S}s  ±${BENCH_RUNTIME_STDDEV_S}s  p99=${BENCH_RUNTIME_P99_S}s  mem=${BENCH_PEAK_MEMORY_MB}MB  throughput=${tp_cart}MB/s"
 
         # Linear
         local scenario_lin="context_l${l}_linear"
@@ -46,7 +46,7 @@ run_scenario_context_length_sweep() {
         local tp_lin
         tp_lin=$(compute_throughput "$size_mb" "$BENCH_RUNTIME_S")
         write_csv_row "$csv" "$ts" "$preset" "$scenario_lin" \
-            "eds2leds" "$size_mb" "$BENCH_RUNTIME_S" "$BENCH_PEAK_MEMORY_MB" "$tp_lin"
-        bench_log "  [linear    l=$l] runtime=${BENCH_RUNTIME_S}s  memory=${BENCH_PEAK_MEMORY_MB}MB  throughput=${tp_lin}MB/s"
+            "eds2leds" "$size_mb" "$n_reps" "$tp_lin"
+        bench_log "  [linear    l=$l] median=${BENCH_RUNTIME_S}s  ±${BENCH_RUNTIME_STDDEV_S}s  p99=${BENCH_RUNTIME_P99_S}s  mem=${BENCH_PEAK_MEMORY_MB}MB  throughput=${tp_lin}MB/s"
     done
 }

@@ -111,21 +111,24 @@ def _apply_style():
 def _sweep_figure(x_vals, series: dict, xlabel: str, title: str,
                   x_log: bool = False) -> plt.Figure:
     """
-    series: {mode_key: (throughput_list, memory_list)}
+    series: {mode_key: (throughput_list, memory_list, tp_err_list, mem_err_list)}
+    Error lists may be None (no error bars drawn).
     Returns a Figure with two subplots side by side.
     """
     fig, (ax_tp, ax_mem) = plt.subplots(1, 2, figsize=(10, 4))
 
-    for mode, (tp, mem) in series.items():
+    for mode, (tp, mem, tp_err, mem_err) in series.items():
         color = COLORS.get(mode, "#888888")
         label = DISPLAY_NAMES.get(mode, mode)
         kw = dict(color=color, marker="o", linewidth=1.8, markersize=6, label=label)
-        ax_tp.plot(x_vals, tp, **kw)
-        ax_mem.plot(x_vals, mem, **kw)
+        ax_tp.errorbar(range(len(x_vals)), tp, yerr=tp_err, capsize=3, **kw)
+        ax_mem.errorbar(range(len(x_vals)), mem, yerr=mem_err, capsize=3, **kw)
 
-    for ax, ylabel in ((ax_tp, "Throughput (MB/s)"), (ax_mem, "Peak memory (MB)")):
+    for ax, ylabel in ((ax_tp, "Throughput (MB/s)"), (ax_mem, "Memory median (MB)")):
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
+        ax.set_xticks(range(len(x_vals)))
+        ax.set_xticklabels(x_vals)
         ax.legend(fontsize=8)
         if x_log:
             ax.set_xscale("log")
@@ -150,9 +153,13 @@ def plot_variability_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
     series = {}
     for mode in sub["mode"].unique():
         rows = sub[sub["mode"] == mode].sort_values("variability")
-        tp  = [rows.loc[rows["variability"] == v, "throughput_mb_s"].mean() for v in var_vals]
-        mem = [rows.loc[rows["variability"] == v, "peak_memory_mb"].mean()  for v in var_vals]
-        series[mode] = (tp, mem)
+        tp     = [rows.loc[rows["variability"] == v, "throughput_median_mb_s"].mean() for v in var_vals]
+        mem    = [rows.loc[rows["variability"] == v, "memory_median_mb"].mean()        for v in var_vals]
+        tp_err = [rows.loc[rows["variability"] == v, "runtime_stddev_s"].mean()        for v in var_vals] \
+                 if "runtime_stddev_s" in rows.columns else None
+        mem_err = [rows.loc[rows["variability"] == v, "memory_stddev_mb"].mean()       for v in var_vals] \
+                  if "memory_stddev_mb" in rows.columns else None
+        series[mode] = (tp, mem, tp_err, mem_err)
 
     x_labels = [f"{v:.0%}" for v in var_vals]
     fig = _sweep_figure(
@@ -161,10 +168,6 @@ def plot_variability_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
         title=f"EDS→l-EDS: throughput & memory vs variability  (input ≈{input_mb:.0f} MB)",
         x_log=False,
     )
-    # Replace numeric x-ticks with percentage labels
-    for ax in fig.axes:
-        ax.set_xticks(range(len(x_labels)))
-        ax.set_xticklabels(x_labels)
 
     out = out_dir / "variability_sweep.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -183,9 +186,13 @@ def plot_context_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
     series = {}
     for mode in sub["mode"].unique():
         rows = sub[sub["mode"] == mode].sort_values("context_l")
-        tp  = [rows.loc[rows["context_l"] == l, "throughput_mb_s"].mean() for l in ctx_vals]
-        mem = [rows.loc[rows["context_l"] == l, "peak_memory_mb"].mean()  for l in ctx_vals]
-        series[mode] = (tp, mem)
+        tp      = [rows.loc[rows["context_l"] == l, "throughput_median_mb_s"].mean() for l in ctx_vals]
+        mem     = [rows.loc[rows["context_l"] == l, "memory_median_mb"].mean()        for l in ctx_vals]
+        tp_err  = [rows.loc[rows["context_l"] == l, "runtime_stddev_s"].mean()        for l in ctx_vals] \
+                  if "runtime_stddev_s" in rows.columns else None
+        mem_err = [rows.loc[rows["context_l"] == l, "memory_stddev_mb"].mean()        for l in ctx_vals] \
+                  if "memory_stddev_mb" in rows.columns else None
+        series[mode] = (tp, mem, tp_err, mem_err)
 
     x_labels = [str(l) for l in ctx_vals]
     fig = _sweep_figure(
@@ -193,9 +200,6 @@ def plot_context_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
         xlabel="Context length  l",
         title=f"EDS→l-EDS: throughput & memory vs context length  (input ≈{input_mb:.0f} MB)",
     )
-    for ax in fig.axes:
-        ax.set_xticks(range(len(x_labels)))
-        ax.set_xticklabels(x_labels)
 
     out = out_dir / "context_length_sweep.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -212,18 +216,19 @@ def plot_path_count_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
     input_mb = sub["input_size_mb"].iloc[0]
 
     rows = sub.sort_values("max_alt")
-    tp  = [rows.loc[rows["max_alt"] == a, "throughput_mb_s"].mean() for a in alt_vals]
-    mem = [rows.loc[rows["max_alt"] == a, "peak_memory_mb"].mean()  for a in alt_vals]
+    tp      = [rows.loc[rows["max_alt"] == a, "throughput_median_mb_s"].mean() for a in alt_vals]
+    mem     = [rows.loc[rows["max_alt"] == a, "memory_median_mb"].mean()        for a in alt_vals]
+    tp_err  = [rows.loc[rows["max_alt"] == a, "runtime_stddev_s"].mean()        for a in alt_vals] \
+              if "runtime_stddev_s" in rows.columns else None
+    mem_err = [rows.loc[rows["max_alt"] == a, "memory_stddev_mb"].mean()        for a in alt_vals] \
+              if "memory_stddev_mb" in rows.columns else None
 
     x_labels = [f"max {a} alt" for a in alt_vals]
     fig = _sweep_figure(
-        x_labels, {"linear": (tp, mem)},
+        x_labels, {"linear": (tp, mem, tp_err, mem_err)},
         xlabel="Max alternatives per degenerate symbol",
         title=f"eds2leds linear: throughput & memory vs path count  (input ≈{input_mb:.0f} MB)",
     )
-    for ax in fig.axes:
-        ax.set_xticks(range(len(x_labels)))
-        ax.set_xticklabels(x_labels)
 
     out = out_dir / "path_count_sweep.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -244,8 +249,8 @@ def plot_size_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
         if rows.empty:
             continue
         x = rows["ref_size_mb"].values
-        tp  = rows["throughput_mb_s"].values
-        mem = rows["peak_memory_mb"].values
+        tp  = rows["throughput_median_mb_s"].values
+        mem = rows["memory_median_mb"].values
         color = COLORS.get(mode, "#888888")
         label = DISPLAY_NAMES.get(mode, mode)
         # Use markers only when there's a single point (no line to draw)
@@ -325,17 +330,24 @@ def plot_summary(df: pd.DataFrame, out_dir: Path) -> bool:
     labels = rows["label"].tolist()
     colors = rows["bar_color"].tolist()
 
-    ax_tp.barh(list(y_pos), rows["throughput_mb_s"].tolist(), color=colors, edgecolor="none")
+    tp_vals  = rows["throughput_median_mb_s"].tolist()
+    mem_vals = rows["memory_median_mb"].tolist()
+    tp_err   = rows["runtime_stddev_s"].tolist()  if "runtime_stddev_s"  in rows.columns else None
+    mem_err  = rows["memory_stddev_mb"].tolist()  if "memory_stddev_mb"  in rows.columns else None
+
+    ax_tp.barh(list(y_pos), tp_vals, xerr=tp_err, color=colors, edgecolor="none",
+               error_kw=dict(ecolor="#555", capsize=3))
     ax_tp.set_yticks(list(y_pos))
     ax_tp.set_yticklabels(labels, fontsize=8)
-    ax_tp.set_xlabel("Throughput (MB/s)")
+    ax_tp.set_xlabel("Throughput median (MB/s)")
     ax_tp.set_title("Throughput")
     ax_tp.invert_yaxis()
 
-    ax_mem.barh(list(y_pos), rows["peak_memory_mb"].tolist(), color=colors, edgecolor="none")
+    ax_mem.barh(list(y_pos), mem_vals, xerr=mem_err, color=colors, edgecolor="none",
+                error_kw=dict(ecolor="#555", capsize=3))
     ax_mem.set_yticks(list(y_pos))
     ax_mem.set_yticklabels(labels, fontsize=8)
-    ax_mem.set_xlabel("Peak memory (MB)")
+    ax_mem.set_xlabel("Memory median (MB)")
     ax_mem.set_title("Peak memory")
     ax_mem.invert_yaxis()
 
