@@ -1,0 +1,2393 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="C++ library and CLI suite for Elastic-Degenerate Strings">
+      
+      
+      
+        <link rel="canonical" href="https://draessld.github.io/EDSParser/cli-tools/">
+      
+      
+        <link rel="prev" href="../formats/">
+      
+      
+        <link rel="next" href="../library-api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>CLI Tools - EDSParser</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-tool-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="EDSParser" class="md-header__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            EDSParser
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CLI Tools
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../formats/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  File Formats
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Tools
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../library-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Library API
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../architecture/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../algorithms/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Algorithms
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../performance/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Performance
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../testing/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../experiments/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Experiments
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="EDSParser" class="md-nav__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    EDSParser
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Tools
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#msa2eds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        msa2eds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="msa2eds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf2eds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vcf2eds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="vcf2eds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#variant-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant Support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-tuning-via-block-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Tuning via --block-size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds2leds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        eds2leds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="eds2leds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-detection-of-merging-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Detection of Merging Strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#complexity-warning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complexity Warning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#self-overwrite-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-Overwrite Protection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edsparser-stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        edsparser-stats
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="edsparser-stats">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edsparser-genpatterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        edsparser-genpatterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="edsparser-genpatterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#genrandomeds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        genrandomeds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="genrandomeds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behaviour_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#variant-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant Modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#progress-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Progress Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../library-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#msa2eds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        msa2eds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="msa2eds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf2eds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vcf2eds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="vcf2eds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#variant-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant Support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-tuning-via-block-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Tuning via --block-size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds2leds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        eds2leds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="eds2leds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-detection-of-merging-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Detection of Merging Strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#complexity-warning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complexity Warning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#self-overwrite-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-Overwrite Protection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edsparser-stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        edsparser-stats
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="edsparser-stats">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edsparser-genpatterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        edsparser-genpatterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="edsparser-genpatterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#genrandomeds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        genrandomeds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="genrandomeds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synopsis_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#options_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behaviour_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#variant-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Variant Modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#progress-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Progress Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/draessld/EDSParser/edit/main/docs/cli-tools.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="cli-tool-reference">CLI Tool Reference<a class="headerlink" href="#cli-tool-reference" title="Permanent link">&para;</a></h1>
+<p>All tools are installed to <code>~/.local/bin/</code> by <code>./INSTALL.sh</code>. Every tool:</p>
+<ul>
+<li>Accepts <code>--help</code> / <code>-h</code> for usage information.</li>
+<li>Writes runtime and peak memory to <strong>stderr</strong> on exit:
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>[Performance] Runtime: 1.23s | Peak Memory: 45.6 MB
+</code></pre></div></li>
+<li>Exits with code <code>0</code> on success, non-zero on error.</li>
+</ul>
+<hr />
+<h2 id="msa2eds">msa2eds<a class="headerlink" href="#msa2eds" title="Permanent link">&para;</a></h2>
+<p>Transform a Multiple Sequence Alignment (FASTA with gaps) to EDS or l-EDS.</p>
+<h3 id="synopsis">Synopsis<a class="headerlink" href="#synopsis" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>msa2eds -i &lt;alignment.msa&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-i, --input</code></td>
+<td>path</td>
+<td>required</td>
+<td>Input MSA file in FASTA format (gaps as <code>-</code>)</td>
+</tr>
+<tr>
+<td><code>-o, --output</code></td>
+<td>path</td>
+<td><code>&lt;stem&gt;.eds</code></td>
+<td>Output EDS / l-EDS file</td>
+</tr>
+<tr>
+<td><code>-s, --sources</code></td>
+<td>path</td>
+<td><code>&lt;stem&gt;.seds</code></td>
+<td>Output source-tracking file</td>
+</tr>
+<tr>
+<td><code>-l, --context-length</code></td>
+<td>uint</td>
+<td>—</td>
+<td>If set, produces l-EDS instead of EDS</td>
+</tr>
+</tbody>
+</table>
+<h3 id="behaviour">Behaviour<a class="headerlink" href="#behaviour" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The <strong>first sequence</strong> in the FASTA alignment is used as the reference.</li>
+<li>Each input sequence becomes <strong>one source path</strong> in the output <code>.seds</code>.</li>
+<li>Common columns → non-degenerate EDS symbol.</li>
+<li>Columns with variation → degenerate EDS symbol.</li>
+<li>When <code>-l</code> is provided, adjacent symbols are merged until every internal
+  common segment is ≥ l characters (see <a href="../algorithms/#msa-three-pass">algorithms.md</a>).</li>
+<li>Merging strategy is always <strong>LINEAR</strong> (phasing-aware).</li>
+</ul>
+<h3 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Produce EDS + sources</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>msa2eds<span class="w"> </span>-i<span class="w"> </span>data.msa
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Produce l-EDS (l=10) directly, custom output paths</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>msa2eds<span class="w"> </span>-i<span class="w"> </span>data.msa<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span><span class="w"> </span>-o<span class="w"> </span>data.l10.leds<span class="w"> </span>-s<span class="w"> </span>data.l10.seds
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Pipe from stdin (redirect)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>msa2eds<span class="w"> </span>-i<span class="w"> </span>/dev/stdin<span class="w"> </span>&lt;<span class="w"> </span>data.msa
+</code></pre></div>
+<h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;stem&gt;.eds</code> or <code>&lt;stem&gt;.leds</code></td>
+<td>EDS / l-EDS in compact format</td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;.seds</code></td>
+<td>Source tracking (one set of path IDs per string)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="vcf2eds">vcf2eds<a class="headerlink" href="#vcf2eds" title="Permanent link">&para;</a></h2>
+<p>Transform a VCF file (with reference FASTA) to EDS or l-EDS.</p>
+<h3 id="synopsis_1">Synopsis<a class="headerlink" href="#synopsis_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>vcf2eds -i &lt;variants.vcf&gt; --reference &lt;genome.fasta&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options_1">Options<a class="headerlink" href="#options_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-i, --input</code></td>
+<td>path</td>
+<td>required</td>
+<td>Input VCF file</td>
+</tr>
+<tr>
+<td><code>-r, --reference</code></td>
+<td>path</td>
+<td>required</td>
+<td>Reference FASTA (random-access streaming)</td>
+</tr>
+<tr>
+<td><code>-o, --output</code></td>
+<td>path</td>
+<td><code>&lt;stem&gt;.eds</code></td>
+<td>Output EDS / l-EDS file</td>
+</tr>
+<tr>
+<td><code>-s, --sources</code></td>
+<td>path</td>
+<td><code>&lt;stem&gt;.seds</code></td>
+<td>Output source-tracking file</td>
+</tr>
+<tr>
+<td><code>-l, --context-length</code></td>
+<td>uint</td>
+<td>—</td>
+<td>If set, produces l-EDS</td>
+</tr>
+<tr>
+<td><code>--block-size</code></td>
+<td>uint</td>
+<td><code>10000000</code></td>
+<td>Genomic window size in bases; <code>0</code> = load all (legacy, high memory)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="variant-support">Variant Support<a class="headerlink" href="#variant-support" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>VCF ALT</th>
+<th>Handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SNP / small indel</td>
+<td>Direct</td>
+</tr>
+<tr>
+<td><code>&lt;DEL&gt;</code></td>
+<td>Empty alternative</td>
+</tr>
+<tr>
+<td><code>&lt;INS&gt;</code></td>
+<td>Uses INFO/SEQ</td>
+</tr>
+<tr>
+<td><code>&lt;INV&gt;</code></td>
+<td>Reverse complement of REF</td>
+</tr>
+<tr>
+<td><code>&lt;CN0&gt;</code></td>
+<td>Empty (deletion)</td>
+</tr>
+<tr>
+<td><code>&lt;CN1&gt;</code></td>
+<td>REF string</td>
+</tr>
+<tr>
+<td><code>&lt;CN2..N&gt;</code></td>
+<td>Duplicated REF (N copies)</td>
+</tr>
+<tr>
+<td>Multi-allelic</td>
+<td>Each ALT → one alternative in same degenerate symbol</td>
+</tr>
+</tbody>
+</table>
+<p>Unsupported SVs and malformed lines are <strong>skipped with warnings</strong>; a
+summary is printed to stderr on exit.</p>
+<h3 id="memory-tuning-via-block-size">Memory Tuning via <code>--block-size</code><a class="headerlink" href="#memory-tuning-via-block-size" title="Permanent link">&para;</a></h3>
+<p>The default 10 Mbp block keeps peak memory to a few gigabytes on typical
+population VCFs. Adjust based on available RAM:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 16 GB server — smaller blocks, lower memory</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">1000000</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 256 GB server — larger blocks, faster I/O</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">100000000</span>
+</code></pre></div>
+<p>Setting <code>--block-size 0</code> disables blocking and loads all variants into RAM
+(suitable only for small VCF files).</p>
+<h3 id="examples_1">Examples<a class="headerlink" href="#examples_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Basic: VCF → EDS</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>reference.fasta
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># VCF → l-EDS (l=5) with low memory</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>large.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span><span class="w"> </span>--block-size<span class="w"> </span><span class="m">2000000</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Explicit output paths</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-o<span class="w"> </span>out.eds<span class="w"> </span>-s<span class="w"> </span>out.seds
+</code></pre></div>
+<hr />
+<h2 id="eds2leds">eds2leds<a class="headerlink" href="#eds2leds" title="Permanent link">&para;</a></h2>
+<p>Transform an EDS to l-EDS. Automatically selects merging strategy based on
+whether a source file is provided.</p>
+<h3 id="synopsis_2">Synopsis<a class="headerlink" href="#synopsis_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>eds2leds -i &lt;data.eds&gt; -l &lt;N&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options_2">Options<a class="headerlink" href="#options_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-i, --input</code></td>
+<td>path</td>
+<td>required</td>
+<td>Input EDS file (must have <code>.eds</code> extension)</td>
+</tr>
+<tr>
+<td><code>-l, --context-length</code></td>
+<td>uint</td>
+<td>required</td>
+<td>Target minimum context length</td>
+</tr>
+<tr>
+<td><code>-o, --output</code></td>
+<td>path</td>
+<td><code>&lt;stem&gt;_l&lt;N&gt;.leds</code></td>
+<td>Output l-EDS file</td>
+</tr>
+<tr>
+<td><code>-s, --sources</code></td>
+<td>path</td>
+<td>—</td>
+<td>Input <code>.seds</code> file (enables LINEAR merging)</td>
+</tr>
+<tr>
+<td><code>--full</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Force full bracket format (default: compact)</td>
+</tr>
+<tr>
+<td><code>-t, --threads</code></td>
+<td>int</td>
+<td><code>1</code></td>
+<td>Parallel worker threads</td>
+</tr>
+</tbody>
+</table>
+<h3 id="auto-detection-of-merging-strategy">Auto-Detection of Merging Strategy<a class="headerlink" href="#auto-detection-of-merging-strategy" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">Sources provided?</th>
+<th>Strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">Yes (<code>-s</code>)</td>
+<td><strong>LINEAR</strong> — phasing-aware; only valid haplotype combinations kept</td>
+</tr>
+<tr>
+<td style="text-align: center;">No</td>
+<td><strong>CARTESIAN</strong> — all combinations (cross-product of alternatives)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Prefer LINEAR</strong> for real genomic data (MSA- or VCF-derived). CARTESIAN is
+suitable when phasing is unknown or all combinations are needed.</p>
+<h3 id="output-files_1">Output Files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;stem&gt;_l&lt;N&gt;.leds</code></td>
+<td>l-EDS in compact format (or full if <code>--full</code>)</td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;_l&lt;N&gt;.seds</code></td>
+<td>Updated source tracking (only when <code>-s</code> was given)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="complexity-warning">Complexity Warning<a class="headerlink" href="#complexity-warning" title="Permanent link">&para;</a></h3>
+<p>Before running the transformation, <code>eds2leds</code> estimates complexity via
+<code>estimate_leds_complexity()</code>. If the EDS contains many adjacent degenerate
+pairs, a warning is printed:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>[WARNING] High transformation complexity detected.
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  Adjacent degenerate pairs: 1204
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  Recommendation: Consider reducing variability or increasing context length.
+</code></pre></div>
+<h3 id="examples_2">Examples<a class="headerlink" href="#examples_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># LINEAR merging (with sources, compact output)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># CARTESIAN merging (no sources)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># Full bracket format, 4 threads</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span><span class="w"> </span>--full<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Explicit output path</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">20</span><span class="w"> </span>-o<span class="w"> </span>custom_output.leds
+</code></pre></div>
+<h3 id="self-overwrite-protection">Self-Overwrite Protection<a class="headerlink" href="#self-overwrite-protection" title="Permanent link">&para;</a></h3>
+<p>If the output <code>.seds</code> path is the same file as the input <code>-s</code> path,
+<code>eds2leds</code> writes to a temporary file first and renames atomically on
+completion to avoid truncating the input.</p>
+<hr />
+<h2 id="edsparser-stats">edsparser-stats<a class="headerlink" href="#edsparser-stats" title="Permanent link">&para;</a></h2>
+<p>Display statistics about an EDS or l-EDS file, including l-EDS compliance
+checking.</p>
+<h3 id="synopsis_3">Synopsis<a class="headerlink" href="#synopsis_3" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>edsparser-stats -i &lt;data.eds&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options_3">Options<a class="headerlink" href="#options_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-i, --input</code></td>
+<td>path</td>
+<td>required</td>
+<td>Input EDS / l-EDS file</td>
+</tr>
+<tr>
+<td><code>-s, --sources</code></td>
+<td>path</td>
+<td>—</td>
+<td>Companion <code>.seds</code> file</td>
+</tr>
+<tr>
+<td><code>-j, --json</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Output in JSON format</td>
+</tr>
+<tr>
+<td><code>-c, --csv</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Output in CSV format</td>
+</tr>
+<tr>
+<td><code>-v, --verbose</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Show detailed statistics</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h3>
+<p><strong>Default (table) format:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>EDS Statistics:
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  Symbols (n):        12543
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  Strings (m):        38291
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>  Total chars (N):    1048576
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>  Degenerate symbols: 2714
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>  Common chars:       891200
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>  Min context:        5
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>  Max context:        127
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>  Avg context:        8.4
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>  Source paths:       4   (when -s provided)
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>  l-EDS compliant:    YES (l=5)
+</code></pre></div></p>
+<p><strong>JSON format</strong> (<code>--json</code>):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;n&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12543</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">38291</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;N&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1048576</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">&quot;num_degenerate_symbols&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2714</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">&quot;num_common_chars&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">891200</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">&quot;min_context_length&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span><span class="nt">&quot;max_context_length&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">127</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">  </span><span class="nt">&quot;avg_context_length&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">8.4</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="p">}</span>
+</code></pre></div></p>
+<p><strong>CSV format</strong> (<code>--csv</code>): One header row + one data row — suitable for
+aggregating across multiple files with shell loops.</p>
+<h3 id="examples_3">Examples<a class="headerlink" href="#examples_3" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Table output</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># JSON with sources</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>--json
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># CSV batch collection</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>results/*.leds<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">  </span>edsparser-stats<span class="w"> </span>-i<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span>--csv
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="k">done</span><span class="w"> </span>&gt;<span class="w"> </span>all_stats.csv
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="c1"># Verbose: adds memory estimates and compliance details</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>--verbose
+</code></pre></div>
+<hr />
+<h2 id="edsparser-genpatterns">edsparser-genpatterns<a class="headerlink" href="#edsparser-genpatterns" title="Permanent link">&para;</a></h2>
+<p>Extract random patterns from an EDS or l-EDS file for benchmarking.</p>
+<p>Each pattern follows an actual path through the EDS, so it is guaranteed
+to be present in any downstream FM-index built from the same file.</p>
+<h3 id="synopsis_4">Synopsis<a class="headerlink" href="#synopsis_4" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>edsparser-genpatterns -i &lt;data.eds&gt; -o &lt;patterns.txt&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options_4">Options<a class="headerlink" href="#options_4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-i, --input</code></td>
+<td>path</td>
+<td>required</td>
+<td>Input EDS / l-EDS file</td>
+</tr>
+<tr>
+<td><code>-o, --output</code></td>
+<td>path</td>
+<td>required</td>
+<td>Output patterns file (one per line)</td>
+</tr>
+<tr>
+<td><code>-n, --count</code></td>
+<td>uint</td>
+<td><code>100</code></td>
+<td>Number of patterns to generate</td>
+</tr>
+<tr>
+<td><code>-l, --length</code></td>
+<td>uint</td>
+<td><code>10</code></td>
+<td>Pattern length in characters</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h3>
+<p>Plain text, one pattern per line, DNA alphabet (ACGT):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>ACGTACGTAC
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>TGCATGCATG
+</code></pre></div>
+<h3 id="examples_4">Examples<a class="headerlink" href="#examples_4" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># 100 patterns of length 10</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p100_l10.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">100</span><span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># 1000 patterns of length 30</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p1000_l30.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">1000</span><span class="w"> </span>-l<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<hr />
+<h2 id="genrandomeds">genrandomeds<a class="headerlink" href="#genrandomeds" title="Permanent link">&para;</a></h2>
+<p>Generate a synthetic EDS file with controlled variability. Produces both
+a <code>.eds</code> and a companion <code>.seds</code> file.</p>
+<h3 id="synopsis_5">Synopsis<a class="headerlink" href="#synopsis_5" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>genrandomeds --ref-size-mb &lt;N&gt; -o &lt;output.eds&gt; [OPTIONS]
+</code></pre></div>
+<h3 id="options_5">Options<a class="headerlink" href="#options_5" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--ref-size-mb</code></td>
+<td>uint</td>
+<td>required</td>
+<td>Reference length in Mbp (1 MB = 1 000 000 bp)</td>
+</tr>
+<tr>
+<td><code>-o, --output</code></td>
+<td>path</td>
+<td>required</td>
+<td>Output EDS file (<code>.eds</code> or <code>.leds</code>)</td>
+</tr>
+<tr>
+<td><code>-v, --variability</code></td>
+<td>double</td>
+<td><code>0.10</code></td>
+<td>Fraction of positions with a variant (0–1)</td>
+</tr>
+<tr>
+<td><code>--min-alternatives</code></td>
+<td>uint</td>
+<td><code>2</code></td>
+<td>Min strings per degenerate symbol</td>
+</tr>
+<tr>
+<td><code>--max-alternatives</code></td>
+<td>uint</td>
+<td><code>4</code></td>
+<td>Max strings per degenerate symbol</td>
+</tr>
+<tr>
+<td><code>--variant-length-max</code></td>
+<td>uint</td>
+<td><code>10</code></td>
+<td>Maximum indel length in bp</td>
+</tr>
+<tr>
+<td><code>--snp-ratio</code></td>
+<td>double</td>
+<td><code>0.70</code></td>
+<td>Fraction of variants that are SNPs (rest are indels)</td>
+</tr>
+<tr>
+<td><code>--alphabet</code></td>
+<td>string</td>
+<td><code>"ACGT"</code></td>
+<td>Characters used for sequence generation</td>
+</tr>
+<tr>
+<td><code>--min-context</code></td>
+<td>uint</td>
+<td><code>0</code></td>
+<td>Minimum spacing between variants (0 = disabled; &gt;0 = l-EDS compliant)</td>
+</tr>
+<tr>
+<td><code>--seed</code></td>
+<td>uint</td>
+<td>random</td>
+<td>Random seed for reproducibility</td>
+</tr>
+</tbody>
+</table>
+<h3 id="behaviour_1">Behaviour<a class="headerlink" href="#behaviour_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Reference sequence is generated base-by-base using a random PRNG seeded
+  from <code>--seed</code>.</li>
+<li>Variant structure (positions, types, lengths) uses a second independent
+  PRNG seeded from <code>seed ^ 0x9e3779b9</code> to ensure the reference and variant
+  streams do not correlate.</li>
+<li><strong>Round-robin haplotype assignment</strong>: path <code>p</code> is assigned alternative
+  <code>(p − 1) mod num_alts</code> at each degenerate symbol. This ensures every path
+  passes through exactly one alternative per symbol, matching real phased
+  data and preventing Cartesian explosion during linear l-EDS merging.</li>
+<li>Number of source paths = <code>max(max_alternatives, 3)</code>.</li>
+<li>Memory footprint is <strong>O(1)</strong> — symbols are streamed directly to disk.</li>
+</ul>
+<h3 id="variant-modes">Variant Modes<a class="headerlink" href="#variant-modes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;"><code>--min-context</code></th>
+<th>Mode</th>
+<th>Variant placement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;"><code>0</code></td>
+<td>Bernoulli</td>
+<td>Per-position independent trial with probability <code>variability</code></td>
+</tr>
+<tr>
+<td style="text-align: center;"><code>&gt;0</code></td>
+<td>Segment</td>
+<td>One variant per segment of size <code>total_bp / expected_variants</code>; minimum spacing enforced</td>
+</tr>
+</tbody>
+</table>
+<h3 id="examples_5">Examples<a class="headerlink" href="#examples_5" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Basic 100 MB dataset, 10% variability</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">100</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span>-o<span class="w"> </span>data.eds
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># l-EDS compliant (min context = 5), reproducible</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">50</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--min-context<span class="w"> </span><span class="m">5</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">42</span><span class="w"> </span>-o<span class="w"> </span>data.leds
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="c1"># High variability, many alternatives</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">10</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.20<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">  </span>--min-alternatives<span class="w"> </span><span class="m">3</span><span class="w"> </span>--max-alternatives<span class="w"> </span><span class="m">8</span><span class="w"> </span>-o<span class="w"> </span>high_var.eds
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="c1"># SNP-heavy dataset (90% SNPs)</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">20</span><span class="w"> </span>--snp-ratio<span class="w"> </span><span class="m">0</span>.90<span class="w"> </span>-o<span class="w"> </span>snp_heavy.eds
+</code></pre></div>
+<h3 id="output-files_2">Output Files<a class="headerlink" href="#output-files_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>output.eds</code></td>
+<td>The generated EDS</td>
+</tr>
+<tr>
+<td><code>output.seds</code></td>
+<td>Source tracking file with round-robin path assignments</td>
+</tr>
+</tbody>
+</table>
+<h3 id="progress-output">Progress Output<a class="headerlink" href="#progress-output" title="Permanent link">&para;</a></h3>
+<p>Progress is written to stderr as a percentage:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>Generating random EDS (streaming, O(1) memory):
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>  Reference size: 100 MB (100000000 bp)
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>  Variability: 10.0%
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>  Expected variant sites: 10000000
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>  Progress: 47.3%
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,1528 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="C++ library and CLI suite for Elastic-Degenerate Strings">
+      
+      
+      
+        <link rel="canonical" href="https://draessld.github.io/EDSParser/architecture/">
+      
+      
+        <link rel="prev" href="../library-api/">
+      
+      
+        <link rel="next" href="../algorithms/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Architecture - EDSParser</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture-design-patterns" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="EDSParser" class="md-header__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            EDSParser
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../formats/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  File Formats
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../cli-tools/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Tools
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../library-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Library API
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../algorithms/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Algorithms
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../performance/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Performance
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../testing/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../experiments/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Experiments
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="EDSParser" class="md-nav__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    EDSParser
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../library-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#high-level-component-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-Level Component Map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Storage Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#full-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FULL Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata_only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        METADATA_ONLY Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds-parsing-two-phase-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EDS Parsing: Two-Phase Loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources-lru-streaming-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sources: LRU Streaming Cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sources: LRU Streaming Cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-building-parse_seds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index Building (parse_seds)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lru-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LRU Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thread-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thread Safety
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bulk-copy-copy_range_to_stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bulk Copy (copy_range_to_stream)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#l-eds-iteration-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        l-EDS Iteration Chain
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="l-EDS Iteration Chain">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metadata-only-merge-calculation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata-Only Merge Calculation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipe-streaming-vcf-l-eds-direct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipe Streaming (VCF → l-EDS Direct)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#msa-transformation-three-pass-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MSA Transformation: Three-Pass Algorithm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf-block-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VCF Block Processing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complexity-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complexity Estimation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thread-safety-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thread Safety Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#high-level-component-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-Level Component Map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Storage Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#full-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FULL Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata_only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        METADATA_ONLY Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds-parsing-two-phase-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EDS Parsing: Two-Phase Loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources-lru-streaming-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sources: LRU Streaming Cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sources: LRU Streaming Cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-building-parse_seds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index Building (parse_seds)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lru-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LRU Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thread-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thread Safety
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bulk-copy-copy_range_to_stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bulk Copy (copy_range_to_stream)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#l-eds-iteration-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        l-EDS Iteration Chain
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="l-EDS Iteration Chain">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metadata-only-merge-calculation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metadata-Only Merge Calculation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipe-streaming-vcf-l-eds-direct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipe Streaming (VCF → l-EDS Direct)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#msa-transformation-three-pass-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MSA Transformation: Three-Pass Algorithm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf-block-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VCF Block Processing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complexity-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complexity Estimation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thread-safety-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thread Safety Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/draessld/EDSParser/edit/main/docs/architecture.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="architecture-design-patterns">Architecture &amp; Design Patterns<a class="headerlink" href="#architecture-design-patterns" title="Permanent link">&para;</a></h1>
+<p>This document describes the internal design of EDSParser — how data flows,
+why particular trade-offs were chosen, and how the components connect.</p>
+<hr />
+<h2 id="high-level-component-map">High-Level Component Map<a class="headerlink" href="#high-level-component-map" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌───────────────────────────────────────────────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│                         CLI Tools (tools/)                        │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│  msa2eds  vcf2eds  eds2leds  edsparser-stats  genpatterns  genrandom│
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>└─────────────────┬────────────┬───────────────────────┬────────────┘
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                  │            │                       │
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>          msa_transforms  vcf_transforms         eds_transforms
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                  │            │                       │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>                  └─────┬──────┘                       │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                        │                              │
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                   ┌────▼────┐                   ┌────▼────┐
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                   │   EDS   │◄──────────────────│ Sources │
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                   └────┬────┘   (shared_ptr)    └─────────┘
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                        │
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>               ┌────────▼────────┐
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>               │  Metadata       │  (always in RAM)
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>               │  + index tables │
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>               └────────────────┘
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                        │
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>               ┌────────▼────────┐
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>               │  File stream    │  (METADATA_ONLY: lazy I/O)
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>               │  or in-RAM sets │  (FULL: from string/stream ctor)
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>               └─────────────────┘
+</code></pre></div>
+<hr />
+<h2 id="storage-modes">Storage Modes<a class="headerlink" href="#storage-modes" title="Permanent link">&para;</a></h2>
+<h3 id="full-mode">FULL Mode<a class="headerlink" href="#full-mode" title="Permanent link">&para;</a></h3>
+<p>Used when constructing EDS from a C++ string literal or <code>std::istream</code>.
+All strings are stored in <code>sets_</code> (a <code>vector&lt;StringSet&gt;</code>) in RAM.
+Provides fast random access (<code>get_sets()</code>) but is unsuitable for large files.</p>
+<h3 id="metadata_only-mode">METADATA_ONLY Mode<a class="headerlink" href="#metadata_only-mode" title="Permanent link">&para;</a></h3>
+<p>Used by <code>EDS::load()</code> (the standard file-loading path).
+Only the <strong>Metadata</strong> struct is populated:
+- <code>base_positions[]</code> — file offset of each symbol (so <code>read_symbol()</code> can
+  seek directly to it)
+- <code>symbol_sizes[]</code>, <code>string_lengths[]</code>, <code>is_degenerate[]</code> — derived during
+  the single parse pass
+- Statistical summaries — computed in the same pass</p>
+<p>On each call to <code>read_symbol(pos)</code>, the implementation seeks to
+<code>base_positions[pos]</code> and reads exactly that symbol from disk.
+<strong>Sequential-seek elimination</strong>: if the stream is already at the required
+position (detected via a position cache), the <code>seekg()</code> call is skipped —
+important for forward-sequential iteration.</p>
+<hr />
+<h2 id="eds-parsing-two-phase-loading">EDS Parsing: Two-Phase Loading<a class="headerlink" href="#eds-parsing-two-phase-loading" title="Permanent link">&para;</a></h2>
+<p>Even in METADATA_ONLY mode the file is still read <strong>once</strong> completely at
+load time to build the index and statistics. After that:</p>
+<ol>
+<li><strong>Metadata phase</strong> (load): scan the file, record positions, compute
+   statistics, build <code>cum_common_positions</code> and <code>cum_degenerate_counts</code>.</li>
+<li><strong>Access phase</strong> (on-demand): <code>read_symbol()</code> seeks + reads one symbol
+   per call.</li>
+</ol>
+<p>This separates the <em>knowing what is there</em> (cheap, O(file size) once) from
+the <em>reading the data</em> (only when needed, O(symbol size) per access).</p>
+<hr />
+<h2 id="sources-lru-streaming-cache">Sources: LRU Streaming Cache<a class="headerlink" href="#sources-lru-streaming-cache" title="Permanent link">&para;</a></h2>
+<p>The <code>Sources</code> class mirrors the EDS two-phase pattern for <code>.seds</code> files.</p>
+<h3 id="index-building-parse_seds">Index Building (<code>parse_seds</code>)<a class="headerlink" href="#index-building-parse_seds" title="Permanent link">&para;</a></h3>
+<p>During <code>Sources::load()</code>, the file is read in <strong>64 KB chunks</strong> to record
+the file position of every opening brace <code>{</code>. This builds <code>base_positions_</code>
+in a single sequential pass with ~32 <code>read()</code> syscalls per 2 MB file,
+avoiding the old per-character <code>get()</code> + <code>tellg()</code> approach that caused
+millions of syscalls.</p>
+<h3 id="lru-cache">LRU Cache<a class="headerlink" href="#lru-cache" title="Permanent link">&para;</a></h3>
+<p>Subsequent <code>read_source(idx)</code> calls:
+1. Check the LRU map for a hit — return the cached <code>set&lt;int&gt;</code> by value.
+2. On a miss, seek to <code>base_positions_[idx]</code>, parse the <code>{...}</code> entry,
+   evict the least-recently-used entry if at capacity, store the new entry.</p>
+<p>Default capacity: <strong>10 000 entries</strong> (~400 KB). Hit rates are typically</p>
+<blockquote>
+<p>98% because merging operations access sources in linear order.</p>
+</blockquote>
+<h3 id="thread-safety">Thread Safety<a class="headerlink" href="#thread-safety" title="Permanent link">&para;</a></h3>
+<p>A <code>mutable std::mutex io_mutex_</code> protects the file stream and LRU cache.
+Both <code>read_source()</code> and <code>read_source_ref()</code> acquire this mutex.
+<code>read_source()</code> returns by <strong>value</strong> — safe across threads.
+<code>read_source_ref()</code> returns a <code>const std::set&lt;int&gt;&amp;</code> — only safe for
+single-threaded code, because the entry can be evicted by another thread
+between the return and the dereference.</p>
+<h3 id="bulk-copy-copy_range_to_stream">Bulk Copy (<code>copy_range_to_stream</code>)<a class="headerlink" href="#bulk-copy-copy_range_to_stream" title="Permanent link">&para;</a></h3>
+<p>For contiguous ranges of unmodified strings (common in l-EDS iteration),
+<code>copy_range_to_stream(start, count, out)</code> computes the exact byte span
+via <code>base_positions_[start+count] − base_positions_[start]</code> and copies
+those bytes directly without parsing. This makes sequential calls skip
+<code>seekg()</code> entirely.</p>
+<hr />
+<h2 id="l-eds-iteration-chain">l-EDS Iteration Chain<a class="headerlink" href="#l-eds-iteration-chain" title="Permanent link">&para;</a></h2>
+<p><code>eds_to_leds_linear</code> / <code>eds_to_leds_cartesian</code> uses an iterative
+temp-file chaining architecture designed to handle 100 GB+ inputs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Input.eds (METADATA_ONLY)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    │
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    ▼  Iteration 1: collect merge pairs with context &lt; l
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>temp0.eds (written via stream_merged_symbols_to_file)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    │
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    ▼  Iteration 2: check remaining short contexts
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>temp1.eds
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    │
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    ▼ … (typically 2–5 iterations for real genomic data)
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>tempN.eds
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    │
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    ▼  rename / copy → output.leds
+</code></pre></div>
+<p>Each temp file is opened as METADATA_ONLY for the next iteration.
+Temp files are stored under:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>/tmp/edsparser_leds_&lt;pid&gt;/
+</code></pre></div></p>
+<p>The PID-scoped directory allows multiple <code>eds2leds</code> instances to run in
+parallel without interference (e.g. from experiment scripts). Files are
+cleaned up automatically on normal exit or exception.</p>
+<h3 id="metadata-only-merge-calculation">Metadata-Only Merge Calculation<a class="headerlink" href="#metadata-only-merge-calculation" title="Permanent link">&para;</a></h3>
+<p>Before writing any strings, <code>compute_merge_metadata()</code> calculates — using
+only the metadata (string lengths and source sets, no actual characters):
+- Which symbol pairs will be merged in this iteration
+- The merged string lengths (addition, no concatenation)
+- The merged source sets (set intersections)</p>
+<p>This produces a list of <code>MergeMetadata</code> structs. Only then does
+<code>stream_merged_symbols_to_file()</code> read strings from disk, merge them
+in-place, and write directly to the output stream (no intermediate
+<code>ostringstream</code>).</p>
+<h3 id="batch-processing">Batch Processing<a class="headerlink" href="#batch-processing" title="Permanent link">&para;</a></h3>
+<p>Merge pairs are processed in batches (default 1 000 pairs per batch):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>for each batch of 1000 pairs:
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    compute_merge_metadata(batch)   → ~10 MB metadata
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    stream_merged_symbols_to_file() → reads, merges, writes
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    free metadata                   → back to baseline memory
+</code></pre></div></p>
+<hr />
+<h2 id="pipe-streaming-vcf-l-eds-direct">Pipe Streaming (VCF → l-EDS Direct)<a class="headerlink" href="#pipe-streaming-vcf-l-eds-direct" title="Permanent link">&para;</a></h2>
+<p>For the <code>vcf2eds -l</code> pipeline, two stages would normally require a
+temp file (VCF→EDS then EDS→l-EDS). The <code>PipeStreamBuffer</code> class
+implements a 64 MB thread-safe circular buffer as a <code>std::streambuf</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Producer thread:          Consumer thread:
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  parse_vcf_to_eds()  ──▶  PipeStreamBuffer  ──▶  eds_to_leds_linear()
+</code></pre></div>
+<p><code>make_pipe()</code> returns a connected <code>PipeOutputStream</code> + <code>PipeInputStream</code>
+pair. The producer writes EDS bytes; the consumer reads them without any
+intermediate temp file.</p>
+<p>This is used in the <code>vcf2eds -l</code> pipeline to avoid writing a potentially
+large intermediate EDS to disk.</p>
+<hr />
+<h2 id="msa-transformation-three-pass-algorithm">MSA Transformation: Three-Pass Algorithm<a class="headerlink" href="#msa-transformation-three-pass-algorithm" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Pass 1: parse MSA
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  - Read reference sequence into RAM (O(alignment_length))
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  - Record file positions of each sequence start
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  - Build variant bit vector: variant_col[col] = true if any seq differs
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>Pass 2: compute symbol boundaries
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>  - Without -l: every transition between variant and non-variant is a boundary
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>  - With -l: merge adjacent symbols until internal common segments ≥ l
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>Pass 3: generate output (streaming)
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>  - For each symbol boundary:
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    - Seek to each sequence&#39;s file position for the columns in this symbol
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    - Collect alternatives, deduplicate, write {alt1,alt2,...} or plain string
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>    - Immediately flush to output stream (no accumulation)
+</code></pre></div>
+<p>Memory footprint: O(reference + bit vectors), independent of the number of
+sequences or the output size.</p>
+<hr />
+<h2 id="vcf-block-processing">VCF Block Processing<a class="headerlink" href="#vcf-block-processing" title="Permanent link">&para;</a></h2>
+<p>Reference genomes are not loaded into RAM. Instead:</p>
+<ol>
+<li>Divide the genome into blocks of <code>block_size</code> bases (default 10 Mbp).</li>
+<li>For each block:
+   a. Read VCF variants belonging to this block (maintaining a <em>carryover
+      queue</em> for variants that started before block end but were read early).
+   b. Call <code>read_fasta_region()</code> to load just the reference bases for this
+      block via random-access seeking (pre-allocated <code>string::reserve</code>).
+   c. Sort variants by position, group overlapping ones.
+   d. Call <code>generate_eds_from_variants()</code> to produce EDS for this block.
+   e. Write directly to the output stream and flush.
+   f. Free block memory, move to next block.</li>
+</ol>
+<p>Memory: O(variants per block), not O(total variants).</p>
+<hr />
+<h2 id="complexity-estimation">Complexity Estimation<a class="headerlink" href="#complexity-estimation" title="Permanent link">&para;</a></h2>
+<p><code>estimate_leds_complexity()</code> scans EDS metadata (no string data) and
+classifies the transformation into three risk tiers:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Condition</th>
+<th>Warning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FAST</td>
+<td>Few or no adjacent degenerate pairs</td>
+<td>None</td>
+</tr>
+<tr>
+<td>SLOW</td>
+<td>Many short contexts between degenerates</td>
+<td><code>warn_slow = true</code></td>
+</tr>
+<tr>
+<td>EXPONENTIAL_GROWTH_RISK</td>
+<td>Dense degenerate clusters</td>
+<td><code>warn_exponential = true</code></td>
+</tr>
+</tbody>
+</table>
+<p>The function returns a <code>recommendation</code> string with actionable advice
+(e.g., "increase context length" or "consider fewer alternatives").</p>
+<hr />
+<h2 id="thread-safety-summary">Thread Safety Summary<a class="headerlink" href="#thread-safety-summary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Thread Safety</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EDS</code> read methods (<code>read_symbol</code>, <code>get_metadata</code>)</td>
+<td><strong>Not thread-safe</strong> — no mutex on <code>stream_</code></td>
+</tr>
+<tr>
+<td><code>EDS</code> write methods</td>
+<td>Single-threaded only</td>
+</tr>
+<tr>
+<td><code>Sources::read_source()</code></td>
+<td><strong>Thread-safe</strong> (mutex on <code>io_mutex_</code>)</td>
+</tr>
+<tr>
+<td><code>Sources::read_source_ref()</code></td>
+<td><strong>Not safe</strong> across threads (reference may dangle)</td>
+</tr>
+<tr>
+<td><code>Sources::copy_range_to_stream()</code></td>
+<td><strong>Thread-safe</strong> (acquires <code>io_mutex_</code>)</td>
+</tr>
+<tr>
+<td><code>MemoryMonitor</code></td>
+<td>Thread-safe (internal <code>samples_mutex_</code>)</td>
+</tr>
+<tr>
+<td><code>PipeStreamBuffer</code></td>
+<td>Thread-safe (mutex + condition variables)</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

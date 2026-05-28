@@ -1,0 +1,1927 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="C++ library and CLI suite for Elastic-Degenerate Strings">
+      
+      
+      
+        <link rel="canonical" href="https://draessld.github.io/EDSParser/performance/">
+      
+      
+        <link rel="prev" href="../algorithms/">
+      
+      
+        <link rel="next" href="../testing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Performance - EDSParser</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#performance-characteristics" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="EDSParser" class="md-header__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            EDSParser
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Performance
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../formats/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  File Formats
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../cli-tools/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Tools
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../library-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Library API
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../architecture/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../algorithms/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Algorithms
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Performance
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../testing/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../experiments/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Experiments
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="EDSParser" class="md-nav__button md-logo" aria-label="EDSParser" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    EDSParser
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/draessld/EDSParser" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    draessld/EDSParser
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../library-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#memory-architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Architecture Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#msa-transformation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MSA Transformation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MSA Transformation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-formula" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Formula
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#throughput-characteristics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Throughput Characteristics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scalability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scalability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf-block-based-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VCF Block-Based Processing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VCF Block-Based Processing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-formula-per-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Formula (per block)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-size-trade-offs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Size Trade-offs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structural-variant-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structural Variant Memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds-l-eds-transformation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EDS → l-EDS Transformation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EDS → l-EDS Transformation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-comparison-old-vs-new-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Comparison (old vs. new implementation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-memory-formula" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current Memory Formula
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iterations-to-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Iterations to Convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources-streaming-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sources Streaming Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sources Streaming Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-building" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index Building
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lru-cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LRU Cache Hit Rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-full-vs-metadata_only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory: FULL vs METADATA_ONLY
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#genrandomeds-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        genrandomeds Memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark-baseline-2026-05-reference-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Baseline (2026-05 Reference System)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#practical-tuning-guide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical Tuning Guide
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Practical Tuning Guide">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#my-eds2leds-is-using-too-much-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My eds2leds is using too much memory"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#my-vcf2eds-is-using-too-much-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My vcf2eds is using too much memory"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#my-eds2leds-is-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My eds2leds is slow"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#i-need-very-large-seds-lru-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "I need very large SEDS LRU cache"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-profile-memory-over-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "How do I profile memory over time?"
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#memory-architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Architecture Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#msa-transformation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MSA Transformation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MSA Transformation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-formula" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Formula
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#throughput-characteristics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Throughput Characteristics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scalability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scalability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vcf-block-based-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VCF Block-Based Processing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VCF Block-Based Processing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-formula-per-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Formula (per block)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-size-trade-offs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Size Trade-offs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structural-variant-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structural Variant Memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eds-l-eds-transformation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EDS → l-EDS Transformation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EDS → l-EDS Transformation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-comparison-old-vs-new-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Comparison (old vs. new implementation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-memory-formula" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current Memory Formula
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iterations-to-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Iterations to Convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources-streaming-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sources Streaming Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sources Streaming Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-building" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index Building
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lru-cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LRU Cache Hit Rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-full-vs-metadata_only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory: FULL vs METADATA_ONLY
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#genrandomeds-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        genrandomeds Memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark-baseline-2026-05-reference-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Baseline (2026-05 Reference System)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#practical-tuning-guide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical Tuning Guide
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Practical Tuning Guide">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#my-eds2leds-is-using-too-much-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My eds2leds is using too much memory"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#my-vcf2eds-is-using-too-much-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My vcf2eds is using too much memory"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#my-eds2leds-is-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "My eds2leds is slow"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#i-need-very-large-seds-lru-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "I need very large SEDS LRU cache"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-profile-memory-over-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "How do I profile memory over time?"
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/draessld/EDSParser/edit/main/docs/performance.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="performance-characteristics">Performance Characteristics<a class="headerlink" href="#performance-characteristics" title="Permanent link">&para;</a></h1>
+<p>This document covers memory profiles, throughput benchmarks, and
+practical tuning advice for all EDSParser operations.</p>
+<hr />
+<h2 id="memory-architecture-overview">Memory Architecture Overview<a class="headerlink" href="#memory-architecture-overview" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Tool / Operation</th>
+<th style="text-align: center;">Memory Model</th>
+<th style="text-align: right;">Peak RAM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>msa2eds</code></td>
+<td style="text-align: center;">Reference + bit vectors in RAM; streaming output</td>
+<td style="text-align: right;">O(alignment length)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>vcf2eds</code></td>
+<td style="text-align: center;">One genomic block in RAM at a time</td>
+<td style="text-align: right;">O(variants per block)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>eds2leds</code> (streaming arch)</td>
+<td style="text-align: center;">Metadata only + one batch of merge pairs</td>
+<td style="text-align: right;">~200–600 MB for 100 GB EDS</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>edsparser-stats</code></td>
+<td style="text-align: center;">Metadata only</td>
+<td style="text-align: right;">~1–50 MB</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>edsparser-genpatterns</code></td>
+<td style="text-align: center;">Metadata only</td>
+<td style="text-align: right;">~1–50 MB</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>genrandomeds</code></td>
+<td style="text-align: center;">O(1) streaming</td>
+<td style="text-align: right;">~4 MB constant</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>Sources</code> (METADATA_ONLY)</td>
+<td style="text-align: center;">Index + LRU cache</td>
+<td style="text-align: right;">~25 MB for 13 GB SEDS</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="msa-transformation">MSA Transformation<a class="headerlink" href="#msa-transformation" title="Permanent link">&para;</a></h2>
+<h3 id="memory-formula">Memory Formula<a class="headerlink" href="#memory-formula" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Peak RAM ≈ ref_seq_size
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>          + 2 × bit_vectors          (≈ ref_seq_size / 4 total)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>          + file_positions             (num_sequences × 8 bytes)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>          + per-symbol variant buffer  (small, freed after each symbol)
+</code></pre></div>
+<p><strong>Example:</strong> 1 000 sequences × 100 MB alignment
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>  100 MB (reference)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>+  25 MB (bit vectors)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>+   8 KB (file positions)
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>+ negligible (per-symbol buffer)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>= ~125 MB peak
+</code></pre></div></p>
+<p>This is independent of the number of sequences — adding more sequences
+costs 8 bytes per sequence in file positions and a tiny per-column
+comparison overhead; it does <strong>not</strong> accumulate all sequences in RAM.</p>
+<h3 id="throughput-characteristics">Throughput Characteristics<a class="headerlink" href="#throughput-characteristics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Dominated by sequential disk reads (reference + per-symbol seeks)</li>
+<li>Typically 50–200 MB/s on modern SSDs</li>
+<li>Memory footprint: <strong>constant relative to output size</strong></li>
+</ul>
+<h3 id="scalability">Scalability<a class="headerlink" href="#scalability" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Peak Memory</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100 sequences × 1 MB alignment</td>
+<td>~1.3 MB</td>
+<td>Trivial</td>
+</tr>
+<tr>
+<td>1 000 sequences × 100 MB alignment</td>
+<td>~125 MB</td>
+<td>Comfortable</td>
+</tr>
+<tr>
+<td>10 000 sequences × 1 GB alignment</td>
+<td>~1.25 GB</td>
+<td>Feasible</td>
+</tr>
+<tr>
+<td>100 000 sequences × 100 MB alignment</td>
+<td>~125 MB</td>
+<td>Reference size dominates</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="vcf-block-based-processing">VCF Block-Based Processing<a class="headerlink" href="#vcf-block-based-processing" title="Permanent link">&para;</a></h2>
+<h3 id="memory-formula-per-block">Memory Formula (per block)<a class="headerlink" href="#memory-formula-per-block" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Peak RAM ≈ block_size_bytes        (reference region in RAM)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>          + variants_in_block × ~200 bytes/variant
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>          + EDS output buffer       (flushed per block)
+</code></pre></div>
+<p>For 1000 Genomes / UK Biobank scale VCF:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Default 10 Mbp block:
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  10 MB (reference region)
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>+ ~200 bytes × (typical density ~10 variants/kbp × 10M bases) = ~20 MB
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>= ~30 MB per block
+</code></pre></div></p>
+<h3 id="block-size-trade-offs">Block Size Trade-offs<a class="headerlink" href="#block-size-trade-offs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">Block size</th>
+<th style="text-align: center;">Peak memory</th>
+<th style="text-align: center;">I/O ops</th>
+<th style="text-align: center;">EDS quality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">1 Mbp</td>
+<td style="text-align: center;">Very low (~10 MB)</td>
+<td style="text-align: center;">Many</td>
+<td style="text-align: center;">More block boundaries</td>
+</tr>
+<tr>
+<td style="text-align: center;">10 Mbp (default)</td>
+<td style="text-align: center;">Low (~50 MB)</td>
+<td style="text-align: center;">Moderate</td>
+<td style="text-align: center;">Good</td>
+</tr>
+<tr>
+<td style="text-align: center;">100 Mbp</td>
+<td style="text-align: center;">Moderate (~500 MB)</td>
+<td style="text-align: center;">Few</td>
+<td style="text-align: center;">Best</td>
+</tr>
+<tr>
+<td style="text-align: center;">0 (disabled)</td>
+<td style="text-align: center;">O(total variants)</td>
+<td style="text-align: center;">Minimal</td>
+<td style="text-align: center;">Best</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommendation for large population VCF:</strong>
+- 16 GB RAM: <code>--block-size 2000000</code> (2 Mbp)
+- 64 GB RAM: default <code>--block-size 10000000</code> (10 Mbp)
+- 256 GB RAM: <code>--block-size 100000000</code> (100 Mbp)</p>
+<h3 id="structural-variant-memory">Structural Variant Memory<a class="headerlink" href="#structural-variant-memory" title="Permanent link">&para;</a></h3>
+<p>Structural variants (<code>&lt;INV&gt;</code>, <code>&lt;CN2&gt;</code>, etc.) may generate longer alternative
+strings, but these are handled within the same block processing loop and
+do not change the overall memory model.</p>
+<hr />
+<h2 id="eds-l-eds-transformation">EDS → l-EDS Transformation<a class="headerlink" href="#eds-l-eds-transformation" title="Permanent link">&para;</a></h2>
+<h3 id="memory-comparison-old-vs-new-implementation">Memory Comparison (old vs. new implementation)<a class="headerlink" href="#memory-comparison-old-vs-new-implementation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: center;">Pre-2026-05 Peak</th>
+<th style="text-align: center;">Current Peak</th>
+<th style="text-align: center;">Reduction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 GB EDS, 100 pairs, 4 threads</td>
+<td style="text-align: center;">~20 GB</td>
+<td style="text-align: center;">~200 MB</td>
+<td style="text-align: center;"><strong>100×</strong></td>
+</tr>
+<tr>
+<td>10 GB EDS, 500 pairs, 8 threads</td>
+<td style="text-align: center;">~200 GB</td>
+<td style="text-align: center;">~400 MB</td>
+<td style="text-align: center;"><strong>500×</strong></td>
+</tr>
+<tr>
+<td>100 GB EDS, 1000 pairs, 16 threads</td>
+<td style="text-align: center;">~2 TB</td>
+<td style="text-align: center;">~600 MB</td>
+<td style="text-align: center;"><strong>3000×</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="current-memory-formula">Current Memory Formula<a class="headerlink" href="#current-memory-formula" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Peak RAM ≈ metadata                     (~100 MB for 100 GB EDS)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>          + batch_size × merge_metadata  (1 000 pairs × ~10 KB = ~10 MB)
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>          + streaming_buffers            (~100 MB OS buffers)
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>          + threads × single_symbol      (16 × ~10 KB = negligible)
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>≈ 210 MB baseline for any file size
+</code></pre></div>
+<h3 id="throughput">Throughput<a class="headerlink" href="#throughput" title="Permanent link">&para;</a></h3>
+<p>After I/O optimizations (2026-05-26):</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th style="text-align: center;">Throughput</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cartesian</td>
+<td style="text-align: center;">~5.4 MB/s</td>
+<td>No SEDS temp file per iteration</td>
+</tr>
+<tr>
+<td>Linear</td>
+<td style="text-align: center;">~4.3 MB/s</td>
+<td>Writes extra SEDS temp file per iteration</td>
+</tr>
+</tbody>
+</table>
+<p>Ratio: <strong>~1.26× cartesian/linear</strong> — the remaining gap is inherent I/O.</p>
+<p>Throughput is I/O-bound (disk seeks + sequential reads for on-demand symbol
+loading). The key optimisations:</p>
+<ol>
+<li>
+<p><strong>Sequential seek elimination</strong>: <code>read_symbol_from_stream()</code> checks if
+   the stream is already at position before calling <code>seekg()</code>.
+   Result: ~5K seeks per iteration instead of ~400K for forward-order access.</p>
+</li>
+<li>
+<p><strong>SEDS batching</strong>: consecutive unmodified symbols are bulk-copied with
+   <code>copy_range_to_stream()</code> — ~2 727 calls vs ~200K for 10% variability data.</p>
+</li>
+<li>
+<p><strong>No ostringstream accumulation</strong>: output written directly via <code>&lt;&lt;</code> to the
+   output file stream.</p>
+</li>
+</ol>
+<h3 id="iterations-to-convergence">Iterations to Convergence<a class="headerlink" href="#iterations-to-convergence" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Typical iterations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MSA-derived (real genomic, l=5)</td>
+<td>2–4</td>
+</tr>
+<tr>
+<td>VCF-derived (real genomic, l=10)</td>
+<td>3–6</td>
+</tr>
+<tr>
+<td>Synthetic 10% variability, min-context 0</td>
+<td>5–10</td>
+</tr>
+<tr>
+<td>Adversarial (alternating single-base)</td>
+<td>O(l)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="sources-streaming-performance">Sources Streaming Performance<a class="headerlink" href="#sources-streaming-performance" title="Permanent link">&para;</a></h2>
+<h3 id="index-building">Index Building<a class="headerlink" href="#index-building" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">SEDS size</th>
+<th style="text-align: center;">Old (per-char get+tellg)</th>
+<th style="text-align: center;">New (64KB chunk scan)</th>
+<th style="text-align: center;">Ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">2 MB</td>
+<td style="text-align: center;">~2M function calls</td>
+<td style="text-align: center;">~32 read() calls</td>
+<td style="text-align: center;"><strong>62 500×</strong></td>
+</tr>
+<tr>
+<td style="text-align: center;">13 GB</td>
+<td style="text-align: center;">Very slow</td>
+<td style="text-align: center;">~200K read() calls</td>
+<td style="text-align: center;"><strong>~10 000×</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="lru-cache-hit-rate">LRU Cache Hit Rate<a class="headerlink" href="#lru-cache-hit-rate" title="Permanent link">&para;</a></h3>
+<p>Measured on real merge operations (which access sources in linear order):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">File size</th>
+<th style="text-align: center;">Cache capacity</th>
+<th style="text-align: center;">Hit rate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">Any</td>
+<td style="text-align: center;">10 000 (default)</td>
+<td style="text-align: center;">~98%</td>
+</tr>
+<tr>
+<td style="text-align: center;">&gt; 100 GB SEDS</td>
+<td style="text-align: center;">100 000</td>
+<td style="text-align: center;">~99%</td>
+</tr>
+</tbody>
+</table>
+<h3 id="memory-full-vs-metadata_only">Memory: FULL vs METADATA_ONLY<a class="headerlink" href="#memory-full-vs-metadata_only" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">SEDS file</th>
+<th style="text-align: center;">FULL mode</th>
+<th style="text-align: center;">METADATA_ONLY</th>
+<th style="text-align: center;">Reduction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">13 GB</td>
+<td style="text-align: center;">~10.6 GB</td>
+<td style="text-align: center;">~25 MB</td>
+<td style="text-align: center;"><strong>420×</strong></td>
+</tr>
+<tr>
+<td style="text-align: center;">100 MB</td>
+<td style="text-align: center;">~80 MB</td>
+<td style="text-align: center;">~3 MB</td>
+<td style="text-align: center;">~27×</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="genrandomeds-memory">genrandomeds Memory<a class="headerlink" href="#genrandomeds-memory" title="Permanent link">&para;</a></h2>
+<p><code>genrandomeds</code> uses two independent PRNGs streaming directly to disk.
+Memory usage is constant at <strong>~4 MB RSS</strong> regardless of output file size.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Output 1 MB:   4 MB peak RSS
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Output 100 MB: 4 MB peak RSS
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>Output 10 GB:  4 MB peak RSS
+</code></pre></div>
+<hr />
+<h2 id="benchmark-baseline-2026-05-reference-system">Benchmark Baseline (2026-05 Reference System)<a class="headerlink" href="#benchmark-baseline-2026-05-reference-system" title="Permanent link">&para;</a></h2>
+<p>Measured with <code>bench.sh --size standard</code> (N=3 median, SSD):</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Tool</th>
+<th>Input</th>
+<th style="text-align: center;">Throughput</th>
+<th style="text-align: center;">Memory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Generation</td>
+<td><code>genrandomeds</code></td>
+<td>—</td>
+<td style="text-align: center;">~80 MB/s</td>
+<td style="text-align: center;">4 MB</td>
+</tr>
+<tr>
+<td>l-EDS cartesian</td>
+<td><code>eds2leds</code></td>
+<td>10 MB, 10% var</td>
+<td style="text-align: center;">5.4 MB/s</td>
+<td style="text-align: center;">~150 MB</td>
+</tr>
+<tr>
+<td>l-EDS linear</td>
+<td><code>eds2leds</code></td>
+<td>10 MB, 10% var</td>
+<td style="text-align: center;">4.3 MB/s</td>
+<td style="text-align: center;">~160 MB</td>
+</tr>
+<tr>
+<td>Statistics</td>
+<td><code>edsparser-stats</code></td>
+<td>10 MB</td>
+<td style="text-align: center;">&gt;100 MB/s</td>
+<td style="text-align: center;">~5 MB</td>
+</tr>
+<tr>
+<td>Pattern gen</td>
+<td><code>edsparser-genpatterns</code></td>
+<td>10 MB, 1K patterns</td>
+<td style="text-align: center;">&lt;1s</td>
+<td style="text-align: center;">~5 MB</td>
+</tr>
+</tbody>
+</table>
+<p>Run <code>bash tests/bench/bench.sh</code> to reproduce on your system.</p>
+<hr />
+<h2 id="practical-tuning-guide">Practical Tuning Guide<a class="headerlink" href="#practical-tuning-guide" title="Permanent link">&para;</a></h2>
+<h3 id="my-eds2leds-is-using-too-much-memory">"My eds2leds is using too much memory"<a class="headerlink" href="#my-eds2leds-is-using-too-much-memory" title="Permanent link">&para;</a></h3>
+<p><code>eds2leds</code> already uses streaming architecture. If memory is unexpectedly
+high:</p>
+<ol>
+<li>Check that you are using the current build (post-2026-05 streaming arch).</li>
+<li>Reduce <code>--threads</code> — each thread holds one symbol in RAM; for pathologically
+   large symbols this can matter.</li>
+<li>The batch size (default 1 000 pairs) is hardcoded; lower it if symbols
+   are very long and you have limited RAM. This requires a code change.</li>
+</ol>
+<h3 id="my-vcf2eds-is-using-too-much-memory">"My vcf2eds is using too much memory"<a class="headerlink" href="#my-vcf2eds-is-using-too-much-memory" title="Permanent link">&para;</a></h3>
+<p>Reduce <code>--block-size</code>. Start with <code>--block-size 1000000</code> (1 Mbp) and
+increase until you hit your memory budget.</p>
+<h3 id="my-eds2leds-is-slow">"My eds2leds is slow"<a class="headerlink" href="#my-eds2leds-is-slow" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Check the complexity warning. High <code>adjacent_degenerate_pairs</code> means
+   many iterations are needed.</li>
+<li>Use <code>--threads N</code> to parallelize batch computation. Most benefit comes
+   from 4–8 threads on typical genomic data.</li>
+<li>Use <strong>LINEAR</strong> merging (provide <code>-s</code>): LINEAR prunes invalid paths,
+   producing fewer merge candidates and shorter result strings.</li>
+<li>Ensure the temp directory is on a fast (SSD) filesystem. The default
+   is <code>$TMPDIR</code> / <code>/tmp</code>. Override by setting <code>TMPDIR</code> before running.</li>
+</ol>
+<h3 id="i-need-very-large-seds-lru-cache">"I need very large SEDS LRU cache"<a class="headerlink" href="#i-need-very-large-seds-lru-cache" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">auto</span><span class="w"> </span><span class="n">eds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EDS</span><span class="o">::</span><span class="n">load</span><span class="p">(</span><span class="s">&quot;data.eds&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;data.seds&quot;</span><span class="p">);</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">eds</span><span class="p">.</span><span class="n">set_source_cache_capacity</span><span class="p">(</span><span class="mi">1&#39;000&#39;000</span><span class="p">);</span><span class="w">  </span><span class="c1">// 1M entries ≈ 40 MB</span>
+</code></pre></div>
+<h3 id="how-do-i-profile-memory-over-time">"How do I profile memory over time?"<a class="headerlink" href="#how-do-i-profile-memory-over-time" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;edsparser/memory_monitor.hpp&gt;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">MemoryMonitor</span><span class="w"> </span><span class="nf">mon</span><span class="p">(</span><span class="mf">0.5</span><span class="p">);</span><span class="w">  </span><span class="c1">// sample every 0.5 s</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">mon</span><span class="p">.</span><span class="n">start</span><span class="p">();</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1">// ... your operation ...</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">mon</span><span class="p">.</span><span class="n">stop</span><span class="p">();</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Peak: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_peak_memory_mb</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot; MB</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">mon</span><span class="p">.</span><span class="n">detect_memory_leak</span><span class="p">(</span><span class="mf">1.0</span><span class="p">))</span><span class="w">  </span><span class="c1">// threshold 1 MB/s</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cerr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Memory leak detected!</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
