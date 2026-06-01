@@ -281,7 +281,7 @@ void test_source_streaming(const StressTestConfig& config, size_t size_mb) {
         monitor.add_label("After load");
 
         // Configure LRU cache
-        eds.set_source_cache_capacity(10000);  // 10K sources
+        eds.get_sources_object()->set_cache_capacity(10000);  // 10K sources
 
         // Access sources in various patterns
         std::cout << "Testing source access patterns...\n";

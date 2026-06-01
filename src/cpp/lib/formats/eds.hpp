@@ -90,17 +90,6 @@ public:
         std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
     };
 
-    // Statistics (for backward compatibility, returns statistics portion of metadata)
-    struct Statistics {
-        Length min_context_length;
-        Length max_context_length;
-        double avg_context_length;
-        size_t num_degenerate_symbols;
-        size_t num_common_chars;
-        size_t total_change_size;
-        size_t num_empty_strings;
-    };
-
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
 
     // Factory: construct a METADATA_ONLY EDS directly from pre-built metadata + file path.
@@ -109,8 +98,6 @@ public:
     static EDS from_metadata(Metadata&& metadata,
                              size_t n, size_t m, size_t N,
                              const std::filesystem::path& file_path);
-    Statistics get_statistics() const;                           // Get statistics only
-    void print_statistics(std::ostream& os = std::cout) const;
 
     // Output methods
     void print(std::ostream& os = std::cout) const;
@@ -128,12 +115,6 @@ public:
                        const std::vector<int>& degenerate_strings,
                        const String& pattern) const;
 
-    // Access to internal data
-    // [[deprecated("Direct access to sets is not supported in streaming mode. Use read_symbol(pos) instead.")]]
-    const std::vector<StringSet>& get_sets() const;
-
-    const std::vector<bool>& get_is_degenerate() const { return metadata_.is_degenerate; }
-
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
     Length get_symbol_size(Position pos) const { return metadata_.symbol_sizes[pos]; }
@@ -147,10 +128,6 @@ public:
     // Direct Sources object access (for advanced users)
     std::shared_ptr<Sources> get_sources_object() const { return sources_; }
     void set_sources_object(std::shared_ptr<Sources> sources);
-
-    // Source cache management (deprecated - use sources_->set_cache_capacity() directly)
-    void set_source_cache_capacity(size_t capacity);    // Delegates to sources_
-    void clear_source_cache() const;                    // Delegates to sources_
 
 private:
     // Core state

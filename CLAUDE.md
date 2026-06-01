@@ -71,11 +71,15 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 - Supports source tracking via separate .seds files (managed by `Sources` class)
 - Key operations:
   - Loading/parsing from streams or files
-  - Statistics computation (metadata includes `cum_common_positions`, `cum_degenerate_counts`)
+  - Metadata access via `get_metadata()` (`Metadata` struct: `cum_common_positions`, `cum_degenerate_counts`, `is_degenerate`, `string_lengths`, etc.)
   - Position checking (verify if pattern occurs at position)
   - Merging adjacent symbols (CARTESIAN without sources, LINEAR with sources)
   - Pattern generation for benchmarking
-- New source API: `set_sources_object()`, `get_sources_object()`, `read_source(idx)`, `has_sources()`
+- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`
+  - Use `get_metadata()` for all statistics/structural fields
+  - Use `get_metadata().is_degenerate` instead of `get_is_degenerate()`
+  - Use `get_sources_object()->set_cache_capacity()` for cache control
+- Source API: `set_sources_object()`, `get_sources_object()`, `read_source(idx)`, `has_sources()`
 - **Note**: `get_sources()` throws when EDS was constructed from a stream; use `read_source(idx)` instead
 
 **Transform Modules**
@@ -403,7 +407,7 @@ EDS::load (default): index + cache = ~25MB for 13GB file  (420× reduction)
 ```cpp
 // Load with source streaming (no code changes needed!)
 EDS eds = EDS::load("file.eds", "file_13GB.seds");
-eds.set_source_cache_capacity(100000);  // optional: increase cache
+eds.get_sources_object()->set_cache_capacity(100000);  // optional: increase cache
 std::set<int> paths = eds.read_source(string_id);
 ```
 
@@ -453,6 +457,11 @@ See `biofmi/experiments/README.md` for the full pipeline documentation.
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
 | `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
 | `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
+
+**`test_eds` coverage note**: Both construction modes are tested.
+- METADATA_ONLY (file loader via `EDS::load`): covered by most existing tests via `create_temp_eds()`
+- FULL (in-memory via stream/string ctors): covered by `test_stream_constructor`, `test_from_string_factory`, `test_mode_equivalence`, `test_full_mode_edge_cases` (Tests A1–A4)
+- Mode equivalence: `test_mode_equivalence` constructs the same EDS via string ctor and file loader and asserts all observable outputs match (`length`, `cardinality`, `size`, all `read_symbol(i)`, all metadata fields)
 
 ### Running Memory Tests Manually
 ```bash

@@ -87,7 +87,7 @@ namespace {
         }
 
         // Get degenerate flags from metadata
-        const auto& is_degenerate = eds.get_is_degenerate();
+        const auto& is_degenerate = eds.get_metadata().is_degenerate;
 
         // Track which positions are already included in pairs
         std::vector<bool> used(eds.length(), false);

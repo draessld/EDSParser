@@ -305,12 +305,12 @@ void test_statistics_after_transform() {
 
     EDS transformed = transform_to_leds("{AC}{G,C}{T}", 2);
 
-    auto stats = transformed.get_statistics();
+    const auto& meta = transformed.get_metadata();
 
     // Should have 1 non-degenerate (AC) and 1 degenerate (GT,CT)
-    assert(stats.num_degenerate_symbols == 1);
-    assert(stats.min_context_length == 2);  // "AC"
-    assert(stats.max_context_length == 2);
+    assert(meta.num_degenerate_symbols == 1);
+    assert(meta.min_context_length == 2);  // "AC"
+    assert(meta.max_context_length == 2);
 
     pass();
 }
@@ -325,7 +325,7 @@ void test_metadata_consistency() {
     assert(transformed.cardinality() == 3);  // 1 + 2
 
     // Check is_degenerate
-    const auto& is_deg = transformed.get_is_degenerate();
+    const auto& is_deg = transformed.get_metadata().is_degenerate;
     assert(is_deg.size() == 2);
     assert(is_deg[0] == false);  // {ACGT} non-degenerate
     assert(is_deg[1] == true);   // {GT,CT} degenerate

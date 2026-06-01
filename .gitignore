@@ -82,6 +82,7 @@ Thumbs.db
 # CLAUDE
 *.md
 !CLAUDE.md
+!TODO.md
 .claude/
 !docs/*.md
 !tests/bench/README.md

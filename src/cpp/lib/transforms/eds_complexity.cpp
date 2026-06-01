@@ -32,7 +32,7 @@ TransformComplexity estimate_leds_complexity(
         return result;
     }
 
-    const auto& is_degenerate = eds.get_is_degenerate();
+    const auto& is_degenerate = eds.get_metadata().is_degenerate;
     const auto& metadata = eds.get_metadata();
 
     // Count adjacent degenerate pairs

@@ -304,20 +304,6 @@ std::set<int> EDS::read_source(size_t string_id) const {
     return sources_->read_source(string_id);
 }
 
-// Configure source cache capacity (delegates to Sources)
-void EDS::set_source_cache_capacity(size_t capacity) {
-    if (sources_) {
-        sources_->set_cache_capacity(capacity);
-    }
-}
-
-// Clear source cache manually (delegates to Sources)
-void EDS::clear_source_cache() const {
-    if (sources_) {
-        sources_->clear_cache();
-    }
-}
-
 // Set sources object
 void EDS::set_sources_object(std::shared_ptr<Sources> sources) {
     // Validate cardinality matches if both EDS and sources are non-empty
@@ -440,55 +426,9 @@ void EDS::calculate_statistics() {
     }
 }
 
-// (Deleted: calculate_source_statistics() - now in Sources class)
-
-EDS::Statistics EDS::get_statistics() const {
-    // Return Statistics struct from Metadata (for backward compatibility)
-    Statistics stats;
-    stats.min_context_length = metadata_.min_context_length;
-    stats.max_context_length = metadata_.max_context_length;
-    stats.avg_context_length = metadata_.avg_context_length;
-    stats.num_degenerate_symbols = metadata_.num_degenerate_symbols;
-    stats.num_common_chars = metadata_.num_common_chars;
-    stats.total_change_size = metadata_.total_change_size;
-    stats.num_empty_strings = metadata_.num_empty_strings;
-    return stats;
-}
-
 // ================================================================================
 // OUTPUT METHODS
 // ================================================================================
-
-void EDS::print_statistics(std::ostream& os) const {
-    Statistics stats = get_statistics();
-
-    os << "========================================\n";
-    os << "EDS Statistics\n";
-    os << "========================================\n";
-    os << "Structure:\n";
-    os << "  Number of sets (n):           " << n_ << "\n";
-    os << "  Total characters (N):         " << N_ << "\n";
-    os << "  Total strings (m):            " << m_ << "\n";
-    os << "  Degenerate symbols:           " << stats.num_degenerate_symbols << "\n";
-    os << "  Regular symbols:              " << (n_ - stats.num_degenerate_symbols) << "\n";
-    os << "\n";
-    os << "Context Lengths:\n";
-    os << "  Minimum:                      " << stats.min_context_length << "\n";
-    os << "  Maximum:                      " << stats.max_context_length << "\n";
-    os << "  Average:                      " << stats.avg_context_length << "\n";
-    os << "\n";
-    os << "Variations:\n";
-    os << "  Total change size:            " << stats.total_change_size << "\n";
-    os << "  Common characters:            " << stats.num_common_chars << "\n";
-    os << "  Empty strings:                " << stats.num_empty_strings << "\n";
-    os << "\n";
-    if (sources_) {
-        os << "Sources: Loaded (" << sources_->cardinality() << " strings with source info)\n";
-    } else {
-        os << "Sources: Not loaded\n";
-    }
-    os << "========================================\n";
-}
 
 void EDS::print(std::ostream& os) const {
     // Now works with both FULL and METADATA_ONLY modes via read_symbol()
@@ -943,14 +883,6 @@ StringSet EDS::read_symbol(Position pos) const {
 // ================================================================================
 // POSITION CHECKING & VALIDATION
 // ================================================================================
-
-// get_sets() - deprecated (streaming mode only)
-const std::vector<StringSet>& EDS::get_sets() const {
-    throw std::runtime_error(
-        "Direct access to sets is not supported in streaming mode. "
-        "Use read_symbol(pos) for on-demand access"
-    );
-}
 
 // Check if pattern occurs at position with given degenerate string choices
 bool EDS::check_position(Position common_pos,
