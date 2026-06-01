@@ -162,7 +162,7 @@ private:
     // Metadata (always present, contains index + statistics)
     Metadata metadata_;
 
-    // String data (only if mode_ == FULL)
+    // String data (populated by stream/string constructors; empty in file-streaming mode)
     std::vector<StringSet> sets_;       // The actual EDS data
 
     // File streaming (only if mode_ == METADATA_ONLY)

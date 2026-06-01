@@ -388,6 +388,99 @@ void test_empty_string_alternatives() {
     pass();
 }
 
+// ===== FULL OUTPUT FORMAT TESTS =====
+
+// Regression for bug where --full flag was silently ignored when input was already
+// l-EDS compliant (zero merging iterations needed). The raw temp file copy would
+// preserve the input format instead of applying the requested format.
+void test_full_output_already_leds_compliant_linear() {
+    test("--full flag honoured when input already satisfies l-EDS (linear path)");
+
+    // Input is already l-EDS compliant for context_length=2 (context "TTTTTT" >= 2).
+    // compact=false → full output: every symbol must be wrapped in { }.
+    std::string eds_str = "{ACGTTTTTT}{A,C}{TTTTTTTACG}";
+    std::istringstream input(eds_str);
+    std::ostringstream output;
+    eds_to_leds_linear(input, output, 2, nullptr, nullptr, 1, /*compact=*/false);
+
+    std::string result = output.str();
+    // Every symbol must start with '{'
+    assert(!result.empty());
+    assert(result[0] == '{');
+    // Non-degenerate symbols must also be wrapped — verify first and last
+    // (we know position 0 and position 2 are non-degenerate in this input)
+    // Count opening braces: must equal number of symbols (3)
+    size_t brace_count = 0;
+    for (char c : result) if (c == '{') ++brace_count;
+    assert(brace_count == 3);
+
+    pass();
+}
+
+void test_full_output_already_leds_compliant_cartesian() {
+    test("--full flag honoured when input already satisfies l-EDS (cartesian path)");
+
+    std::string eds_str = "{ACGTTTTTT}{A,C}{TTTTTTTACG}";
+    std::istringstream input(eds_str);
+    std::ostringstream output;
+    eds_to_leds_cartesian(input, output, 2, 1, /*compact=*/false);
+
+    std::string result = output.str();
+    assert(!result.empty());
+    assert(result[0] == '{');
+    size_t brace_count = 0;
+    for (char c : result) if (c == '{') ++brace_count;
+    assert(brace_count == 3);
+
+    pass();
+}
+
+void test_full_output_compact_input_roundtrip() {
+    test("full and compact output parse to identical EDS");
+
+    // compact input (no brackets on non-degenerate)
+    std::string eds_str = "ACGTTTTT{A,C}TTTTTACGT";
+    Length ctx = 2;
+
+    auto run = [&](bool compact) -> std::string {
+        std::istringstream in(eds_str);
+        std::ostringstream out;
+        eds_to_leds_linear(in, out, ctx, nullptr, nullptr, 1, compact);
+        return out.str();
+    };
+
+    std::string compact_out = run(true);
+    std::string full_out    = run(false);
+
+    // Full output must start with '{'
+    assert(!full_out.empty() && full_out[0] == '{');
+
+    // Both must parse to the same EDS structure
+    auto load = [](const std::string& s) {
+        auto p = std::filesystem::temp_directory_path()
+                 / ("test_roundtrip_" + std::to_string(std::rand()) + ".tmp");
+        { std::ofstream f(p); f << s; }
+        auto eds = EDS::load(p);
+        std::filesystem::remove(p);
+        return eds;
+    };
+
+    EDS eds_compact = load(compact_out);
+    EDS eds_full    = load(full_out);
+
+    assert(eds_compact.length()      == eds_full.length());
+    assert(eds_compact.cardinality() == eds_full.cardinality());
+    for (size_t i = 0; i < eds_compact.length(); ++i) {
+        auto sc = eds_compact.read_symbol(i);
+        auto sf = eds_full.read_symbol(i);
+        assert(sc.size() == sf.size());
+        for (size_t j = 0; j < sc.size(); ++j)
+            assert(sc[j] == sf[j]);
+    }
+
+    pass();
+}
+
 // ===== MAIN =====
 
 int main() {
@@ -420,6 +513,11 @@ int main() {
     test_all_degenerate_input();
     test_alternating_degenerate();
     test_empty_string_alternatives();
+
+    // Full output format (--full flag regression)
+    test_full_output_already_leds_compliant_linear();
+    test_full_output_already_leds_compliant_cartesian();
+    test_full_output_compact_input_roundtrip();
 
     std::cout << "\n===========================================\n";
     std::cout << "All " << test_num << " tests PASSED!\n";

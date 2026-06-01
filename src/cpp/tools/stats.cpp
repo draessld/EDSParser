@@ -34,8 +34,8 @@ std::string format_size(uintmax_t bytes) {
     return ss.str();
 }
 
-// Estimate memory usage for FULL mode
-size_t estimate_full_mode_memory(size_t N, size_t m, size_t n) {
+// Estimate RAM required if all EDS strings were loaded into memory (stream/string construction)
+size_t estimate_in_memory_storage(size_t N, size_t m, size_t n) {
     // Rough estimation:
     // - String data: N bytes (actual characters)
     // - String overhead: m * sizeof(std::string) ≈ m * 32 bytes
@@ -117,7 +117,7 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     // Calculate memory estimates
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     std::cout << "========================================\n";
@@ -174,7 +174,7 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     std::cout << "Memory Usage:\n";
     std::cout << "  Current (STREAMING):          " << std::setw(12) << format_size(metadata_mem) << "\n";
-    std::cout << "  Estimated FULL mode:          " << std::setw(12) << format_size(full_mem) << "\n";
+    std::cout << "  Estimated (in-memory load):   " << std::setw(12) << format_size(full_mem) << "\n";
     std::cout << "  Reduction factor:             " << std::setw(12) << std::fixed << std::setprecision(1) << reduction_factor << "x\n";
     std::cout << "\n";
 
@@ -200,7 +200,7 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     std::cout << "{\n";
@@ -262,7 +262,7 @@ void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     auto src_stats = compute_source_stats(eds);
