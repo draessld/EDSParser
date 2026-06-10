@@ -695,6 +695,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#notation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#goal" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1032,6 +1043,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#notation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#goal" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1283,6 +1305,12 @@ internal common segment has length ≥ l:
 <hr />
 <h2 id="eds-l-eds-iterative-merge">EDS → l-EDS: Iterative Merge<a class="headerlink" href="#eds-l-eds-iterative-merge" title="Permanent link">&para;</a></h2>
 <p><strong>File:</strong> <code>src/cpp/lib/transforms/eds_transforms.cpp</code></p>
+<h3 id="notation">Notation<a class="headerlink" href="#notation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>D</strong> — a degenerate symbol (a set with more than one alternative, e.g. <code>{A,TG}</code>)</li>
+<li><strong>c</strong> — a common (non-degenerate) symbol (a single string, e.g. <code>ACG</code>)</li>
+<li>An EDS is a sequence of D and c symbols: <code>c D c D c</code>, <code>D c D</code>, <code>D D c</code>, etc.</li>
+</ul>
 <h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
 <p>Transform an EDS into an l-EDS by merging adjacent symbols until every
 <strong>internal</strong> non-degenerate (common) symbol has length ≥ l.</p>
@@ -1302,22 +1330,27 @@ Cartesian explosion common in real population data.</p>
 <h3 id="iterative-algorithm">Iterative Algorithm<a class="headerlink" href="#iterative-algorithm" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Iteration:
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  1. Load EDS as METADATA_ONLY
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  2. Scan symbols left-to-right
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  3. For each common symbol with length &lt; l flanked by degenerates on both
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>     sides:
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>       - Identify the merge direction (merge with left or right neighbour,
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>         whichever produces fewer alternatives or is cheaper)
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>       - Enqueue this as a merge pair
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  4. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  5. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  2. Scan symbols left-to-right, greedily select non-overlapping merge pairs:
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>       a. Common symbol with length &lt; l flanked by degenerates on both sides
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>          → merge it with the adjacent degenerate
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>       b. Two consecutive degenerate symbols D D (implicit zero-length common
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>          between them, length 0 &lt; l)
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>          → merge the two degenerates into one (Cartesian / LINEAR product)
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  3. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  4. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
 <a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>                                       write to temp file
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>  6. Point the input to the new temp file
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>  7. Repeat until no merges are needed
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>  5. Point the input to the new temp file
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>  6. Repeat until no merges are needed
 </code></pre></div>
-<p>Typical convergence: <strong>2–5 iterations</strong> for real genomic data (most
-short contexts are resolved in the first iteration).</p>
-<p>Worst case (adversarial: alternating single-base common symbols):
-O(log(min_context_gaps)) iterations.</p>
+<!-- > **Note (unverified):** Convergence figures below are based on synthetic data only —
+> no experiments on real genomic data have been run yet. -->
+
+<p>Worst case: a sequence of n consecutive degenerate symbols <code>D D D … D</code>.
+Each greedy pass can only pair non-overlapping neighbours, so the number
+of D's halves each iteration → <strong>O(log n) iterations</strong>.</p>
+<p>The same bound applies to a long alternating <code>D c D c D</code> chain where every
+common symbol c has length &lt; l: each c must first be absorbed into a
+neighbour (creating a new D D adjacency), then those D's must be merged.</p>
 <h3 id="compute_merge_metadata">compute_merge_metadata<a class="headerlink" href="#compute_merge_metadata" title="Permanent link">&para;</a></h3>
 <p>Uses only metadata (string lengths, source sets) to determine, for each
 merge pair:
