@@ -24,14 +24,20 @@ bench_log "Comparing: $(basename "$LATEST")  vs  baseline.csv  (threshold: +20%)
 echo ""
 
 awk -F',' -v threshold="$THRESHOLD" '
-    NR==FNR && FNR>1 {
-        base_runtime[$3] = $6
-        base_memory[$3]  = $7
+    FNR==1 {
+        for (i=1; i<=NF; i++) col[$i] = i
         next
     }
-    FNR==1 { next }
+    NR==FNR {
+        key = $(col["scenario"])
+        base_runtime[key] = $(col["runtime_median_s"])
+        base_memory[key]  = $(col["memory_median_mb"])
+        next
+    }
     {
-        scenario=$3; runtime=$6; memory=$7
+        scenario = $(col["scenario"])
+        runtime  = $(col["runtime_median_s"])
+        memory   = $(col["memory_median_mb"])
         if (scenario in base_runtime) {
             if ((runtime+0) > (base_runtime[scenario]+0) * threshold) {
                 printf "REGRESSION runtime  %-44s  baseline=%6.3fs  current=%6.3fs  ratio=%.2fx\n",

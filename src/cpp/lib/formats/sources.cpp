@@ -67,29 +67,36 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
         throw std::runtime_error("Sources file does not exist: " + path.string());
     }
 
-    if (format != Format::SEDS) {
-        throw std::runtime_error("Binary formats (.edz) not yet implemented");
+    if (format == Format::EDZ_COMPRESSED) {
+        throw std::runtime_error("EDZ_COMPRESSED format not yet implemented");
     }
 
-    // Open file once — parse_seds() will build index and set cardinality_ in one pass
-    std::ifstream stream(path);
-    if (!stream.is_open()) {
-        throw std::runtime_error("Failed to open sources file: " + path.string());
-    }
-
-    // Create Sources with cardinality=0 sentinel (parse_seds() will fill it)
     auto sources = std::make_shared<Sources>(0, format);
     sources->file_path_ = path;
 
-    // Parse: builds index + sets cardinality_ in one pass
-    sources->parse_seds(stream);
-
-    if (sources->cardinality_ == 0) {
-        throw std::runtime_error("Sources file contains no source sets");
+    if (format == Format::SEDS) {
+        // Open file once — parse_seds() builds index and sets cardinality_ in one pass
+        std::ifstream stream(path);
+        if (!stream.is_open()) {
+            throw std::runtime_error("Failed to open sources file: " + path.string());
+        }
+        sources->parse_seds(stream);
+        if (sources->cardinality_ == 0) {
+            throw std::runtime_error("Sources file contains no source sets");
+        }
+        sources->stream_ = std::move(stream);
+    } else {
+        // EDZ: must open in binary mode; parse_edz() reads the header + index
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.is_open()) {
+            throw std::runtime_error("Failed to open sources file: " + path.string());
+        }
+        sources->parse_edz(stream);
+        if (sources->cardinality_ == 0) {
+            throw std::runtime_error("EDZ file contains no source sets");
+        }
+        sources->stream_ = std::move(stream);
     }
-
-    // Keep stream open for on-demand reading
-    sources->stream_ = std::move(stream);
 
     return sources;
 }
@@ -317,11 +324,126 @@ void Sources::parse_seds(std::istream& is) {
 }
 
 // ================================================================================
-// PARSING - BINARY FORMATS (Placeholders)
+// EDZ BINARY FORMAT HELPERS
+// ================================================================================
+//
+// EDZ file layout (all integers little-endian):
+//
+//   Header (16 bytes):
+//     [0..3]  magic: 'E','D','Z','\0'
+//     [4..5]  flags: uint16_t  — bit 0 = compressed (0 here for EDZ)
+//     [6..7]  reserved: uint16_t = 0
+//     [8..15] cardinality: uint64_t  — number of source sets
+//
+//   Index section (cardinality * 12 bytes):
+//     For each i: data_offset:uint64_t + data_size:uint32_t
+//     data_offset is an absolute byte offset into the file.
+//
+//   Data section (variable):
+//     For each i: varint(path_count) followed by path_count varints(path_id).
+//     Varints use unsigned LEB128 (ULEB128) encoding.
+//
+// The index section immediately follows the header, and the data section
+// immediately follows the index. Entry i starts at binary_index_[i].first.
+
+static constexpr uint64_t EDZ_HEADER_SIZE      = 16;
+static constexpr uint64_t EDZ_INDEX_ENTRY_SIZE = 12;  // uint64_t + uint32_t
+
+// Write a value of type T as little-endian bytes.
+template<typename T>
+static void write_le(std::ostream& os, T value) {
+    static_assert(std::is_unsigned<T>::value, "write_le requires unsigned integer");
+    uint8_t buf[sizeof(T)];
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        buf[i] = static_cast<uint8_t>(value & 0xFF);
+        value >>= 8;
+    }
+    os.write(reinterpret_cast<const char*>(buf), sizeof(T));
+}
+
+// Read a little-endian value of type T from a binary stream.
+template<typename T>
+static T read_le(std::istream& is) {
+    static_assert(std::is_unsigned<T>::value, "read_le requires unsigned integer");
+    uint8_t buf[sizeof(T)];
+    is.read(reinterpret_cast<char*>(buf), sizeof(T));
+    if (static_cast<size_t>(is.gcount()) != sizeof(T)) {
+        throw std::runtime_error("EDZ: unexpected EOF reading header or index");
+    }
+    T value = T{};
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        value |= static_cast<T>(buf[i]) << (i * 8);
+    }
+    return value;
+}
+
+// Append the ULEB128 encoding of value to out.
+static void varint_encode(uint64_t value, std::vector<uint8_t>& out) {
+    do {
+        uint8_t byte = value & 0x7F;
+        value >>= 7;
+        if (value != 0) byte |= 0x80;
+        out.push_back(byte);
+    } while (value != 0);
+}
+
+// Decode one ULEB128 value from data[0..data_size), advancing offset past it.
+static uint64_t varint_decode(const uint8_t* data, size_t data_size, size_t& offset) {
+    uint64_t result = 0;
+    int shift = 0;
+    while (offset < data_size) {
+        uint8_t byte = data[offset++];
+        result |= static_cast<uint64_t>(byte & 0x7F) << shift;
+        shift += 7;
+        if (!(byte & 0x80)) return result;
+        if (shift >= 64) throw std::runtime_error("EDZ: varint overflow");
+    }
+    throw std::runtime_error("EDZ: truncated varint");
+}
+
+// ================================================================================
+// PARSING - BINARY FORMATS
 // ================================================================================
 
 void Sources::parse_edz(std::istream& is) {
-    throw std::runtime_error("EDZ format parsing not yet implemented");
+    // Validate magic
+    char magic[4];
+    is.read(magic, 4);
+    if (is.gcount() != 4 || magic[0] != 'E' || magic[1] != 'D' ||
+            magic[2] != 'Z' || magic[3] != '\0') {
+        throw std::runtime_error("EDZ: invalid magic bytes (not an EDZ file)");
+    }
+
+    // Flags: bit 0 set means compressed → that is EDZ_COMPRESSED, not EDZ
+    uint16_t flags = read_le<uint16_t>(is);
+    if (flags & 0x0001) {
+        throw std::runtime_error(
+            "EDZ: compression flag is set — use EDZ_COMPRESSED format instead");
+    }
+    read_le<uint16_t>(is);  // reserved, ignored
+
+    // Cardinality
+    uint64_t card = read_le<uint64_t>(is);
+    if (card == 0) {
+        throw std::runtime_error("EDZ: file declares cardinality 0");
+    }
+
+    // Index section: card * (uint64_t offset + uint32_t size)
+    binary_index_.resize(static_cast<size_t>(card));
+    for (uint64_t i = 0; i < card; ++i) {
+        uint64_t offset = read_le<uint64_t>(is);
+        uint32_t size   = read_le<uint32_t>(is);
+        binary_index_[static_cast<size_t>(i)] = {offset, size};
+    }
+    // Stream is now positioned at the start of the data section.
+
+    // Validate or set cardinality_
+    if (cardinality_ == 0) {
+        cardinality_ = static_cast<size_t>(card);
+    } else if (cardinality_ != static_cast<size_t>(card)) {
+        throw std::runtime_error("EDZ: cardinality mismatch (expected " +
+            std::to_string(cardinality_) + ", got " + std::to_string(card) + ")");
+    }
 }
 
 void Sources::parse_edz_compressed(std::istream& is) {
@@ -381,7 +503,37 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
 }
 
 std::set<int> Sources::read_from_edz(size_t string_id) const {
-    throw std::runtime_error("EDZ streaming not yet implemented (Phase 2)");
+    if (!stream_.is_open()) {
+        throw std::runtime_error("EDZ stream not open");
+    }
+
+    const uint64_t offset = binary_index_[string_id].first;
+    const uint32_t size   = binary_index_[string_id].second;
+
+    // Seek to the data blob (seek guard: skip if already at target)
+    auto target = static_cast<std::streampos>(offset);
+    if (!stream_.good() || stream_.tellg() != target) {
+        stream_.clear();
+        stream_.seekg(target);
+    }
+
+    // Read the varint-encoded blob for this source set
+    std::vector<uint8_t> buf(size);
+    stream_.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(size));
+    if (static_cast<uint32_t>(stream_.gcount()) != size) {
+        throw std::runtime_error("EDZ: short read for source set " +
+                                 std::to_string(string_id));
+    }
+
+    // Decode: first varint = path count, then count path IDs
+    size_t pos = 0;
+    uint64_t count = varint_decode(buf.data(), size, pos);
+
+    std::set<int> result;
+    for (uint64_t i = 0; i < count; ++i) {
+        result.insert(static_cast<int>(varint_decode(buf.data(), size, pos)));
+    }
+    return result;
 }
 
 std::set<int> Sources::read_from_edz_compressed(size_t string_id) const {
@@ -861,7 +1013,53 @@ void Sources::save_seds(const std::filesystem::path& path) const {
 }
 
 void Sources::save_edz(const std::filesystem::path& path) const {
-    throw std::runtime_error("EDZ format saving not yet implemented (Phase 2)");
+    // Strategy: write placeholder zeros for the index section, write data blobs
+    // sequentially while recording (offset, size) per entry, then seek back and
+    // fill in the real index.  This avoids loading all blobs into memory at once
+    // while still writing a single output file with no temp files.
+    std::ofstream os(path, std::ios::binary);
+    if (!os.is_open()) {
+        throw std::runtime_error("Failed to open file for writing: " + path.string());
+    }
+
+    // Header
+    os.write("EDZ\0", 4);
+    write_le<uint16_t>(os, uint16_t{0});  // flags: uncompressed
+    write_le<uint16_t>(os, uint16_t{0});  // reserved
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality_));
+
+    // Placeholder index (zeros; overwritten after the data section is written)
+    const std::streamoff index_start = os.tellp();
+    for (size_t i = 0; i < cardinality_; ++i) {
+        write_le<uint64_t>(os, uint64_t{0});
+        write_le<uint32_t>(os, uint32_t{0});
+    }
+
+    // Data section: one blob per source set; accumulate (offset, size) for index
+    std::vector<std::pair<uint64_t, uint32_t>> idx(cardinality_);
+    std::vector<uint8_t> blob;
+
+    for (size_t i = 0; i < cardinality_; ++i) {
+        blob.clear();
+        const std::set<int> paths = read_source(i);
+        varint_encode(static_cast<uint64_t>(paths.size()), blob);
+        for (int id : paths) {
+            varint_encode(static_cast<uint64_t>(id), blob);
+        }
+
+        idx[i] = {static_cast<uint64_t>(os.tellp()), static_cast<uint32_t>(blob.size())};
+        if (!blob.empty()) {
+            os.write(reinterpret_cast<const char*>(blob.data()),
+                     static_cast<std::streamsize>(blob.size()));
+        }
+    }
+
+    // Seek back to the index section and write the real offsets and sizes
+    os.seekp(index_start);
+    for (size_t i = 0; i < cardinality_; ++i) {
+        write_le<uint64_t>(os, idx[i].first);
+        write_le<uint32_t>(os, idx[i].second);
+    }
 }
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {

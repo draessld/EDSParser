@@ -29,7 +29,7 @@ void test_simple_eds() {
     assert(eds.size() == 14);         // 14 characters total
     assert(!eds.empty());
 
-    const auto& is_deg = eds.get_is_degenerate();
+    const auto& is_deg = eds.get_metadata().is_degenerate;
 
     // Position 0: {ACGT} - regular
     auto set0 = eds.read_symbol(0);
@@ -69,7 +69,7 @@ void test_empty_strings() {
     assert(!eds.empty());
 
     // Sets accessed via read_symbol()
-    const auto& is_deg = eds.get_is_degenerate();
+    const auto& is_deg = eds.get_metadata().is_degenerate;
 
     // Position 0: {AC} - regular
     assert(eds.read_symbol(0).size() == 1);
@@ -115,7 +115,7 @@ void test_all_degenerate() {
     assert(eds.cardinality() == 8);   // 2 + 2 + 4 = 8
     assert(!eds.empty());
 
-    const auto& is_deg = eds.get_is_degenerate();
+    const auto& is_deg = eds.get_metadata().is_degenerate;
     assert(is_deg[0]);
     assert(is_deg[1]);
     assert(is_deg[2]);
@@ -289,23 +289,23 @@ void test_statistics_simple() {
 
     edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
     // Structure checks
-    assert(stats.num_degenerate_symbols == 2);  // {A,ACA} and {T,TG}
-    assert(stats.total_change_size == 2);        // 1 extra in each degenerate set
+    assert(meta.num_degenerate_symbols == 2);  // {A,ACA} and {T,TG}
+    assert(meta.total_change_size == 2);        // 1 extra in each degenerate set
 
     // Length checks
-    assert(stats.min_context_length == 1);       // "A" and "T"
-    assert(stats.max_context_length == 4);       // "ACGT"
-    assert(stats.avg_context_length > 2.0 && stats.avg_context_length < 3.0);
+    assert(meta.min_context_length == 1);       // "A" and "T"
+    assert(meta.max_context_length == 4);       // "ACGT"
+    assert(meta.avg_context_length > 2.0 && meta.avg_context_length < 3.0);
 
     // No empty strings
-    assert(stats.num_empty_strings == 0);
+    assert(meta.num_empty_strings == 0);
 
     // Common characters in {A,ACA} - "A" is common prefix
     // Common characters in {T,TG} - "T" is common prefix
-    assert(stats.num_common_chars == 2);
+    assert(meta.num_common_chars == 2);
 
     std::cout << "PASSED\n";
 }
@@ -315,12 +315,12 @@ void test_statistics_with_empty() {
 
     edsparser::EDS eds = create_temp_eds("{AC}{,A,T}{GT}");
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
-    assert(stats.num_degenerate_symbols == 1);   // Only {,A,T}
-    assert(stats.total_change_size == 2);         // 2 extra strings in degenerate set
-    assert(stats.num_empty_strings == 1);
-    assert(stats.min_context_length == 0);        // Empty string
+    assert(meta.num_degenerate_symbols == 1);   // Only {,A,T}
+    assert(meta.total_change_size == 2);         // 2 extra strings in degenerate set
+    assert(meta.num_empty_strings == 1);
+    assert(meta.min_context_length == 0);        // Empty string
 
     std::cout << "PASSED\n";
 }
@@ -330,14 +330,14 @@ void test_statistics_all_regular() {
 
     edsparser::EDS eds = create_temp_eds("{A}{C}{G}{T}");
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
-    assert(stats.num_degenerate_symbols == 0);
-    assert(stats.total_change_size == 0);
-    assert(stats.num_common_chars == 0);
-    assert(stats.min_context_length == 1);
-    assert(stats.max_context_length == 1);
-    assert(stats.avg_context_length == 1.0);
+    assert(meta.num_degenerate_symbols == 0);
+    assert(meta.total_change_size == 0);
+    assert(meta.num_common_chars == 0);
+    assert(meta.min_context_length == 1);
+    assert(meta.max_context_length == 1);
+    assert(meta.avg_context_length == 1.0);
 
     std::cout << "PASSED\n";
 }
@@ -359,35 +359,25 @@ void test_print_output() {
     std::cout << "PASSED\n";
 }
 
-void test_print_statistics_output() {
-    std::cout << "Test 17: Print statistics output... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}");
-
-    std::stringstream output;
-    eds.print_statistics(output);
-
-    std::string result = output.str();
-    assert(result.find("EDS Statistics") != std::string::npos);
-    assert(result.find("Number of sets") != std::string::npos);
-    assert(result.find("Degenerate symbols") != std::string::npos);
-    assert(result.find("Context Lengths") != std::string::npos);
-
-    std::cout << "PASSED\n";
-}
-
 void test_string_constructor() {
-    std::cout << "Test 18: String constructor... ";
+    std::cout << "Test 18: String constructor (FULL mode)... ";
 
-    std::string eds_str = "{ACGT}{A,ACA}{CGT}";
-    edsparser::EDS eds = create_temp_eds(eds_str);
+    // Directly construct from std::string — NOT via create_temp_eds / EDS::load
+    edsparser::EDS eds("{ACGT}{A,ACA}{CGT}");
 
     assert(eds.length() == 3);
     assert(eds.cardinality() == 4);
-    // Sets accessed via read_symbol()
+    assert(!eds.empty());
+    assert(!eds.has_sources());
+
     assert(eds.read_symbol(0)[0] == "ACGT");
     assert(eds.read_symbol(1)[0] == "A");
     assert(eds.read_symbol(1)[1] == "ACA");
+    assert(eds.read_symbol(2)[0] == "CGT");
+
+    const auto& meta = eds.get_metadata();
+    assert(meta.num_degenerate_symbols == 1);
+    assert(meta.num_empty_strings == 0);
 
     std::cout << "PASSED\n";
 }
@@ -778,7 +768,7 @@ void test_source_cache_functionality() {
     assert(eds.cardinality() == 6);
 
     // Set small cache size to test LRU behavior
-    eds.set_source_cache_capacity(2);
+    eds.get_sources_object()->set_cache_capacity(2);
 
     // Access sources - first accesses will be cache misses
     auto src0 = eds.read_source(0);  // Cache: {0}
@@ -1216,6 +1206,131 @@ void test_check_position_sources_metadata_only() {
     std::cout << "PASSED\n";
 }
 
+void test_stream_constructor() {
+    std::cout << "Test A1: Stream constructor (FULL mode)... ";
+
+    std::istringstream ss("{ACGT}{A,ACA}{CGT}{T,TG}");
+    edsparser::EDS eds(ss);
+
+    assert(eds.length() == 4);
+    assert(eds.cardinality() == 6);
+    assert(eds.size() == 14);
+    assert(!eds.empty());
+    assert(!eds.has_sources());
+
+    auto s0 = eds.read_symbol(0);
+    assert(s0.size() == 1 && s0[0] == "ACGT");
+    auto s1 = eds.read_symbol(1);
+    assert(s1.size() == 2 && s1[0] == "A" && s1[1] == "ACA");
+    auto s2 = eds.read_symbol(2);
+    assert(s2.size() == 1 && s2[0] == "CGT");
+    auto s3 = eds.read_symbol(3);
+    assert(s3.size() == 2 && s3[0] == "T" && s3[1] == "TG");
+
+    const auto& meta = eds.get_metadata();
+    assert(meta.num_degenerate_symbols == 2);
+    assert(meta.num_common_chars == 7);
+    assert(meta.num_empty_strings == 0);
+    (void)meta;
+
+    std::cout << "PASSED\n";
+}
+
+void test_from_string_factory() {
+    std::cout << "Test A2: from_string() factory (FULL mode)... ";
+
+    // Standard case
+    auto eds = edsparser::EDS::from_string("{ACGT}{A,ACA}{CGT}");
+    assert(eds.length() == 3);
+    assert(eds.cardinality() == 4);
+    assert(!eds.has_sources());
+    assert(eds.read_symbol(1)[0] == "A");
+    assert(eds.read_symbol(1)[1] == "ACA");
+
+    // Single non-degenerate symbol
+    auto eds2 = edsparser::EDS::from_string("{ACGT}");
+    assert(eds2.length() == 1 && eds2.cardinality() == 1);
+    assert(eds2.read_symbol(0)[0] == "ACGT");
+    assert(eds2.get_metadata().num_degenerate_symbols == 0);
+
+    // Single degenerate symbol
+    auto eds3 = edsparser::EDS::from_string("{A,T}");
+    assert(eds3.length() == 1 && eds3.cardinality() == 2);
+    assert(eds3.get_metadata().num_degenerate_symbols == 1);
+
+    // Empty string
+    auto eds4 = edsparser::EDS::from_string("");
+    assert(eds4.empty());
+
+    std::cout << "PASSED\n";
+}
+
+void test_mode_equivalence() {
+    std::cout << "Test A3: FULL vs METADATA_ONLY mode equivalence... ";
+
+    const std::string content = "{ACGT}{A,ACA}{CGT}{T,TG}";
+
+    // FULL mode via string constructor
+    edsparser::EDS full(content);
+
+    // METADATA_ONLY mode via file loader
+    auto temp = std::filesystem::temp_directory_path() / "test_equiv.eds";
+    { std::ofstream f(temp); f << content; }
+    edsparser::EDS file_mode = edsparser::EDS::load(temp);
+    std::filesystem::remove(temp);
+
+    assert(full.length()      == file_mode.length());
+    assert(full.cardinality() == file_mode.cardinality());
+    assert(full.size()        == file_mode.size());
+
+    for (size_t i = 0; i < full.length(); i++) {
+        auto sf = full.read_symbol(i);
+        auto sm = file_mode.read_symbol(i);
+        assert(sf.size() == sm.size());
+        for (size_t j = 0; j < sf.size(); j++)
+            assert(sf[j] == sm[j]);
+    }
+
+    const auto& mf = full.get_metadata();
+    const auto& mm = file_mode.get_metadata();
+    assert(mf.num_degenerate_symbols  == mm.num_degenerate_symbols);
+    assert(mf.num_common_chars        == mm.num_common_chars);
+    assert(mf.total_change_size       == mm.total_change_size);
+    assert(mf.num_empty_strings       == mm.num_empty_strings);
+    assert(mf.min_context_length      == mm.min_context_length);
+    assert(mf.max_context_length      == mm.max_context_length);
+    assert(mf.is_degenerate           == mm.is_degenerate);
+    (void)mf; (void)mm;
+
+    std::cout << "PASSED\n";
+}
+
+void test_full_mode_edge_cases() {
+    std::cout << "Test A4: FULL mode edge cases... ";
+
+    // Empty input → empty EDS
+    edsparser::EDS empty_str("");
+    assert(empty_str.empty() && empty_str.length() == 0);
+
+    std::istringstream empty_ss("");
+    edsparser::EDS empty_stream(empty_ss);
+    assert(empty_stream.empty());
+
+    // Missing close bracket → throws
+    bool threw = false;
+    try { edsparser::EDS bad("{ACGT"); (void)bad; }
+    catch (const std::exception&) { threw = true; }
+    assert(threw);
+
+    // Missing open bracket → throws
+    threw = false;
+    try { edsparser::EDS bad("ACGT}"); (void)bad; }
+    catch (const std::exception&) { threw = true; }
+    assert(threw);
+
+    std::cout << "PASSED\n";
+}
+
 int main() {
     std::cout << "Running EDS parsing tests...\n\n";
 
@@ -1236,8 +1351,11 @@ int main() {
         test_statistics_with_empty();
         test_statistics_all_regular();
         test_print_output();
-        test_print_statistics_output();
         test_string_constructor();
+        test_stream_constructor();
+        test_from_string_factory();
+        test_mode_equivalence();
+        test_full_mode_edge_cases();
         test_load_eds_with_sources_from_files();
         test_mixed_inputs();
         test_compact_format_parsing();

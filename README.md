@@ -70,12 +70,6 @@ edsparser/
 ├── tests/
 │   ├── unit/                   # C++ unit tests
 │   └── e2e/                    # Shell-based end-to-end tests
-├── experiments/                # Experiment scripts
-│   ├── transform_to_eds.sh     # Transform MSA/VCF/EDS → EDS/l-EDS
-│   ├── generate_patterns.sh   # Pattern generation wrapper
-│   ├── generate_statistics.sh  # Statistics generation wrapper
-│   ├── clean_experiments.sh    # Cleanup utility
-│   └── datasets/               # Example datasets
 ├── data/test/                  # Test data
 ├── INSTALL.sh                  # Installation script
 ├── UNINSTALL.sh                # Uninstallation script
@@ -324,25 +318,15 @@ Standard Variant Call Format (requires reference FASTA)
 
 ## Running Experiments
 
-The `experiments/` directory provides automated scripts for batch processing:
+Experiment scripts are located in the parent `biofmi` repository at `experiments/`.
+They cover the full pipeline: data generation, EDS transformation, FM-index building, and pattern querying.
 
 ```bash
-cd experiments
-
-# Transform MSA/VCF/EDS datasets to EDS/l-EDS
-./transform_to_eds.sh --dataset <dataset_dir> --format msa
-
-# Generate patterns for benchmarking
-./generate_patterns.sh --dataset <dataset_dir>
-
-# Compute EDS statistics
-./generate_statistics.sh --dataset <dataset_dir>
-
-# Clean up generated outputs
-./clean_experiments.sh <dataset_dir>
+cd biofmi/experiments
+./run_full_experiment.sh          # 6-step end-to-end smoke test
 ```
 
-See [experiments/README.md](experiments/README.md) for detailed documentation.
+See [biofmi/experiments/README.md](../../experiments/README.md) for full documentation.
 
 ## Development
 
@@ -560,7 +544,6 @@ cd sdsl-lite
 
 ## Documentation
 
-- **[experiments/README.md](experiments/README.md)** - Experiment framework documentation
 - **Tool Help**: Run any tool with `--help` for detailed usage information
 
 ## Troubleshooting

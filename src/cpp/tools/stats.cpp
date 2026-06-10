@@ -34,8 +34,8 @@ std::string format_size(uintmax_t bytes) {
     return ss.str();
 }
 
-// Estimate memory usage for FULL mode
-size_t estimate_full_mode_memory(size_t N, size_t m, size_t n) {
+// Estimate RAM required if all EDS strings were loaded into memory (stream/string construction)
+size_t estimate_in_memory_storage(size_t N, size_t m, size_t n) {
     // Rough estimation:
     // - String data: N bytes (actual characters)
     // - String overhead: m * sizeof(std::string) ≈ m * 32 bytes
@@ -109,15 +109,14 @@ SourceStats compute_source_stats(const EDS& eds) {
 
 // Print statistics in standard format
 void print_standard(const EDS& eds, const std::filesystem::path& input_file, bool verbose, bool has_sources_file) {
-    auto stats = eds.get_statistics();
-    auto metadata = eds.get_metadata();
+    const auto& meta = eds.get_metadata();
 
     // Get file size
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     // Calculate memory estimates
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     std::cout << "========================================\n";
@@ -132,20 +131,20 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     std::cout << "  Number of symbols (n):        " << std::setw(12) << format_number(eds.length()) << "\n";
     std::cout << "  Total characters (N):         " << std::setw(12) << format_number(eds.size()) << "\n";
     std::cout << "  Total strings (m):            " << std::setw(12) << format_number(eds.cardinality()) << "\n";
-    std::cout << "  Degenerate symbols:           " << std::setw(12) << format_number(stats.num_degenerate_symbols) << "\n";
-    std::cout << "  Regular symbols:              " << std::setw(12) << format_number(eds.length() - stats.num_degenerate_symbols) << "\n";
+    std::cout << "  Degenerate symbols:           " << std::setw(12) << format_number(meta.num_degenerate_symbols) << "\n";
+    std::cout << "  Regular symbols:              " << std::setw(12) << format_number(eds.length() - meta.num_degenerate_symbols) << "\n";
     std::cout << "\n";
 
     std::cout << "Context Lengths (non-degenerate symbols):\n";
-    std::cout << "  Minimum:                      " << std::setw(12) << stats.min_context_length << "\n";
-    std::cout << "  Maximum:                      " << std::setw(12) << stats.max_context_length << "\n";
-    std::cout << "  Average:                      " << std::setw(12) << std::fixed << std::setprecision(2) << stats.avg_context_length << "\n";
+    std::cout << "  Minimum:                      " << std::setw(12) << meta.min_context_length << "\n";
+    std::cout << "  Maximum:                      " << std::setw(12) << meta.max_context_length << "\n";
+    std::cout << "  Average:                      " << std::setw(12) << std::fixed << std::setprecision(2) << meta.avg_context_length << "\n";
     std::cout << "\n";
 
     std::cout << "Variations:\n";
-    std::cout << "  Total change size:            " << std::setw(12) << format_number(stats.total_change_size) << "\n";
-    std::cout << "  Common characters:            " << std::setw(12) << format_number(stats.num_common_chars) << "\n";
-    std::cout << "  Empty strings:                " << std::setw(12) << format_number(stats.num_empty_strings) << "\n";
+    std::cout << "  Total change size:            " << std::setw(12) << format_number(meta.total_change_size) << "\n";
+    std::cout << "  Common characters:            " << std::setw(12) << format_number(meta.num_common_chars) << "\n";
+    std::cout << "  Empty strings:                " << std::setw(12) << format_number(meta.num_empty_strings) << "\n";
     std::cout << "\n";
 
     if (verbose) {
@@ -155,7 +154,7 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
         std::cout << "  Avg chars per string:         " << std::setw(12) << std::fixed << std::setprecision(2)
                   << (static_cast<double>(eds.size()) / eds.cardinality()) << "\n";
         std::cout << "  Degenerate ratio:             " << std::setw(12) << std::fixed << std::setprecision(2)
-                  << (100.0 * stats.num_degenerate_symbols / eds.length()) << " %\n";
+                  << (100.0 * meta.num_degenerate_symbols / eds.length()) << " %\n";
         std::cout << "\n";
     }
 
@@ -174,20 +173,20 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     std::cout << "Memory Usage:\n";
     std::cout << "  Current (STREAMING):          " << std::setw(12) << format_size(metadata_mem) << "\n";
-    std::cout << "  Estimated FULL mode:          " << std::setw(12) << format_size(full_mem) << "\n";
+    std::cout << "  Estimated (in-memory load):   " << std::setw(12) << format_size(full_mem) << "\n";
     std::cout << "  Reduction factor:             " << std::setw(12) << std::fixed << std::setprecision(1) << reduction_factor << "x\n";
     std::cout << "\n";
 
     // Recommendations
     std::cout << "Recommendations:\n";
-    if (stats.min_context_length < 5) {
-        std::cout << "  ⚠️  Minimum context length (" << stats.min_context_length << ") < typical l-EDS threshold (5)\n";
+    if (meta.min_context_length < 5) {
+        std::cout << "  ⚠️  Minimum context length (" << meta.min_context_length << ") < typical l-EDS threshold (5)\n";
         std::cout << "  → Transformation to l-EDS may require merging adjacent symbols\n";
         std::cout << "  → Suggested command:\n";
         std::cout << "      edsparser-transform -i " << input_file.filename().string() << " -l 5 --method linear\n";
     } else {
-        std::cout << "  ✓ Minimum context length (" << stats.min_context_length << ") ≥ 5\n";
-        std::cout << "  → Ready for indexing with l ≤ " << stats.min_context_length << "\n";
+        std::cout << "  ✓ Minimum context length (" << meta.min_context_length << ") ≥ 5\n";
+        std::cout << "  → Ready for indexing with l ≤ " << meta.min_context_length << "\n";
     }
 
     std::cout << "========================================\n";
@@ -196,11 +195,11 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 // Print statistics in JSON format
 void print_json(const EDS& eds, const std::filesystem::path& input_file, bool has_sources_file,
                 double runtime_s, double peak_memory_mb) {
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     std::cout << "{\n";
@@ -212,18 +211,18 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"n_symbols\": " << eds.length() << ",\n";
     std::cout << "    \"N_characters\": " << eds.size() << ",\n";
     std::cout << "    \"m_strings\": " << eds.cardinality() << ",\n";
-    std::cout << "    \"degenerate_symbols\": " << stats.num_degenerate_symbols << ",\n";
-    std::cout << "    \"regular_symbols\": " << (eds.length() - stats.num_degenerate_symbols) << "\n";
+    std::cout << "    \"degenerate_symbols\": " << meta.num_degenerate_symbols << ",\n";
+    std::cout << "    \"regular_symbols\": " << (eds.length() - meta.num_degenerate_symbols) << "\n";
     std::cout << "  },\n";
     std::cout << "  \"context_lengths\": {\n";
-    std::cout << "    \"min\": " << stats.min_context_length << ",\n";
-    std::cout << "    \"max\": " << stats.max_context_length << ",\n";
-    std::cout << "    \"avg\": " << std::fixed << std::setprecision(2) << stats.avg_context_length << "\n";
+    std::cout << "    \"min\": " << meta.min_context_length << ",\n";
+    std::cout << "    \"max\": " << meta.max_context_length << ",\n";
+    std::cout << "    \"avg\": " << std::fixed << std::setprecision(2) << meta.avg_context_length << "\n";
     std::cout << "  },\n";
     std::cout << "  \"variations\": {\n";
-    std::cout << "    \"total_change_size\": " << stats.total_change_size << ",\n";
-    std::cout << "    \"common_characters\": " << stats.num_common_chars << ",\n";
-    std::cout << "    \"empty_strings\": " << stats.num_empty_strings << "\n";
+    std::cout << "    \"total_change_size\": " << meta.total_change_size << ",\n";
+    std::cout << "    \"common_characters\": " << meta.num_common_chars << ",\n";
+    std::cout << "    \"empty_strings\": " << meta.num_empty_strings << "\n";
     std::cout << "  },\n";
     std::cout << "  \"memory\": {\n";
     std::cout << "    \"current_bytes\": " << metadata_mem << ",\n";
@@ -241,10 +240,10 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"avg_paths_per_string\": " << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
     std::cout << "  },\n";
     std::cout << "  \"recommendations\": {\n";
-    std::cout << "    \"needs_transformation\": " << (stats.min_context_length < 5 ? "true" : "false") << ",\n";
-    std::cout << "    \"ready_for_indexing\": " << (stats.min_context_length >= 5 ? "true" : "false") << ",\n";
-    std::cout << "    \"min_context_length\": " << stats.min_context_length << ",\n";
-    std::cout << "    \"suggested_command\": \"" << (stats.min_context_length < 5
+    std::cout << "    \"needs_transformation\": " << (meta.min_context_length < 5 ? "true" : "false") << ",\n";
+    std::cout << "    \"ready_for_indexing\": " << (meta.min_context_length >= 5 ? "true" : "false") << ",\n";
+    std::cout << "    \"min_context_length\": " << meta.min_context_length << ",\n";
+    std::cout << "    \"suggested_command\": \"" << (meta.min_context_length < 5
                   ? "edsparser-transform -i " + input_file.filename().string() + " -l 5"
                   : "ready for indexing") << "\"\n";
     std::cout << "  },\n";
@@ -258,11 +257,11 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
 // Print statistics in CSV format
 void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has_sources_file,
                double runtime_s, double peak_memory_mb) {
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
     uintmax_t file_size = std::filesystem::file_size(input_file);
 
     size_t metadata_mem = estimate_metadata_memory(eds.cardinality(), eds.length());
-    size_t full_mem = estimate_full_mode_memory(eds.size(), eds.cardinality(), eds.length());
+    size_t full_mem = estimate_in_memory_storage(eds.size(), eds.cardinality(), eds.length());
     double reduction_factor = static_cast<double>(full_mem) / static_cast<double>(metadata_mem);
 
     auto src_stats = compute_source_stats(eds);
@@ -282,14 +281,14 @@ void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has
               << "," << eds.length()
               << "," << eds.size()
               << "," << eds.cardinality()
-              << "," << stats.num_degenerate_symbols
-              << "," << (eds.length() - stats.num_degenerate_symbols)
-              << "," << stats.min_context_length
-              << "," << stats.max_context_length
-              << "," << std::fixed << std::setprecision(2) << stats.avg_context_length
-              << "," << stats.total_change_size
-              << "," << stats.num_common_chars
-              << "," << stats.num_empty_strings
+              << "," << meta.num_degenerate_symbols
+              << "," << (eds.length() - meta.num_degenerate_symbols)
+              << "," << meta.min_context_length
+              << "," << meta.max_context_length
+              << "," << std::fixed << std::setprecision(2) << meta.avg_context_length
+              << "," << meta.total_change_size
+              << "," << meta.num_common_chars
+              << "," << meta.num_empty_strings
               << "," << metadata_mem
               << "," << full_mem
               << "," << std::fixed << std::setprecision(1) << reduction_factor

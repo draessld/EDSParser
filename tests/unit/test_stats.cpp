@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
+#include <set>
 #include <filesystem>
 #include <fstream>
 
@@ -37,6 +38,34 @@ EDS load_eds_from_streams(std::stringstream& eds_ss, std::stringstream& seds_ss)
     return eds;
 }
 
+// Local helper: compute source statistics directly from the Sources object.
+struct SrcStats {
+    size_t num_paths = 0;
+    size_t max_paths_per_string = 0;
+    double avg_paths_per_string = 0.0;
+};
+
+SrcStats compute_src_stats(const EDS& eds) {
+    SrcStats result;
+    if (!eds.has_sources()) return result;
+    auto sources = eds.get_sources_object();
+    size_t cardinality = sources->cardinality();
+    if (cardinality == 0) return result;
+    std::set<int> all_paths;
+    size_t total_set_size = 0;
+    for (size_t i = 0; i < cardinality; ++i) {
+        auto paths = sources->read_source(i);
+        all_paths.insert(paths.begin(), paths.end());
+        if (paths.size() > result.max_paths_per_string)
+            result.max_paths_per_string = paths.size();
+        total_set_size += paths.size();
+    }
+    all_paths.erase(0);
+    result.num_paths = all_paths.size();
+    result.avg_paths_per_string = static_cast<double>(total_set_size) / cardinality;
+    return result;
+}
+
 void test_basic_statistics() {
     std::cout << "Test 1: Basic statistics calculation... ";
 
@@ -45,15 +74,15 @@ void test_basic_statistics() {
     std::stringstream ss("{ACGT}{A,ACA}{CGT}{T,TG}");
     EDS eds(ss);
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
-    assert(stats.min_context_length == 3);
-    assert(stats.max_context_length == 4);
-    assert(std::abs(stats.avg_context_length - 3.5) < 0.01);
-    assert(stats.num_degenerate_symbols == 2);  // positions 1 and 3
-    assert(stats.num_common_chars == 7);        // ACGT (4) + CGT (3)
-    assert(stats.total_change_size == 7);       // A(1) + ACA(3) + T(1) + TG(2)
-    assert(stats.num_empty_strings == 0);
+    assert(meta.min_context_length == 3);
+    assert(meta.max_context_length == 4);
+    assert(std::abs(meta.avg_context_length - 3.5) < 0.01);
+    assert(meta.num_degenerate_symbols == 2);  // positions 1 and 3
+    assert(meta.num_common_chars == 7);        // ACGT (4) + CGT (3)
+    assert(meta.total_change_size == 7);       // A(1) + ACA(3) + T(1) + TG(2)
+    assert(meta.num_empty_strings == 0);
 
     std::cout << "PASSED\n";
 }
@@ -66,12 +95,12 @@ void test_empty_string_statistics() {
     std::stringstream ss("{AC}{,A,T}{GT}");
     EDS eds(ss);
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
-    assert(stats.num_empty_strings == 1);
-    assert(stats.min_context_length == 2);  // Both AC and GT have length 2
-    assert(stats.max_context_length == 2);
-    assert(stats.num_degenerate_symbols == 1);
+    assert(meta.num_empty_strings == 1);
+    assert(meta.min_context_length == 2);  // Both AC and GT have length 2
+    assert(meta.max_context_length == 2);
+    assert(meta.num_degenerate_symbols == 1);
 
     std::cout << "PASSED\n";
 }
@@ -84,13 +113,13 @@ void test_all_degenerate() {
     std::stringstream ss("{A,T}{C,G}{A,T}");
     EDS eds(ss);
 
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
-    assert(stats.min_context_length == 0);
-    assert(stats.max_context_length == 0);
-    assert(stats.avg_context_length == 0.0);
-    assert(stats.num_degenerate_symbols == 3);
-    assert(stats.num_common_chars == 0);
+    assert(meta.min_context_length == 0);
+    assert(meta.max_context_length == 0);
+    assert(meta.avg_context_length == 0.0);
+    assert(meta.num_degenerate_symbols == 3);
+    assert(meta.num_common_chars == 0);
 
     std::cout << "PASSED\n";
 }
@@ -107,14 +136,14 @@ void test_metadata_statistics() {
 
     // Load (always uses METADATA_ONLY mode)
     EDS eds = EDS::load(temp_file);
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
 
     // Context lengths: AAAA (4), TTTT (4) -> min=4, max=4, avg=4.0
-    assert(stats.min_context_length == 4);
-    assert(stats.max_context_length == 4);
-    assert(std::abs(stats.avg_context_length - 4.0) < 0.01);
-    assert(stats.num_degenerate_symbols == 2);
-    assert(stats.num_common_chars == 8);  // AAAA (4) + TTTT (4)
+    assert(meta.min_context_length == 4);
+    assert(meta.max_context_length == 4);
+    assert(std::abs(meta.avg_context_length - 4.0) < 0.01);
+    assert(meta.num_degenerate_symbols == 2);
+    assert(meta.num_common_chars == 8);  // AAAA (4) + TTTT (4)
 
     // Cleanup
     std::filesystem::remove(temp_file);
@@ -131,16 +160,16 @@ void test_source_statistics_basic() {
     std::stringstream seds_ss("{0}{1,3}{2}{4,5}{6}{7}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
     // 8 distinct paths: 0, 1, 2, 3, 4, 5, 6, 7
-    assert(stats.num_paths == 8);
+    assert(src.num_paths == 8);
 
     // Max paths per string: {1,3} has 2 paths
-    assert(stats.max_paths_per_string == 2);
+    assert(src.max_paths_per_string == 2);
 
     // Average: (1+2+1+2+1+1)/6 = 8/6 = 1.33...
-    assert(std::abs(stats.avg_paths_per_string - 1.333) < 0.01);
+    assert(std::abs(src.avg_paths_per_string - 1.333) < 0.01);
 
     std::cout << "PASSED\n";
 }
@@ -153,12 +182,12 @@ void test_source_statistics_all_universal() {
     std::stringstream seds_ss("{0}{0}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
-    // Only path 0 is used
-    assert(stats.num_paths == 1);
-    assert(stats.max_paths_per_string == 1);
-    assert(std::abs(stats.avg_paths_per_string - 1.0) < 0.01);
+    // Only path 0 is used, but 0 is the universal marker and is erased
+    assert(src.num_paths == 0);
+    assert(src.max_paths_per_string == 1);
+    assert(std::abs(src.avg_paths_per_string - 1.0) < 0.01);
 
     std::cout << "PASSED\n";
 }
@@ -171,11 +200,11 @@ void test_source_statistics_single_string_multi_paths() {
     std::stringstream seds_ss("{1,2,3,4,5}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
-    assert(stats.num_paths == 5);
-    assert(stats.max_paths_per_string == 5);
-    assert(std::abs(stats.avg_paths_per_string - 5.0) < 0.01);
+    assert(src.num_paths == 5);
+    assert(src.max_paths_per_string == 5);
+    assert(std::abs(src.avg_paths_per_string - 5.0) < 0.01);
 
     std::cout << "PASSED\n";
 }
@@ -197,16 +226,17 @@ void test_source_statistics_file_mode() {
 
     // Load with sources (always uses METADATA_ONLY mode)
     EDS eds = EDS::load(eds_file, seds_file);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
-    // Paths: 0, 1, 2, 3, 4, 5 = 6 distinct paths
-    assert(stats.num_paths == 6);
+    // Paths: 0, 1, 2, 3, 4, 5 = 6 distinct paths (0 is universal, erased → 5 remain)
+    // Actually 0 is erased: {0,1,2,3,4,5} → erase(0) → {1,2,3,4,5} → 5 paths
+    assert(src.num_paths == 5);
 
     // Max: {1,2} has 2, {4,5} has 2
-    assert(stats.max_paths_per_string == 2);
+    assert(src.max_paths_per_string == 2);
 
     // Average: (1+2+1+2+1)/5 = 7/5 = 1.4
-    assert(std::abs(stats.avg_paths_per_string - 1.4) < 0.01);
+    assert(std::abs(src.avg_paths_per_string - 1.4) < 0.01);
 
     // Cleanup
     std::filesystem::remove(eds_file);
@@ -221,12 +251,11 @@ void test_statistics_without_sources() {
     std::stringstream ss("{ACGT}{A,ACA}{CGT}");
     EDS eds(ss);
 
-    auto stats = eds.get_statistics();
-
-    // Source statistics should be zero when no sources loaded
-    assert(stats.num_paths == 0);
-    assert(stats.max_paths_per_string == 0);
-    assert(stats.avg_paths_per_string == 0.0);
+    assert(!eds.has_sources());
+    auto src = compute_src_stats(eds);
+    assert(src.num_paths == 0);
+    assert(src.max_paths_per_string == 0);
+    assert(src.avg_paths_per_string == 0.0);
 
     std::cout << "PASSED\n";
 }
@@ -238,21 +267,20 @@ void test_metadata_preservation() {
     std::stringstream seds_ss("{0}{1,2}{3}{4}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto metadata = eds.get_metadata();
+    const auto& meta = eds.get_metadata();
 
-    // Check all fields exist and are accessible
-    assert(metadata.min_context_length > 0);
-    assert(metadata.max_context_length > 0);
-    assert(metadata.avg_context_length > 0);
-    assert(metadata.num_degenerate_symbols >= 0);
-    assert(metadata.num_common_chars > 0);
-    assert(metadata.total_change_size >= 0);
-    assert(metadata.num_empty_strings >= 0);
+    assert(meta.min_context_length > 0);
+    assert(meta.max_context_length > 0);
+    assert(meta.avg_context_length > 0);
+    assert(meta.num_degenerate_symbols >= 0);
+    assert(meta.num_common_chars > 0);
+    assert(meta.total_change_size >= 0);
+    assert(meta.num_empty_strings >= 0);
 
-    // Source statistics
-    assert(metadata.num_paths > 0);
-    assert(metadata.max_paths_per_string > 0);
-    assert(metadata.avg_paths_per_string > 0);
+    auto src = compute_src_stats(eds);
+    assert(src.num_paths > 0);
+    assert(src.max_paths_per_string > 0);
+    assert(src.avg_paths_per_string > 0);
 
     std::cout << "PASSED\n";
 }
@@ -265,14 +293,14 @@ void test_large_path_numbers() {
     std::stringstream seds_ss("{100,200,300}{400,500}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
     // 5 distinct paths: 100, 200, 300, 400, 500
-    assert(stats.num_paths == 5);
-    assert(stats.max_paths_per_string == 3);  // First string has 3 paths
+    assert(src.num_paths == 5);
+    assert(src.max_paths_per_string == 3);  // First string has 3 paths
 
     // Average: (3+2)/2 = 2.5
-    assert(std::abs(stats.avg_paths_per_string - 2.5) < 0.01);
+    assert(std::abs(src.avg_paths_per_string - 2.5) < 0.01);
 
     std::cout << "PASSED\n";
 }
@@ -285,14 +313,14 @@ void test_single_path_coverage() {
     std::stringstream seds_ss("{1}{1,2}{1}");
 
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
-    auto stats = eds.get_statistics();
+    auto src = compute_src_stats(eds);
 
     // Only 2 distinct paths even though path 1 appears 3 times
-    assert(stats.num_paths == 2);
-    assert(stats.max_paths_per_string == 2);
+    assert(src.num_paths == 2);
+    assert(src.max_paths_per_string == 2);
 
     // Average: (1+2+1)/3 = 4/3 = 1.33...
-    assert(std::abs(stats.avg_paths_per_string - 1.333) < 0.01);
+    assert(std::abs(src.avg_paths_per_string - 1.333) < 0.01);
 
     std::cout << "PASSED\n";
 }

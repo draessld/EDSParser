@@ -87,7 +87,7 @@ namespace {
         }
 
         // Get degenerate flags from metadata
-        const auto& is_degenerate = eds.get_is_degenerate();
+        const auto& is_degenerate = eds.get_metadata().is_degenerate;
 
         // Track which positions are already included in pairs
         std::vector<bool> used(eds.length(), false);
@@ -1043,31 +1043,22 @@ void eds_to_leds_linear(
         throw std::runtime_error("Maximum iterations reached without convergence");
     }
 
-    // Copy final result to output streams
-    if (!compact) {
-        std::ifstream final_eds(current_eds_file);
-        if (!final_eds) {
-            throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
+    // Serialise final result to the output stream.
+    // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+    // seeks); the requested output format is applied only here, on the final EDS object.
+    // Using read_symbol() rather than a raw rdbuf() copy ensures the format flag is
+    // honoured even when the input was already l-EDS compliant (zero iterations run).
+    for (size_t i = 0; i < eds.length(); ++i) {
+        const StringSet sym = eds.read_symbol(i);
+        bool use_brackets = !compact || sym.size() > 1;
+        if (use_brackets) output << '{';
+        for (size_t j = 0; j < sym.size(); ++j) {
+            if (j > 0) output << ',';
+            output << sym[j];
         }
-        output << final_eds.rdbuf();
-    } else {
-        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
-        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
-        // seeks); compact serialisation is only applied to the final output stream.
-        for (size_t i = 0; i < eds.length(); ++i) {
-            const StringSet sym = eds.read_symbol(i);
-            if (sym.size() == 1) {
-                output << sym[0];
-            } else {
-                output << '{';
-                for (size_t j = 0; j < sym.size(); ++j) {
-                    if (j > 0) output << ',';
-                    output << sym[j];
-                }
-                output << '}';
-            }
-        }
+        if (use_brackets) output << '}';
     }
+    output << '\n';
 
     if (phasing_output && has_sources) {
         std::ifstream final_seds(current_seds_file);
@@ -1271,31 +1262,22 @@ void eds_to_leds_cartesian(
         throw std::runtime_error("Maximum iterations reached without convergence");
     }
 
-    // Copy final result to output stream
-    if (!compact) {
-        std::ifstream final_eds(current_eds_file);
-        if (!final_eds) {
-            throw std::runtime_error("Failed to open final EDS file: " + current_eds_file.string());
+    // Serialise final result to the output stream.
+    // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
+    // seeks); the requested output format is applied only here, on the final EDS object.
+    // Using read_symbol() rather than a raw rdbuf() copy ensures the format flag is
+    // honoured even when the input was already l-EDS compliant (zero iterations run).
+    for (size_t i = 0; i < eds.length(); ++i) {
+        const StringSet sym = eds.read_symbol(i);
+        bool use_brackets = !compact || sym.size() > 1;
+        if (use_brackets) output << '{';
+        for (size_t j = 0; j < sym.size(); ++j) {
+            if (j > 0) output << ',';
+            output << sym[j];
         }
-        output << final_eds.rdbuf();
-    } else {
-        // Compact mode: omit brackets for single-alternative (non-degenerate) symbols.
-        // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
-        // seeks); compact serialisation is only applied to the final output stream.
-        for (size_t i = 0; i < eds.length(); ++i) {
-            const StringSet sym = eds.read_symbol(i);
-            if (sym.size() == 1) {
-                output << sym[0];
-            } else {
-                output << '{';
-                for (size_t j = 0; j < sym.size(); ++j) {
-                    if (j > 0) output << ',';
-                    output << sym[j];
-                }
-                output << '}';
-            }
-        }
+        if (use_brackets) output << '}';
     }
+    output << '\n';
 
     // Cleanup temp directory
     try {

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 EDSParser is a C++ library for parsing and transforming Elastic-Degenerate Strings (EDS), a data structure for representing sequence variation in bioinformatics. The library supports:
 - **Multiple input formats**: MSA (Multiple Sequence Alignment), VCF (Variant Call Format), and native EDS
 - **Format transformations**: Convert between formats and produce length-constrained EDS (l-EDS)
-- **Memory-efficient streaming**: Two storage modes (FULL vs METADATA_ONLY) for handling large datasets
+- **Memory-efficient streaming**: File-based loading keeps only metadata in RAM; strings read on demand via `read_symbol()`
 - **Source tracking**: Maintains provenance information through transformations (via .seds files)
 
 ## Build and Test Commands
@@ -65,18 +65,22 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 **EDS Class** ([src/cpp/lib/formats/eds.hpp](src/cpp/lib/formats/eds.hpp), [src/cpp/lib/formats/eds.cpp](src/cpp/lib/formats/eds.cpp))
 - Central data structure representing an elastic-degenerate string
 - Format: Sequence of sets where each position contains alternative strings: `{ACGT}{A,ACA}{CGT}{T,TG}`
-- Two storage modes:
-  - `FULL`: All strings loaded into RAM (backward compatible)
-  - `METADATA_ONLY`: Only metadata/index in RAM, strings streamed from disk (memory-efficient for large files)
+- Two construction paths (mode is implicit, not a user-facing enum):
+  - **Stream/string constructors** (`EDS(istream&)`, `EDS(string&)`): all strings loaded into `sets_` in RAM
+  - **File loader** (`EDS::load(path)`): only metadata in RAM; strings streamed on demand from the file via `read_symbol(pos)` — used throughout the transform pipeline for memory efficiency
 - Supports source tracking via separate .seds files (managed by `Sources` class)
 - Key operations:
   - Loading/parsing from streams or files
-  - Statistics computation (metadata includes `cum_common_positions`, `cum_degenerate_counts`)
+  - Metadata access via `get_metadata()` (`Metadata` struct: `cum_common_positions`, `cum_degenerate_counts`, `is_degenerate`, `string_lengths`, etc.)
   - Position checking (verify if pattern occurs at position)
   - Merging adjacent symbols (CARTESIAN without sources, LINEAR with sources)
   - Pattern generation for benchmarking
-- New source API: `set_sources_object()`, `get_sources_object()`, `read_source(idx)`, `has_sources()`
-- **Note**: `get_sources()` throws in METADATA_ONLY mode; use `read_source(idx)` instead
+- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`
+  - Use `get_metadata()` for all statistics/structural fields
+  - Use `get_metadata().is_degenerate` instead of `get_is_degenerate()`
+  - Use `get_sources_object()->set_cache_capacity()` for cache control
+- Source API: `set_sources_object()`, `get_sources_object()`, `read_source(idx)`, `has_sources()`
+- **Note**: `get_sources()` throws when EDS was constructed from a stream; use `read_source(idx)` instead
 
 **Transform Modules**
 - **MSA → EDS/l-EDS** ([src/cpp/lib/transforms/msa_transforms.hpp](src/cpp/lib/transforms/msa_transforms.hpp), [src/cpp/lib/transforms/msa_transforms.cpp](src/cpp/lib/transforms/msa_transforms.cpp)): Parse FASTA alignments with gaps (`-`) into EDS with source tracking. Uses streaming approach with per-symbol processing for memory efficiency:
@@ -154,8 +158,8 @@ Utility tools:
 - Flexible I/O (files, pipes, memory buffers)
 
 **Two-Phase Loading**: EDS class uses metadata-first approach:
-1. Parse file to build index and statistics
-2. Optionally load all strings (FULL mode) or keep file handle open for streaming (METADATA_ONLY mode)
+1. Parse file/stream to build index and statistics
+2. Stream constructors also populate `sets_` (in-memory); file loader (`EDS::load`) keeps the file handle open for on-demand symbol reading via `read_symbol()`
 
 **Sources as Separate Class** ([src/cpp/lib/formats/sources.hpp](src/cpp/lib/formats/sources.hpp), [src/cpp/lib/formats/sources.cpp](src/cpp/lib/formats/sources.cpp)): Source tracking (provenance) is managed by a dedicated `Sources` class, separate from EDS. This allows:
 - Using EDS without sources (simpler, faster)
@@ -169,11 +173,11 @@ Key methods:
 - `Sources::read_source_ref(idx)` — returns a const reference into the LRU cache for single-threaded use only; **do not use in parallel contexts** — another thread can evict the cache entry, dangling the reference
 - `Sources::merge_adjacent_sources()` / `intersect_sources()` — set operations for l-EDS; uses `read_source()` (not `read_source_ref()`) to avoid dangling references across OpenMP threads
 - `EDS::set_sources_object()` / `get_sources_object()` — attach/retrieve Sources on EDS
-- `EDS::read_source(idx)` — delegates to Sources (works in both FULL and METADATA_ONLY modes)
+- `EDS::read_source(idx)` — delegates to Sources (works regardless of how the EDS was constructed)
 
 **Thread safety**: `Sources` has a `mutable std::mutex io_mutex_` protecting the shared `stream_` and LRU cache from concurrent access. Both `read_source()` and `read_source_ref()` acquire this mutex. However, `read_source_ref()` releases the mutex before returning — the reference is only safe while no other thread calls any `Sources` method. In practice: always use `read_source()` in parallel code paths.
 
-**Note**: `EDS::get_sources()` throws a helpful error in METADATA_ONLY mode. Use `read_source(idx)` instead.
+**Note**: `EDS::get_sources()` throws when the EDS was constructed from a stream (sources not loaded). Use `read_source(idx)` instead.
 
 **Cardinality validation**: `EDS::load(eds_path, seds_path)` validates that `Sources::cardinality()` matches `EDS::m_` at load time; throws `std::invalid_argument` on mismatch. This catches stale or mismatched `.seds` files early.
 
@@ -395,20 +399,20 @@ eds2leds -i large_100GB.eds -s large_100GB.seds -l 10 --threads 16
 
 **Memory Footprint**:
 ```
-FULL mode:   13GB .seds file → ~10.6GB RAM
-METADATA_ONLY: index + cache = ~25MB for 13GB file  (420× reduction)
+Stream constructor:  13GB .seds file → ~10.6GB RAM (all sources in RAM)
+EDS::load (default): index + cache = ~25MB for 13GB file  (420× reduction)
 ```
 
-**Usage** (automatic in METADATA_ONLY mode):
+**Usage** (automatic with `EDS::load`):
 ```cpp
 // Load with source streaming (no code changes needed!)
-EDS eds = EDS::load("file.eds", "file_13GB.seds", EDS::StoringMode::METADATA_ONLY);
-eds.set_source_cache_capacity(100000);  // optional: increase cache
+EDS eds = EDS::load("file.eds", "file_13GB.seds");
+eds.get_sources_object()->set_cache_capacity(100000);  // optional: increase cache
 std::set<int> paths = eds.read_source(string_id);
 ```
 
 **Cache Size Guidelines**:
-- Small files (<100K strings): FULL mode or cache all
+- Small files (<100K strings): stream/string constructor or cache all
 - Medium files (100K-10M strings): 10K-100K cache (400KB-4MB)
 - Large files (>10M strings): 100K-1M cache (4MB-40MB)
 
@@ -440,101 +444,8 @@ After installation, CMake config files are located in `~/.local/lib/cmake/EDSPar
 
 ## Experiments and Analysis
 
-### Performance Analysis Tools
-
-**Transformation Log Parser** ([experiments/parse_transformation_logs.py](experiments/parse_transformation_logs.py))
-
-Script to extract performance metrics from transformation log files:
-
-```bash
-# View performance metrics in console
-python3 experiments/parse_transformation_logs.py experiments/datasets/SARS_cov2
-
-# Export to CSV for analysis
-python3 experiments/parse_transformation_logs.py experiments/datasets/SARS_cov2 \
-    --output sars_cov2_performance.csv
-```
-
-**Features**:
-- Automatically discovers all `.eds.log` and `.leds.log` files in dataset directory
-- Extracts: variant name, transformation type, context length, runtime, peak memory, threads
-- Outputs CSV compatible with pandas, Excel, plotting libraries
-- Supports all transformation types: MSA→EDS, EDS→l-EDS, VCF→EDS, etc.
-
-**Expected directory structure**:
-```
-datasets/<dataset_name>/
-├── eds/
-│   ├── variant1.eds.log
-│   └── variant2.eds.log
-├── 3_leds/
-│   ├── variant1.leds.log
-│   └── variant2.leds.log
-├── 5_leds/
-│   └── ...
-└── 10_leds/
-    └── ...
-```
-
-**Output CSV columns**:
-- `variant_name`: Name of the variant/sequence
-- `transformation_type`: MSA→EDS, EDS→l-EDS, VCF→EDS, etc.
-- `context_length`: l-EDS context length (empty for regular EDS)
-- `runtime_seconds`: Transformation runtime
-- `memory_mb`: Peak memory usage
-- `threads`: Number of threads used
-- `log_file`: Relative path to source log file
-
-### Analysis Notebooks
-
-The experiments directory contains Jupyter notebooks for analyzing transformation results. Each dataset has a modular notebook structure:
-
-**Notebook Structure** (located in `experiments/datasets/<dataset_name>/`):
-
-1. **[00_load_data.ipynb](experiments/datasets/SARS_cov2/00_load_data.ipynb)** - Data Loading and Processing
-   - Loads all CSV files (statistics.csv, transformation_performance.csv, detailed statistics)
-   - Merges data into comprehensive datasets
-   - Saves processed data to `processed_data/` directory for use by analysis notebooks
-   - **Run this first** before any analysis notebooks
-
-2. **[01_time_memory_analysis.ipynb](experiments/datasets/SARS_cov2/01_time_memory_analysis.ipynb)** - Transformation Performance Analysis
-   - Time consumption per variant (all transformations)
-   - Memory consumption per variant (all transformations)
-   - Context length impact on EDS→l-EDS transformation time and memory
-   - Detailed analysis with box plots, progression charts, and relative increases
-   - Time vs Memory scatter plots
-   - Statistical summaries by transformation type
-
-3. **[02_file_size_analysis.ipynb](experiments/datasets/SARS_cov2/02_file_size_analysis.ipynb)** - File Size and Compression Analysis
-   - Input vs EDS+SEDS size comparison (stacked bars showing EDS and SEDS components)
-   - l-EDS sizes with dual y-axis visualization for SEDS overhead
-   - Compression ratio statistics and SEDS overhead analysis
-   - Context length impact on compression ratios
-
-4. **[03_eds_statistics.ipynb](experiments/datasets/SARS_cov2/03_eds_statistics.ipynb)** - EDS Structure Analysis
-   - Symbol statistics across transformations (total symbols, degenerate symbols, context length)
-   - Memory reduction factors comparison
-   - Context length impact on reduction/compression factors (box plots and progression)
-   - Correlation matrix for EDS metrics
-   - Key insights and summary tables
-
-**Workflow**:
-```bash
-# 1. First, run data loading notebook
-jupyter notebook experiments/datasets/SARS_cov2/00_load_data.ipynb
-
-# 2. Then run any analysis notebook independently
-jupyter notebook experiments/datasets/SARS_cov2/01_time_memory_analysis.ipynb
-jupyter notebook experiments/datasets/SARS_cov2/02_file_size_analysis.ipynb
-jupyter notebook experiments/datasets/SARS_cov2/03_eds_statistics.ipynb
-```
-
-**Key Features**:
-- **Modular design**: Each notebook focuses on one analysis area
-- **Independent execution**: Analysis notebooks can run in any order after data loading
-- **Comprehensive visualizations**: 20+ graphs covering all aspects of transformation performance
-- **Statistical summaries**: Detailed tables with mean, median, std dev, min, max
-- **Relative analysis**: Shows percentage changes and improvements across context lengths
+The experiment scripts and analysis notebooks have moved to the parent `biofmi` repository at `experiments/`.
+See `biofmi/experiments/README.md` for the full pipeline documentation.
 
 ## Testing
 
@@ -546,6 +457,11 @@ jupyter notebook experiments/datasets/SARS_cov2/03_eds_statistics.ipynb
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
 | `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
 | `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
+
+**`test_eds` coverage note**: Both construction modes are tested.
+- METADATA_ONLY (file loader via `EDS::load`): covered by most existing tests via `create_temp_eds()`
+- FULL (in-memory via stream/string ctors): covered by `test_stream_constructor`, `test_from_string_factory`, `test_mode_equivalence`, `test_full_mode_edge_cases` (Tests A1–A4)
+- Mode equivalence: `test_mode_equivalence` constructs the same EDS via string ctor and file loader and asserts all observable outputs match (`length`, `cardinality`, `size`, all `read_symbol(i)`, all metadata fields)
 
 ### Running Memory Tests Manually
 ```bash
