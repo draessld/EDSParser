@@ -93,4 +93,4 @@ Thumbs.db
 # Experiment outputs - exclude all dataset content
 experiments/datasets/**
 experiments/parse_transformation_logs.py
-data/
+data/site/
