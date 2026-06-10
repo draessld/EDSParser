@@ -139,7 +139,7 @@ struct EDS::Metadata {
     size_t total_change_size;
     size_t num_empty_strings;
 
-    // Position-check support (for BioFMI index locate())
+    // Position-check support (for downstream locate() implementations)
     std::vector<Position> cum_common_positions;   // length n+1
     std::vector<int>      cum_degenerate_counts;  // length n+1
 };
@@ -214,7 +214,7 @@ bool check_position(
 ```
 
 Returns `true` if `pattern` occurs at `common_pos` using the given
-degenerate string choices. Used by the BioFMI locate oracle in tests.
+degenerate string choices. Used by downstream locate oracles in tests.
 
 ---
 

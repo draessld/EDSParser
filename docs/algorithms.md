@@ -256,7 +256,7 @@ in the EDS by following actual paths:
 4. Output the resulting substring.
 
 Patterns always respect degenerate choices — they are valid substring of
-at least one EDS path, making them suitable for testing FM-index queries.
+at least one EDS path, making them suitable for testing downstream pattern search.
 
 ---
 
