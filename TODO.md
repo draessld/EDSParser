@@ -97,6 +97,23 @@ using `metadata_` to follow the correct alternatives.
 
 ---
 
+## Format Genericity — EDZ_COMPRESSED
+
+EDZ (binary, uncompressed) is fully implemented: `parse_edz()`, `read_from_edz()`, `save_edz()`,
+the guard in `load()` is lifted, and 6 unit tests cover basic load, auto-detect, save/load
+roundtrip, multi-byte varints, LRU cache eviction, and error handling.
+
+**Remaining:** EDZ_COMPRESSED follows the same pattern but steps 2/4/5 additionally wrap
+data blobs with zstd block compression; the index stores compressed block boundaries instead of
+raw per-entry offsets. The `parse_edz_compressed`, `read_from_edz_compressed`, and
+`save_edz_compressed` stubs in `sources.cpp` are the entry points.
+
+The `copy_range_to_stream()` slow fallback (re-serialise via `read_source`) is the correct
+interim path for both EDZ and EDZ_COMPRESSED — it is only called from `eds2leds --linear` SEDS
+output, so no format-specific fast path is needed until EDZ output mode is added.
+
+---
+
 ## Optimizations
 
 ### [ARCH] eds2leds per-symbol throughput scales inversely with variability
