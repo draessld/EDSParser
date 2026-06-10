@@ -71,6 +71,12 @@ Memory for Pass 3: O(alternatives per symbol) — all output is streamed.
 
 **File:** `src/cpp/lib/transforms/eds_transforms.cpp`
 
+### Notation
+
+- **D** — a degenerate symbol (a set with more than one alternative, e.g. `{A,TG}`)
+- **c** — a common (non-degenerate) symbol (a single string, e.g. `ACG`)
+- An EDS is a sequence of D and c symbols: `c D c D c`, `D c D`, `D D c`, etc.
+
 ### Goal
 
 Transform an EDS into an l-EDS by merging adjacent symbols until every
@@ -102,24 +108,29 @@ Cartesian explosion common in real population data.
 ```
 Iteration:
   1. Load EDS as METADATA_ONLY
-  2. Scan symbols left-to-right
-  3. For each common symbol with length < l flanked by degenerates on both
-     sides:
-       - Identify the merge direction (merge with left or right neighbour,
-         whichever produces fewer alternatives or is cheaper)
-       - Enqueue this as a merge pair
-  4. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
-  5. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
+  2. Scan symbols left-to-right, greedily select non-overlapping merge pairs:
+       a. Common symbol with length < l flanked by degenerates on both sides
+          → merge it with the adjacent degenerate
+       b. Two consecutive degenerate symbols D D (implicit zero-length common
+          between them, length 0 < l)
+          → merge the two degenerates into one (Cartesian / LINEAR product)
+  3. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
+  4. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
                                        write to temp file
-  6. Point the input to the new temp file
-  7. Repeat until no merges are needed
+  5. Point the input to the new temp file
+  6. Repeat until no merges are needed
 ```
 
-Typical convergence: **2–5 iterations** for real genomic data (most
-short contexts are resolved in the first iteration).
+<!-- > **Note (unverified):** Convergence figures below are based on synthetic data only —
+> no experiments on real genomic data have been run yet. -->
 
-Worst case (adversarial: alternating single-base common symbols):
-O(log(min_context_gaps)) iterations.
+Worst case: a sequence of n consecutive degenerate symbols `D D D … D`.
+Each greedy pass can only pair non-overlapping neighbours, so the number
+of D's halves each iteration → **O(log n) iterations**.
+
+The same bound applies to a long alternating `D c D c D` chain where every
+common symbol c has length < l: each c must first be absorbed into a
+neighbour (creating a new D D adjacency), then those D's must be merged.
 
 ### compute_merge_metadata
 

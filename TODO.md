@@ -134,3 +134,82 @@ output, so no format-specific fast path is needed until EDZ output mode is added
   **Memory stability is higher priority than transformation speed.**
 - **Acceptable tradeoff:** a one-time transformation of a 100 GB file taking extra
   minutes is fine; running out of memory on a laptop is not
+
+---
+
+## Experiments / Validation
+
+All items below correspond to numbers in `docs/performance.md` that are either
+theoretical estimates or measured only on synthetic/unspecified hardware.
+Each experiment should produce a plot or table that replaces the placeholder claim.
+
+### 1. Verify eds2leds convergence claim on real genomic data
+
+`docs/algorithms.md` and `performance.md` state iteration counts for MSA-derived
+(2–4) and VCF-derived (3–6) data. Never validated — only synthetic EDS tested.
+
+Run `eds2leds` on representative real datasets (e.g. 1000 Genomes VCF→EDS,
+human MSA) and record iteration count per l value. Update both files.
+
+### 2. MSA throughput and memory vs alignment size / sequence count
+
+`performance.md` claims "50–200 MB/s" and the scalability table is pure calculation.
+No actual `msa2eds` benchmark exists.
+
+Benchmark: vary alignment length (1 MB, 10 MB, 100 MB, 1 GB) and sequence count
+(100, 1K, 10K) — measure runtime, throughput (MB/s), and peak RSS.
+Confirm the memory formula matches observed values.
+
+### 3. VCF block size trade-off: memory vs throughput
+
+The block-size table in `performance.md` is theoretical (memory formula only).
+No throughput or wall-clock measurements exist for different `--block-size` values.
+
+Benchmark `vcf2eds` on a real or large synthetic VCF with block sizes
+1M, 5M, 10M (default), 50M, 100M — measure peak RSS and runtime.
+Produce a plot of memory vs block-size and time vs block-size.
+
+### 4. eds2leds memory validation on large files
+
+The old-vs-new memory table (100×–3000× reduction) is projected from the
+architecture analysis, not from actually running 1 GB / 10 GB / 100 GB inputs.
+
+Run `eds2leds` (cartesian and linear) on inputs of 100 MB, 1 GB, 10 GB with
+`MemoryMonitor` or `/usr/bin/time -v`. Record actual peak RSS and compare to
+the formula. Update the table with real numbers and document the machine used.
+
+### 5. OpenMP thread-count scaling
+
+No data exists on how throughput scales with `--threads` for
+`compute_merge_metadata`. The mutex on `Sources::read_source()` may cause
+contention that limits scaling.
+
+Benchmark `eds2leds --linear --threads 1,2,4,8,16` on a fixed 1 GB input.
+Plot throughput vs thread count. Identify the saturation point.
+
+### 6. LRU cache hit rate measurement
+
+`performance.md` claims "~98% hit rate" but this is asserted, not measured.
+The claim also notes "> 100 GB SEDS → 99% with 100K cache" — also unmeasured.
+
+Instrument `Sources::read_source()` with a hit/miss counter (behind a
+compile-time flag). Run `eds2leds --linear` on real data with varying cache
+capacities (1K, 10K, 100K). Record actual hit rate. Update the table.
+
+### 7. Linear vs Cartesian on real genomic data
+
+The 1.26× cartesian/linear throughput ratio was measured on synthetic data
+(10% variability, 4-path round-robin, `genrandomeds`). Real VCF/MSA data
+may have different alternative counts and source distributions.
+
+Run both modes on real data. Record throughput ratio and output size ratio
+(linear prunes invalid paths — quantify the compression).
+
+### 8. Document hardware for all benchmarks
+
+The "Benchmark Baseline (2026-05 Reference System)" table in `performance.md`
+does not specify the machine. All numbers are therefore not reproducible.
+
+Re-run `bench.sh --size standard` on a documented machine (CPU model, core
+count, RAM, storage type). Add a "Hardware" section to `performance.md`.
+Use `bench_plot.py` — it now embeds machine info in plot footers automatically.

@@ -28,7 +28,7 @@ why particular trade-offs were chosen, and how the components connect.
                         │
                ┌────────▼────────┐
                │  File stream    │  (METADATA_ONLY: lazy I/O)
-               │  or in-RAM sets │  (FULL: from string/stream ctor)
+               │  or in-RAM sets │  (in-memory: from string/stream ctor)
                └─────────────────┘
 ```
 
@@ -36,11 +36,20 @@ why particular trade-offs were chosen, and how the components connect.
 
 ## Storage Modes
 
-### FULL Mode
+There is no explicit `LoadMode` enum. The mode is inferred at runtime:
+if `sets_` is populated the EDS is in-memory; if `sets_` is empty and
+the file stream is open it is METADATA_ONLY.
+
+(`FULL` / `COMPACT` are **output format** names — `OutputFormat::FULL`
+always emits brackets, `OutputFormat::COMPACT` omits them for single
+alternatives. They are unrelated to storage.)
+
+### In-Memory Mode
 
 Used when constructing EDS from a C++ string literal or `std::istream`.
 All strings are stored in `sets_` (a `vector<StringSet>`) in RAM.
-Provides fast random access (`get_sets()`) but is unsuitable for large files.
+`read_symbol(pos)` returns directly from `sets_` without any I/O.
+Unsuitable for large files; use `EDS::load()` for those.
 
 ### METADATA_ONLY Mode
 
@@ -94,7 +103,7 @@ Subsequent `read_source(idx)` calls:
 2. On a miss, seek to `base_positions_[idx]`, parse the `{...}` entry,
    evict the least-recently-used entry if at capacity, store the new entry.
 
-Default capacity: **10 000 entries** (~400 KB). Hit rates are typically
+>Default capacity: **10 000 entries** (~400 KB). Hit rates are typically
 >98% because merging operations access sources in linear order.
 
 ### Thread Safety
@@ -130,7 +139,7 @@ temp0.eds (written via stream_merged_symbols_to_file)
     ▼  Iteration 2: check remaining short contexts
 temp1.eds
     │
-    ▼ … (typically 2–5 iterations for real genomic data)
+    ▼ … 
 tempN.eds
     │
     ▼  rename / copy → output.leds
