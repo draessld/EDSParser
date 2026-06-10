@@ -37,7 +37,7 @@ msa2eds -i <alignment.msa> [OPTIONS]
 - Common columns → non-degenerate EDS symbol.
 - Columns with variation → degenerate EDS symbol.
 - When `-l` is provided, adjacent symbols are merged until every internal
-  common segment is ≥ l characters (see [algorithms.md](algorithms.md#msa-three-pass)).
+  common segment is ≥ l characters (see [Algorithms](algorithms.md#msa--eds-three-pass-streaming-algorithm)).
 - Merging strategy is always **LINEAR** (phasing-aware).
 
 ### Examples

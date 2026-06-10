@@ -93,11 +93,6 @@ msa2eds -i alignment.msa -l 10
 msa2eds -i alignment.msa -o custom.eds -s custom.seds
 ```
 
-**Features:**
-- Automatic source tracking (one path per input sequence)
-- LINEAR merging (phasing-aware, preserves valid combinations)
-- Streaming architecture (memory-efficient)
-
 ### vcf2eds - VCF to EDS/l-EDS Transformation
 
 Transform VCF files (with reference genome) to EDS:
@@ -116,16 +111,6 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 vcf2eds -i large.vcf --reference genome.fasta --block-size 1000000  # 1M bases (lower memory)
 vcf2eds -i large.vcf --reference genome.fasta --block-size 100000000  # 100M bases (higher memory, faster)
 ```
-
-**Features:**
-- Handles SNPs and small indels
-- Simple deletions (`<DEL>`) and insertions (`<INS>`)
-- **Inversions (`<INV>`)** - converted to reverse complement
-- **Copy Number Variations (`<CN0>`, `<CN1>`, `<CN2>`, etc.)** - handles deletions and duplications
-- Multi-allelic site support
-- Sample-level source tracking
-- Streaming reference processing
-- **Block-based processing** for memory-efficient handling of large VCF files (default 10M bases per block)
 
 ### eds2leds - EDS to l-EDS Transformation
 
@@ -495,56 +480,12 @@ cd sdsl-lite
 ./install.sh
 ```
 
-## Architecture
-
-### Core Components
-
-**EDS Class** ([src/cpp/lib/formats/eds.hpp](src/cpp/lib/formats/eds.hpp))
-- Central data structure for elastic-degenerate strings
-- Two storage modes: FULL (all in RAM) and METADATA_ONLY (streaming)
-- Support for source tracking
-
-**Transform Modules** ([src/cpp/lib/transforms/](src/cpp/lib/transforms/))
-- **MSA Transforms**: MSA → EDS/l-EDS with source tracking
-- **VCF Transforms**: VCF → EDS/l-EDS with sample-level sources. Supports SNPs, indels, deletions (`<DEL>`), insertions (`<INS>`), **inversions (`<INV>`)**, and **copy number variations (`<CN0>`, `<CN1>`, `<CN2>`, etc.)**
-- **EDS Transforms**: EDS → l-EDS with LINEAR or CARTESIAN merging
-
-### Design Patterns
-
-**Streaming Architecture**: All transform functions use `std::istream&` and `std::ostream&` for memory-efficient processing of large files.
-
-**Two-Phase Loading**: EDS files are parsed for metadata first, then optionally loaded fully or streamed on-demand.
-
-**Separate Source Tracking**: Source information is stored separately (`.seds` files), allowing EDS usage without provenance overhead. The `Sources` class is **thread-safe for concurrent reads**: a mutex protects the shared file stream and LRU cache. `merge_adjacent_sources()` uses value-returning `read_source()` (not `read_source_ref()`) to avoid dangling references when called from multiple OpenMP threads.
-
-**Per-Process Temp Directories**: `eds2leds` creates a PID-scoped temp directory (`/tmp/edsparser_leds_<pid>/`) for intermediate iteration files. This allows multiple `eds2leds` instances to run in parallel (e.g. from experiment scripts) without interfering with each other's temp files.
-
-## Performance Characteristics
-
-### Memory Efficiency
-
-**MSA Transformations**:
-- Memory: O(reference + bit vectors), independent of output size
-- Streaming output: Symbols flushed incrementally (no output accumulation)
-- Example: 1000 sequences × 100MB alignment ≈ 125MB peak memory
-- Suitable for: Any realistic MSA size (10K+ sequences, 1GB+ alignments)
-
-**VCF Transformations**:
-- Block-based processing: Default 10M bases per block
-- Memory: O(variants per block), not O(total variants)
-- Typical reduction: 120GB → 6-8GB for large population VCF files
-- Streaming reference: Random-access reading (not loaded into memory)
-- Adjustable: Use `--block-size` parameter to control memory usage
-
-**General**:
-- **MSA Parsing**: O(n×m) where n=number of sequences, m=alignment length
-- **VCF Processing**: Streaming reference genome (only current block in RAM)
-- **l-EDS Generation**: Linear in number of symbols
-- **Streaming Architecture**: All transforms write directly to disk (O(1) output memory)
-
 ## Documentation
 
-- **Tool Help**: Run any tool with `--help` for detailed usage information
+Full documentation — algorithms, architecture, design rationale, performance
+tuning — is at **[draessld.github.io/EDSParser](https://draessld.github.io/EDSParser/)**.
+
+Run any tool with `--help` for a usage summary.
 
 ## Troubleshooting
 
