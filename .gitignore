@@ -95,3 +95,7 @@ experiments/datasets/**
 experiments/parse_transformation_logs.py
 data/site/
 site/
+
+# Generated l-EDS output accidentally written to e2e data dir
+tests/e2e/data/*_l[0-9]*.leds
+tests/e2e/data/*_l[0-9]*.seds
