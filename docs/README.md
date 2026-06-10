@@ -122,8 +122,7 @@ without re-parsing the source data.
 ### Why streaming everywhere?
 
 The first prototype loaded the entire EDS into RAM. This worked for toy inputs.
-On real data — an 84 MB EDS paired with a 13 GB `.seds` source file, or a 100 GB
-EDS from a large cohort — it produced memory usage in the tens or hundreds of
+On real data it produced memory usage in the tens or hundreds of
 gigabytes. The architecture was redesigned from scratch around three principles:
 
 1. **Metadata-only loading by default.** `EDS::load()` reads the file once to
@@ -161,13 +160,6 @@ merging of phased data both correct and tractable.
 The practical consequence: `eds2leds` detects which strategy to use automatically.
 If a `.seds` file is supplied, LINEAR is used; without it, CARTESIAN.
 
-### Why per-process temp directories?
-
-Early versions wrote temp files to `/tmp/edsparser_leds_<iteration>/`. Running
-two `eds2leds` processes in parallel (e.g. from experiment scripts) caused them
-to overwrite each other's files and produce corrupted output. The fix is
-`/tmp/edsparser_leds_<pid>/` — each process owns an isolated directory that is
-cleaned up on completion or error.
 
 ### Why the complexity estimator?
 
@@ -204,7 +196,9 @@ lived:
   EDS. Every subsequent decision — the LRU cache, the `copy_range_to_stream()`
   optimisation, the distinction between `read_source()` (value, thread-safe) and
   `read_source_ref()` (reference, single-threaded only) — was driven by that one
-  observation.
+  observation. The text-based `.seds` format is also inherently verbose; a compact
+  binary format (`.edz`) is planned as future work to reduce file size and parsing
+  overhead for large cohorts.
 
 - **The sequential-seek elimination** was a profiling surprise. `seekg()` on a
   local file is not free; on the test machine, eliminating redundant seeks on
