@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#edsparser-documentation" class="md-skip">
+        <a href="#edsparser" class="md-skip">
           Skip to content
         </a>
       
@@ -367,25 +367,6 @@
   
 
       
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="experiments.md" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Experiments
-
-      </a>
-    </li>
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -504,10 +485,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#contents" class="md-nav__link">
+  <a href="#what-is-an-elastic-degenerate-string" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Contents
+        What is an Elastic-Degenerate String?
       
     </span>
   </a>
@@ -515,44 +496,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-is-edsparser" class="md-nav__link">
+  <a href="#why-eds-for-pangenomics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What is EDSParser?
+        Why EDS for Pangenomics?
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Quick Start
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Quick Start">
+    <nav class="md-nav" aria-label="Why EDS for Pangenomics?">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
+  <a href="#why-msa-and-vcf-as-inputs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#core-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Core Workflow
+        Why MSA and VCF as inputs?
       
     </span>
   </a>
@@ -561,6 +520,100 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-l-eds-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The l-EDS Constraint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-format-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Format Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-philosophy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Philosophy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design Philosophy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-streaming-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why streaming everywhere?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-two-merge-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why two merge strategies?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-per-process-temp-directories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why per-process temp directories?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-the-complexity-estimator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the complexity estimator?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-thoughts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Thoughts
+      
+    </span>
+  </a>
   
 </li>
       
@@ -576,21 +629,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tool-summary" class="md-nav__link">
+  <a href="#documentation-map" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tool Summary
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#repository-layout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Repository Layout
+        Documentation Map
       
     </span>
   </a>
@@ -794,33 +836,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="experiments.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Experiments
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -848,10 +863,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#contents" class="md-nav__link">
+  <a href="#what-is-an-elastic-degenerate-string" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Contents
+        What is an Elastic-Degenerate String?
       
     </span>
   </a>
@@ -859,44 +874,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-is-edsparser" class="md-nav__link">
+  <a href="#why-eds-for-pangenomics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What is EDSParser?
+        Why EDS for Pangenomics?
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Quick Start
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Quick Start">
+    <nav class="md-nav" aria-label="Why EDS for Pangenomics?">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
+  <a href="#why-msa-and-vcf-as-inputs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#core-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Core Workflow
+        Why MSA and VCF as inputs?
       
     </span>
   </a>
@@ -905,6 +898,100 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-l-eds-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The l-EDS Constraint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-format-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Format Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-philosophy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Philosophy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design Philosophy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-streaming-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why streaming everywhere?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-two-merge-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why two merge strategies?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-per-process-temp-directories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why per-process temp directories?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-the-complexity-estimator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the complexity estimator?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-thoughts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Thoughts
+      
+    </span>
+  </a>
   
 </li>
       
@@ -920,21 +1007,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tool-summary" class="md-nav__link">
+  <a href="#documentation-map" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tool Summary
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#repository-layout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Repository Layout
+        Documentation Map
       
     </span>
   </a>
@@ -966,84 +1042,183 @@
   
 
 
-<h1 id="edsparser-documentation">EDSParser Documentation<a class="headerlink" href="#edsparser-documentation" title="Permanent link">&para;</a></h1>
-<blockquote>
-<p><strong>Version 1.0.0</strong> — C++ library and CLI suite for Elastic-Degenerate Strings</p>
-</blockquote>
-<h2 id="contents">Contents<a class="headerlink" href="#contents" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Document</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="formats/">formats.md</a></td>
-<td>File format reference — EDS, SEDS, MSA, VCF, l-EDS</td>
-</tr>
-<tr>
-<td><a href="cli-tools/">cli-tools.md</a></td>
-<td>Complete CLI tool reference for all six executables</td>
-</tr>
-<tr>
-<td><a href="library-api/">library-api.md</a></td>
-<td>C++ public API reference (EDS, Sources, transforms)</td>
-</tr>
-<tr>
-<td><a href="architecture/">architecture.md</a></td>
-<td>Internal design: streaming, two-phase loading, pipe buffers</td>
-</tr>
-<tr>
-<td><a href="algorithms/">algorithms.md</a></td>
-<td>Algorithm deep-dives: merging, MSA 3-pass, VCF blocks, l-EDS iteration</td>
-</tr>
-<tr>
-<td><a href="performance/">performance.md</a></td>
-<td>Memory profiles, throughput numbers, tuning guidelines</td>
-</tr>
-<tr>
-<td><a href="testing/">testing.md</a></td>
-<td>Unit, integration, e2e, memory and benchmark test suites</td>
-</tr>
-</tbody>
-</table>
+<h1 id="edsparser">EDSParser<a class="headerlink" href="#edsparser" title="Permanent link">&para;</a></h1>
+<p>A C++ library and CLI suite for parsing, transforming, and validating
+<strong>Elastic-Degenerate Strings (EDS)</strong> — a compact data structure for representing
+population-level sequence variation in pangenomics.</p>
 <hr />
-<h2 id="what-is-edsparser">What is EDSParser?<a class="headerlink" href="#what-is-edsparser" title="Permanent link">&para;</a></h2>
-<p>EDSParser is a <strong>high-performance C++ library and command-line suite</strong> for working with
-<em>Elastic-Degenerate Strings</em> (EDS) — a compact representation of sequence variation that
-encodes multiple alternative strings at each position, used as a data structure for
-pangenomic applications.</p>
-<p>An EDS encodes a population of sequences as a single string of <em>symbols</em>, where each symbol
-is an ordered set of alternative strings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>ACGT{A,ACA}CGT{T,TG,}AACG
+<h2 id="what-is-an-elastic-degenerate-string">What is an Elastic-Degenerate String?<a class="headerlink" href="#what-is-an-elastic-degenerate-string" title="Permanent link">&para;</a></h2>
+<p>A classical string is a sequence of characters. An EDS generalises this: each
+position holds a <em>set</em> of alternative strings instead of a single character.</p>
+<p>Formally, an EDS is a sequence</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>T = (T₁, T₂, …, Tₙ)
 </code></pre></div>
-<p>Here positions 4–6 and 11–12 are <em>degenerate</em> (they carry multiple alternatives including,
-in the second case, an empty string representing a deletion).</p>
+<p>where each <strong>symbol</strong> Tᵢ is a finite, non-empty set of strings over some alphabet.
+A symbol with exactly one string is <strong>common</strong> (non-degenerate); a symbol with two
+or more is <strong>degenerate</strong>.</p>
+<p>Concretely:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>ACGT{A,ACA}CGT{T,TG,}AACG
+</code></pre></div>
+<ul>
+<li><code>ACGT</code>, <code>CGT</code>, <code>AACG</code> are common symbols — all paths agree here.</li>
+<li><code>{A,ACA}</code> is a degenerate symbol — some paths carry <code>A</code>, others carry <code>ACA</code>
+  (an insertion).</li>
+<li><code>{T,TG,}</code> is a degenerate symbol with an empty-string alternative —
+  representing a deletion.</li>
+</ul>
+<p>The name <em>elastic</em> refers to the fact that alternatives can have different lengths,
+so the total character count varies across paths. <em>Degenerate</em> comes from the
+generalised nucleotide notation where ambiguity codes represent multiple bases.</p>
+<p>A <strong>path</strong> through an EDS is any sequence obtained by picking exactly one
+alternative from each symbol. An EDS with n symbols and k alternatives per
+degenerate symbol implicitly encodes up to kⁿ concrete sequences — yet stores
+only their shared structure once.</p>
 <hr />
-<h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<h3 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./INSTALL.sh<span class="w">          </span><span class="c1"># builds + installs to ~/.local/</span>
+<h2 id="why-eds-for-pangenomics">Why EDS for Pangenomics?<a class="headerlink" href="#why-eds-for-pangenomics" title="Permanent link">&para;</a></h2>
+<p>Genomics has historically operated on a <em>reference genome</em>: one canonical
+sequence, with variation stored separately in VCF files. This approach has
+two structural problems:</p>
+<ol>
+<li><strong>Reference bias.</strong> Any read or pattern that diverges from the reference
+   is harder to align, leading to systematic blind spots in variant-rich regions.</li>
+<li><strong>Query coupling.</strong> To ask "does this pattern appear in any haplotype?", you
+   must query the reference, enumerate VCF alleles, reconstruct each haplotype
+   in memory, and repeat. For a population of thousands of samples this is
+   prohibitively expensive.</li>
+</ol>
+<p>An EDS encodes the entire population in one structure. A single FM-index query
+over the EDS returns all matching paths simultaneously — no reconstruction loop,
+no reference bias.</p>
+<h3 id="why-msa-and-vcf-as-inputs">Why MSA and VCF as inputs?<a class="headerlink" href="#why-msa-and-vcf-as-inputs" title="Permanent link">&para;</a></h3>
+<p>These are the two formats in which large-scale genomic variation already exists:</p>
+<ul>
+<li><strong>MSA</strong> (Multiple Sequence Alignment, FASTA with gap columns) — common output
+  of alignment pipelines. Each row is one haplotype; gap columns represent indels.</li>
+<li><strong>VCF</strong> (Variant Call Format) — standard for population-level variant catalogs;
+  requires a reference FASTA to reconstruct alternatives.</li>
+</ul>
+<p>EDSParser converts both to EDS and, immediately, to l-EDS — the variant required
+for FM-index construction.</p>
+<hr />
+<h2 id="the-l-eds-constraint">The l-EDS Constraint<a class="headerlink" href="#the-l-eds-constraint" title="Permanent link">&para;</a></h2>
+<p>An FM-index over an EDS needs to answer: "at position i in the EDS, what are all
+possible characters that can follow a given context?" If two degenerate sets are
+separated by only one common character, the context window (of length l) straddles
+both sets, and the index cannot distinguish which alternative of the first set is
+active when looking at the second.</p>
+<p>The <strong>l-EDS</strong> constraint resolves this: every <em>internal</em> common segment (one with
+a degenerate symbol on both sides) must have length ≥ l. This guarantees that the
+l-character context window around any degenerate set lies entirely within one
+non-degenerate segment and is unambiguous.</p>
+<p>Boundary segments (at the start or end of the EDS) are exempt — they have no
+degenerate neighbour on one side, so context is not ambiguous.</p>
+<p>The biofmi FM-index (<a href="https://github.com/draessld/biofmi">biofmi repository</a>)
+is built directly on l-EDS output.</p>
+<hr />
+<h2 id="the-format-pipeline">The Format Pipeline<a class="headerlink" href="#the-format-pipeline" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>MSA file ─────────────────────────────┐
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                                       ├─► EDS ─► l-EDS ─► FM-index (biofmi)
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>VCF + reference FASTA ────────────────┘
 </code></pre></div>
-<h3 id="core-workflow">Core Workflow<a class="headerlink" href="#core-workflow" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># 1. Start from a Multiple Sequence Alignment (FASTA with gaps)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>msa2eds<span class="w"> </span>-i<span class="w"> </span>alignment.msa<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span><span class="w"> </span>-o<span class="w"> </span>data.leds<span class="w">   </span><span class="c1"># → l-EDS + sources directly</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># — or from a VCF —</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>--reference<span class="w"> </span>genome.fasta<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># — or generate synthetic data —</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">100</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span>--min-context<span class="w"> </span><span class="m">10</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">42</span><span class="w"> </span>-o<span class="w"> </span>data.eds
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># then:</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># 2. Inspect what you produced</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>--csv
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="c1"># 3. Generate patterns for benchmarking downstream tools</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>patterns.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">1000</span><span class="w"> </span>-l<span class="w"> </span><span class="m">20</span>
+<p>Or in two steps when you already have an EDS:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>EDS ──[ eds2leds ]──► l-EDS
 </code></pre></div>
+<p>The pipeline is deliberately split. <code>msa2eds</code> and <code>vcf2eds</code> produce either
+plain EDS or l-EDS directly (with <code>-l</code>). For stored EDS files that need to be
+re-contextualised at a different <code>l</code>, <code>eds2leds</code> re-runs the merging step
+without re-parsing the source data.</p>
+<hr />
+<h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
+<h3 id="why-streaming-everywhere">Why streaming everywhere?<a class="headerlink" href="#why-streaming-everywhere" title="Permanent link">&para;</a></h3>
+<p>The first prototype loaded the entire EDS into RAM. This worked for toy inputs.
+On real data — an 84 MB EDS paired with a 13 GB <code>.seds</code> source file, or a 100 GB
+EDS from a large cohort — it produced memory usage in the tens or hundreds of
+gigabytes. The architecture was redesigned from scratch around three principles:</p>
+<ol>
+<li>
+<p><strong>Metadata-only loading by default.</strong> <code>EDS::load()</code> reads the file once to
+   build an index (byte offsets, string lengths, degenerate flags) and discards
+   the string data. Individual symbols are re-read on demand via <code>read_symbol()</code>,
+   with a sequential-seek optimisation: if the stream is already at the right
+   position, the <code>seekg()</code> call is skipped.</p>
+</li>
+<li>
+<p><strong>LRU-cached source streaming.</strong> <code>.seds</code> files grow proportionally to the
+   number of paths times the number of strings — easily 10–100× larger than the
+   EDS itself. <code>Sources::load()</code> indexes the file with a single sequential read
+   (64 KB chunks, scanning for <code>{</code> characters), then serves individual source
+   sets on demand with an LRU cache (default: 10 000 entries, ~400 KB). Hit rate
+   is typically &gt;98% because merging accesses sources in linear order.</p>
+</li>
+<li>
+<p><strong>Iterative temp-file chaining for l-EDS.</strong> The merge algorithm must read and
+   re-read symbols across iterations. Instead of keeping all data in RAM, each
+   iteration writes its output to a new temp file, which the next iteration reads
+   in METADATA_ONLY mode. Peak memory is O(metadata + one batch) rather than
+   O(file_size × iterations).</p>
+</li>
+</ol>
+<h3 id="why-two-merge-strategies">Why two merge strategies?<a class="headerlink" href="#why-two-merge-strategies" title="Permanent link">&para;</a></h3>
+<p><strong>CARTESIAN</strong> — compute the cross-product of all alternative combinations.
+Correct in the mathematical sense: every possible path is preserved. But for
+real population data (e.g. 1000 Genomes with thousands of haplotypes), the
+cross-product between adjacent degenerate sets explodes exponentially.</p>
+<p><strong>LINEAR</strong> — compute only the combinations where the two strings share at least
+one source path. If haplotype 3 carries alternative <code>A</code> at set i and alternative
+<code>GT</code> at set i+1, the combination <code>AGT</code> is valid. If no haplotype carries both,
+the combination is biologically impossible and is discarded. This makes l-EDS
+merging of phased data both correct and tractable.</p>
+<p>The practical consequence: <code>eds2leds</code> detects which strategy to use automatically.
+If a <code>.seds</code> file is supplied, LINEAR is used; without it, CARTESIAN.</p>
+<h3 id="why-per-process-temp-directories">Why per-process temp directories?<a class="headerlink" href="#why-per-process-temp-directories" title="Permanent link">&para;</a></h3>
+<p>Early versions wrote temp files to <code>/tmp/edsparser_leds_&lt;iteration&gt;/</code>. Running
+two <code>eds2leds</code> processes in parallel (e.g. from experiment scripts) caused them
+to overwrite each other's files and produce corrupted output. The fix is
+<code>/tmp/edsparser_leds_&lt;pid&gt;/</code> — each process owns an isolated directory that is
+cleaned up on completion or error.</p>
+<h3 id="why-the-complexity-estimator">Why the complexity estimator?<a class="headerlink" href="#why-the-complexity-estimator" title="Permanent link">&para;</a></h3>
+<p>The CARTESIAN merge on dense or adjacent degenerate sets produces exponentially
+many alternatives. This is not obvious from file size alone — a 10 MB EDS with
+adjacent degenerates can produce a 10 GB l-EDS. <code>estimate_leds_complexity()</code>
+runs in O(n) over metadata (no string data) and warns before the transformation
+starts, giving the user a chance to switch to LINEAR or adjust <code>l</code>.</p>
+<hr />
+<h2 id="project-thoughts">Project Thoughts<a class="headerlink" href="#project-thoughts" title="Permanent link">&para;</a></h2>
+<p>EDSParser started as the input-parsing layer for biofmi. The initial assumption
+was that the hard part was the FM-index; the format conversions were boilerplate.</p>
+<p>In practice, the format conversions were where most of the interesting problems
+lived:</p>
+<ul>
+<li>
+<p><strong>The MSA 3-pass algorithm</strong> emerged because a naïve approach (load all
+  sequences, then decide symbol boundaries) required O(num_sequences × alignment_length)
+  RAM. Three passes over the file, with only a bit vector and file positions in
+  memory, brought this down to O(alignment_length).</p>
+</li>
+<li>
+<p><strong>The iterative merge convergence</strong> was not obvious upfront. One merge pass can
+  create new violations (a newly merged string can be shorter or longer than the
+  original, changing its neighbourhood's compliance). Proving that the process
+  always converges required thinking through the monotonicity of the "minimum
+  context length" metric across iterations.</p>
+</li>
+<li>
+<p><strong>Source tracking was the biggest engineering surface.</strong> The initial design had
+  sources as a <code>vector&lt;set&lt;int&gt;&gt;</code> embedded in the EDS object. It worked for small
+  inputs. The first real dataset showed that sources can be 100× larger than the
+  EDS. Every subsequent decision — the LRU cache, the <code>copy_range_to_stream()</code>
+  optimisation, the distinction between <code>read_source()</code> (value, thread-safe) and
+  <code>read_source_ref()</code> (reference, single-threaded only) — was driven by that one
+  observation.</p>
+</li>
+<li>
+<p><strong>The sequential-seek elimination</strong> was a profiling surprise. <code>seekg()</code> on a
+  local file is not free; on the test machine, eliminating redundant seeks on
+  forward-sequential access reduced per-iteration time by ~35% on large files.
+  The fix is four lines: cache the current stream position and skip the seek call
+  if already there.</p>
+</li>
+</ul>
 <hr />
 <h2 id="concepts-glossary">Concepts Glossary<a class="headerlink" href="#concepts-glossary" title="Permanent link">&para;</a></h2>
 <table>
@@ -1060,7 +1235,7 @@ in the second case, an empty string representing a deletion).</p>
 </tr>
 <tr>
 <td><strong>Symbol</strong></td>
-<td>One element of the EDS sequence; either <em>common</em> (single string) or <em>degenerate</em> (≥2 alternatives)</td>
+<td>One element of the EDS sequence; common (one string) or degenerate (≥2)</td>
 </tr>
 <tr>
 <td><strong>l-EDS</strong></td>
@@ -1068,23 +1243,23 @@ in the second case, an empty string representing a deletion).</p>
 </tr>
 <tr>
 <td><strong>Context</strong></td>
-<td>A non-degenerate (common) symbol in the EDS</td>
+<td>A common symbol; the non-variable region between two degenerate sets</td>
 </tr>
 <tr>
 <td><strong>Source / Path</strong></td>
-<td>A concrete sequence (e.g. one haplotype) that is consistent with the EDS</td>
+<td>A concrete sequence (e.g. one haplotype) consistent with the EDS</td>
 </tr>
 <tr>
 <td><strong>SEDS</strong></td>
-<td>Source EDS — companion file tracking which strings belong to which paths</td>
+<td>Source EDS — companion file mapping each string to its source paths</td>
 </tr>
 <tr>
 <td><strong>LINEAR merge</strong></td>
-<td>Phasing-aware merge: only valid haplotype combinations are kept</td>
+<td>Phasing-aware merge: keeps only combinations that share a source</td>
 </tr>
 <tr>
 <td><strong>CARTESIAN merge</strong></td>
-<td>All-combinations merge: cross-product of alternatives</td>
+<td>All-combinations merge: cross-product, no source filtering</td>
 </tr>
 <tr>
 <td><strong>Cardinality <code>m</code></strong></td>
@@ -1096,94 +1271,50 @@ in the second case, an empty string representing a deletion).</p>
 </tr>
 <tr>
 <td><strong><code>N</code></strong></td>
-<td>Total number of characters</td>
+<td>Total number of characters summed across all strings</td>
 </tr>
 </tbody>
 </table>
 <hr />
-<h2 id="tool-summary">Tool Summary<a class="headerlink" href="#tool-summary" title="Permanent link">&para;</a></h2>
+<h2 id="documentation-map">Documentation Map<a class="headerlink" href="#documentation-map" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Tool</th>
-<th>Input</th>
-<th>Output</th>
-<th>Purpose</th>
+<th>Page</th>
+<th>Contents</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>msa2eds</code></td>
-<td><code>.msa</code> (FASTA + gaps)</td>
-<td><code>.eds</code> / <code>.leds</code> + <code>.seds</code></td>
-<td>MSA → EDS or l-EDS</td>
+<td><a href="algorithms/">Algorithms</a></td>
+<td>MSA 3-pass, iterative merge, VCF block processing, source intersection</td>
 </tr>
 <tr>
-<td><code>vcf2eds</code></td>
-<td><code>.vcf</code> + <code>.fasta</code></td>
-<td><code>.eds</code> / <code>.leds</code> + <code>.seds</code></td>
-<td>VCF → EDS or l-EDS</td>
+<td><a href="architecture/">Architecture</a></td>
+<td>Storage modes, two-phase loading, LRU cache, pipe buffers, thread safety</td>
 </tr>
 <tr>
-<td><code>eds2leds</code></td>
-<td><code>.eds</code> + optional <code>.seds</code></td>
-<td><code>.leds</code> + <code>.seds</code></td>
-<td>EDS → l-EDS</td>
+<td><a href="formats/">File Formats</a></td>
+<td>EDS, SEDS, EDZ, MSA, VCF — syntax, semantics, edge cases</td>
 </tr>
 <tr>
-<td><code>edsparser-stats</code></td>
-<td><code>.eds</code> / <code>.leds</code></td>
-<td>stdout / <code>.csv</code> / <code>.json</code></td>
-<td>Statistics + compliance</td>
+<td><a href="cli-tools/">CLI Tools</a></td>
+<td>All flags and examples for every tool</td>
 </tr>
 <tr>
-<td><code>edsparser-genpatterns</code></td>
-<td><code>.eds</code> / <code>.leds</code></td>
-<td><code>.txt</code> patterns</td>
-<td>Pattern generation</td>
+<td><a href="library-api/">Library API</a></td>
+<td>C++ public API: EDS, Sources, transform functions</td>
 </tr>
 <tr>
-<td><code>genrandomeds</code></td>
-<td>parameters</td>
-<td><code>.eds</code> + <code>.seds</code></td>
-<td>Synthetic data generation</td>
+<td><a href="performance/">Performance</a></td>
+<td>Memory profiles, throughput numbers, tuning by dataset size</td>
+</tr>
+<tr>
+<td><a href="testing/">Testing</a></td>
+<td>Unit, integration, e2e, memory stress, benchmarks</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="repository-layout">Repository Layout<a class="headerlink" href="#repository-layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>edsparser/
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── src/cpp/
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>│   ├── lib/                    # Core C++ library (libedsparser_lib.a)
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>│   │   ├── common.hpp/cpp      # Types, Timer, memory helpers
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│   │   ├── formats/
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│   │   │   ├── eds.hpp/cpp     # EDS class
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>│   │   │   └── sources.hpp/cpp # Sources class (provenance)
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│   │   ├── transforms/
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│   │   │   ├── eds_transforms.hpp/cpp     # EDS → l-EDS
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>│   │   │   ├── msa_transforms.hpp/cpp     # MSA → EDS/l-EDS
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>│   │   │   ├── vcf_transforms.hpp/cpp     # VCF → EDS/l-EDS
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>│   │   │   └── eds_complexity.cpp         # Complexity estimator
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>│   │   ├── memory_monitor.hpp/cpp         # Memory diagnostics
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>│   │   ├── pipe_buffer.hpp                # Thread-safe circular streambuf
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>│   │   └── pipe_stream.hpp                # PipeOutputStream/InputStream
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>│   └── tools/
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>│       ├── msa2eds.cpp         # CLI: MSA → EDS/l-EDS
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>│       ├── vcf2eds.cpp         # CLI: VCF → EDS/l-EDS
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>│       ├── eds2leds.cpp        # CLI: EDS → l-EDS
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>│       ├── stats.cpp           # CLI: edsparser-stats
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>│       ├── genpatterns.cpp     # CLI: edsparser-genpatterns
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>│       └── genrandomeds.cpp    # CLI: genrandomeds
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>├── tests/
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>│   ├── unit/                   # C++ unit tests (ctest)
-<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>│   ├── e2e/                    # Shell end-to-end tests
-<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>│   ├── stress/                 # Stress test data generators
-<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>│   └── bench/                  # Performance benchmarks
-<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>├── docs/                       # ← You are here
-<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>├── CMakeLists.txt
-<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>├── INSTALL.sh
-<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>└── README.md
-</code></pre></div>
 
 
 
