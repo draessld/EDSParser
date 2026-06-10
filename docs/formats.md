@@ -186,7 +186,6 @@ RAM).
 
 The following are skipped with a warning written to stderr:
 
-- Overlapping variants (resolved by the merge-overlap step)
 - Translocations, mobile element insertions, and other complex SVs
 - Malformed VCF lines (missing mandatory fields)
 
@@ -210,7 +209,7 @@ AAACCCGGGT
 ```
 
 One pattern per line, DNA alphabet only (ACGT). Patterns are drawn from
-actual paths through the EDS, so they are guaranteed to occur in the index.
+actual paths through the EDS, so they are guaranteed to occur in the EDS.
 
 ---
 

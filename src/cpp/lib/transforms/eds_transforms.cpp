@@ -283,19 +283,26 @@ namespace {
 
         // Process pairs in parallel or sequentially
         if (num_threads <= 1 || pairs.empty()) {
-            // Sequential execution
             for (size_t i = 0; i < pairs.size(); ++i) {
                 results[i] = compute_pair_metadata(pairs[i]);
             }
         } else {
-            // Parallel execution with OpenMP
 #ifdef _OPENMP
+            // Exceptions must not propagate out of a parallel region (UB in OpenMP).
+            // Each thread catches locally; the first exception is re-thrown after join.
+            std::exception_ptr first_exception;
             #pragma omp parallel for num_threads(num_threads)
             for (size_t i = 0; i < pairs.size(); ++i) {
-                results[i] = compute_pair_metadata(pairs[i]);
+                if (first_exception) continue;
+                try {
+                    results[i] = compute_pair_metadata(pairs[i]);
+                } catch (...) {
+                    #pragma omp critical
+                    if (!first_exception) first_exception = std::current_exception();
+                }
             }
+            if (first_exception) std::rethrow_exception(first_exception);
 #else
-            // OpenMP not available, fall back to sequential
             for (size_t i = 0; i < pairs.size(); ++i) {
                 results[i] = compute_pair_metadata(pairs[i]);
             }
