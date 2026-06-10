@@ -74,6 +74,12 @@ def classify(scenario: str) -> dict:
         return {"sweep": "size", "ref_size_mb": int(m.group(1)), "mode": "edsparser-stats"}
     if m := re.match(r"edsparser_genpatterns_(\d+)mb$", scenario):
         return {"sweep": "size", "ref_size_mb": int(m.group(1)), "mode": "edsparser-genpatterns"}
+    if m := re.match(r"memory_stability_(\d+)mb_(cartesian|linear)$", scenario):
+        return {
+            "sweep": "memory_stability",
+            "ref_size_mb": int(m.group(1)),
+            "mode": m.group(2),
+        }
     return {"sweep": "other", "mode": "unknown"}
 
 
@@ -274,6 +280,55 @@ def plot_size_sweep(df: pd.DataFrame, out_dir: Path) -> bool:
     return True
 
 
+def plot_memory_stability(df: pd.DataFrame, out_dir: Path) -> bool:
+    sub = df[df["sweep"] == "memory_stability"].copy()
+    if sub.empty:
+        return False
+
+    MEMORY_LIMIT_MB = 500
+    sizes = sorted(sub["ref_size_mb"].unique())
+
+    fig, (ax_mem, ax_tp) = plt.subplots(1, 2, figsize=(10, 4))
+
+    for mode in ("cartesian", "linear"):
+        rows = sub[sub["mode"] == mode].sort_values("ref_size_mb")
+        if rows.empty:
+            continue
+        x     = rows["ref_size_mb"].values
+        mem   = rows["memory_median_mb"].values
+        tp    = rows["throughput_median_mb_s"].values
+        mem_err = rows["memory_stddev_mb"].values if "memory_stddev_mb" in rows.columns else None
+        color = COLORS.get(mode, "#888888")
+        label = DISPLAY_NAMES.get(mode, mode)
+        kw = dict(color=color, marker="o", linewidth=1.8, markersize=6, label=label)
+        ax_mem.errorbar(x, mem, yerr=mem_err, capsize=3, **kw)
+        ax_tp.plot(x, tp, **kw)
+
+    ax_mem.axhline(MEMORY_LIMIT_MB, color="#E53935", linewidth=1.4,
+                   linestyle="--", label=f"{MEMORY_LIMIT_MB} MB limit")
+    ax_mem.set_xlabel("Input size (MB)")
+    ax_mem.set_ylabel("Peak memory (MB)")
+    ax_mem.set_title("Peak RSS vs input size")
+    ax_mem.legend(fontsize=8)
+
+    ax_tp.set_xlabel("Input size (MB)")
+    ax_tp.set_ylabel("Throughput (MB/s)")
+    ax_tp.set_title("Throughput vs input size")
+    ax_tp.legend(fontsize=8)
+
+    fig.suptitle(
+        f"Memory stability — large-file METADATA_ONLY streaming  "
+        f"(10% var, --min-context 4, l=5)",
+        fontsize=10, y=1.02,
+    )
+    fig.tight_layout()
+
+    out = out_dir / "memory_stability.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
 def _label_for_summary(scenario: str) -> str:
     """Shorten a scenario name for the summary bar chart Y-axis."""
     replacements = [
@@ -291,6 +346,8 @@ def _label_for_summary(scenario: str) -> str:
          lambda m: f"stats {m.group(1)}MB"),
         (r"edsparser_genpatterns_(\d+)mb",
          lambda m: f"genpatterns {m.group(1)}MB"),
+        (r"memory_stability_(\d+)mb_(cartesian|linear)",
+         lambda m: f"memstab {'cart' if m.group(2)=='cartesian' else 'lin'} {m.group(1)}MB"),
     ]
     for pattern, repl in replacements:
         if m := re.match(pattern, scenario):
@@ -424,6 +481,7 @@ def main():
         ("context_length_sweep.png", plot_context_sweep),
         ("path_count_sweep.png",     plot_path_count_sweep),
         ("size_sweep.png",           plot_size_sweep),
+        ("memory_stability.png",     plot_memory_stability),
         ("summary.png",              plot_summary),
     ]
 

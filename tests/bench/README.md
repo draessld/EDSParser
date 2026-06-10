@@ -96,3 +96,15 @@ git commit -m "bench: update reference plots ($(date +%Y-%m-%d))"
 ### Summary — all scenarios
 
 ![summary](docs/summary.png)
+
+### Context length sweep (l = 3, 5, 10, 20)
+
+![context length sweep](docs/context_length_sweep.png)
+
+### Variability sweep (variant density 1 %, 5 %, 10 %)
+
+![variability sweep](docs/variability_sweep.png)
+
+### Path count sweep (max alternatives per degenerate symbol)
+
+![path count sweep](docs/path_count_sweep.png)
