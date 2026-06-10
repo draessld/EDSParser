@@ -57,8 +57,8 @@ two structural problems:
    in memory, and repeat. For a population of thousands of samples this is
    prohibitively expensive.
 
-An EDS encodes the entire population in one structure. A single FM-index query
-over the EDS returns all matching paths simultaneously — no reconstruction loop,
+An EDS encodes the entire population in one structure. A single pattern search
+over the EDS finds all matching paths simultaneously — no reconstruction loop,
 no reference bias.
 
 ### Why MSA and VCF as inputs?
@@ -71,17 +71,17 @@ These are the two formats in which large-scale genomic variation already exists:
   requires a reference FASTA to reconstruct alternatives.
 
 EDSParser converts both to EDS and, immediately, to l-EDS — the variant required
-for FM-index construction.
+by downstream pattern search and indexing tools.
 
 ---
 
 ## The l-EDS Constraint
 
-An FM-index over an EDS needs to answer: "at position i in the EDS, what are all
-possible characters that can follow a given context?" If two degenerate sets are
-separated by only one common character, the context window (of length l) straddles
-both sets, and the index cannot distinguish which alternative of the first set is
-active when looking at the second.
+Pattern search tools operating on EDS need to reason about the neighbourhood of
+each degenerate set unambiguously. If two degenerate sets are separated by only
+one common character, a context window of length l straddles both sets — it is
+impossible to tell which alternative of the first set is active when inspecting
+the second.
 
 The **l-EDS** constraint resolves this: every *internal* common segment (one with
 a degenerate symbol on both sides) must have length ≥ l. This guarantees that the
@@ -91,8 +91,8 @@ non-degenerate segment and is unambiguous.
 Boundary segments (at the start or end of the EDS) are exempt — they have no
 degenerate neighbour on one side, so context is not ambiguous.
 
-The biofmi FM-index ([biofmi repository](https://github.com/draessld/biofmi))
-is built directly on l-EDS output.
+l-EDS is the output format consumed by downstream tools such as
+[biofmi](https://github.com/draessld/biofmi).
 
 ---
 
@@ -100,7 +100,7 @@ is built directly on l-EDS output.
 
 ```
 MSA file ─────────────────────────────┐
-                                       ├─► EDS ─► l-EDS ─► FM-index (biofmi)
+                                       ├─► EDS ─► l-EDS ─► downstream tools (e.g. biofmi)
 VCF + reference FASTA ────────────────┘
 ```
 
@@ -182,7 +182,7 @@ starts, giving the user a chance to switch to LINEAR or adjust `l`.
 ## Project Thoughts
 
 EDSParser started as the input-parsing layer for biofmi. The initial assumption
-was that the hard part was the FM-index; the format conversions were boilerplate.
+was that the hard part was the downstream indexing; the format conversions were boilerplate.
 
 In practice, the format conversions were where most of the interesting problems
 lived:

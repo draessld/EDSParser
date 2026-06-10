@@ -285,7 +285,7 @@ edsparser-stats -i data.leds --verbose
 Extract random patterns from an EDS or l-EDS file for benchmarking.
 
 Each pattern follows an actual path through the EDS, so it is guaranteed
-to be present in any downstream FM-index built from the same file.
+to be present in any downstream tool that searches the same file.
 
 ### Synopsis
 
