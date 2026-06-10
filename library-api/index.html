@@ -1725,7 +1725,7 @@ the <code>from_string()</code> / stream constructor paths store all strings in R
 <a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">    </span><span class="kt">size_t</span><span class="w"> </span><span class="n">total_change_size</span><span class="p">;</span>
 <a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">    </span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_empty_strings</span><span class="p">;</span>
 <a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>
-<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="c1">// Position-check support (for BioFMI index locate())</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="c1">// Position-check support (for downstream locate() implementations)</span>
 <a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Position</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cum_common_positions</span><span class="p">;</span><span class="w">   </span><span class="c1">// length n+1</span>
 <a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w">      </span><span class="n">cum_degenerate_counts</span><span class="p">;</span><span class="w">  </span><span class="c1">// length n+1</span>
 <a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="p">};</span>
@@ -1779,7 +1779,7 @@ per line. Patterns follow actual EDS paths.</p>
 <a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">String</span><span class="o">&amp;</span><span class="w">   </span><span class="n">pattern</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </code></pre></div>
 <p>Returns <code>true</code> if <code>pattern</code> occurs at <code>common_pos</code> using the given
-degenerate string choices. Used by the BioFMI locate oracle in tests.</p>
+degenerate string choices. Used by downstream locate oracles in tests.</p>
 <hr />
 <h2 id="sources-class-formatssourceshpp">Sources Class (<code>formats/sources.hpp</code>)<a class="headerlink" href="#sources-class-formatssourceshpp" title="Permanent link">&para;</a></h2>
 <p>Manages provenance (source path tracking) for EDS strings.

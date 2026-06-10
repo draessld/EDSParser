@@ -1086,8 +1086,8 @@ two structural problems:</p>
    in memory, and repeat. For a population of thousands of samples this is
    prohibitively expensive.</li>
 </ol>
-<p>An EDS encodes the entire population in one structure. A single FM-index query
-over the EDS returns all matching paths simultaneously — no reconstruction loop,
+<p>An EDS encodes the entire population in one structure. A single pattern search
+over the EDS finds all matching paths simultaneously — no reconstruction loop,
 no reference bias.</p>
 <h3 id="why-msa-and-vcf-as-inputs">Why MSA and VCF as inputs?<a class="headerlink" href="#why-msa-and-vcf-as-inputs" title="Permanent link">&para;</a></h3>
 <p>These are the two formats in which large-scale genomic variation already exists:</p>
@@ -1098,26 +1098,26 @@ no reference bias.</p>
   requires a reference FASTA to reconstruct alternatives.</li>
 </ul>
 <p>EDSParser converts both to EDS and, immediately, to l-EDS — the variant required
-for FM-index construction.</p>
+by downstream pattern search and indexing tools.</p>
 <hr />
 <h2 id="the-l-eds-constraint">The l-EDS Constraint<a class="headerlink" href="#the-l-eds-constraint" title="Permanent link">&para;</a></h2>
-<p>An FM-index over an EDS needs to answer: "at position i in the EDS, what are all
-possible characters that can follow a given context?" If two degenerate sets are
-separated by only one common character, the context window (of length l) straddles
-both sets, and the index cannot distinguish which alternative of the first set is
-active when looking at the second.</p>
+<p>Pattern search tools operating on EDS need to reason about the neighbourhood of
+each degenerate set unambiguously. If two degenerate sets are separated by only
+one common character, a context window of length l straddles both sets — it is
+impossible to tell which alternative of the first set is active when inspecting
+the second.</p>
 <p>The <strong>l-EDS</strong> constraint resolves this: every <em>internal</em> common segment (one with
 a degenerate symbol on both sides) must have length ≥ l. This guarantees that the
 l-character context window around any degenerate set lies entirely within one
 non-degenerate segment and is unambiguous.</p>
 <p>Boundary segments (at the start or end of the EDS) are exempt — they have no
 degenerate neighbour on one side, so context is not ambiguous.</p>
-<p>The biofmi FM-index (<a href="https://github.com/draessld/biofmi">biofmi repository</a>)
-is built directly on l-EDS output.</p>
+<p>l-EDS is the output format consumed by downstream tools such as
+<a href="https://github.com/draessld/biofmi">biofmi</a>.</p>
 <hr />
 <h2 id="the-format-pipeline">The Format Pipeline<a class="headerlink" href="#the-format-pipeline" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>MSA file ─────────────────────────────┐
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                                       ├─► EDS ─► l-EDS ─► FM-index (biofmi)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                                       ├─► EDS ─► l-EDS ─► downstream tools (e.g. biofmi)
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>VCF + reference FASTA ────────────────┘
 </code></pre></div>
 <p>Or in two steps when you already have an EDS:</p>
@@ -1185,7 +1185,7 @@ starts, giving the user a chance to switch to LINEAR or adjust <code>l</code>.</
 <hr />
 <h2 id="project-thoughts">Project Thoughts<a class="headerlink" href="#project-thoughts" title="Permanent link">&para;</a></h2>
 <p>EDSParser started as the input-parsing layer for biofmi. The initial assumption
-was that the hard part was the FM-index; the format conversions were boilerplate.</p>
+was that the hard part was the downstream indexing; the format conversions were boilerplate.</p>
 <p>In practice, the format conversions were where most of the interesting problems
 lived:</p>
 <ul>
