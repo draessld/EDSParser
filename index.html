@@ -580,17 +580,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#why-per-process-temp-directories" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why per-process temp directories?
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#why-the-complexity-estimator" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -958,17 +947,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#why-per-process-temp-directories" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why per-process temp directories?
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#why-the-complexity-estimator" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1131,8 +1109,7 @@ without re-parsing the source data.</p>
 <h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
 <h3 id="why-streaming-everywhere">Why streaming everywhere?<a class="headerlink" href="#why-streaming-everywhere" title="Permanent link">&para;</a></h3>
 <p>The first prototype loaded the entire EDS into RAM. This worked for toy inputs.
-On real data — an 84 MB EDS paired with a 13 GB <code>.seds</code> source file, or a 100 GB
-EDS from a large cohort — it produced memory usage in the tens or hundreds of
+On real data it produced memory usage in the tens or hundreds of
 gigabytes. The architecture was redesigned from scratch around three principles:</p>
 <ol>
 <li>
@@ -1170,12 +1147,6 @@ the combination is biologically impossible and is discarded. This makes l-EDS
 merging of phased data both correct and tractable.</p>
 <p>The practical consequence: <code>eds2leds</code> detects which strategy to use automatically.
 If a <code>.seds</code> file is supplied, LINEAR is used; without it, CARTESIAN.</p>
-<h3 id="why-per-process-temp-directories">Why per-process temp directories?<a class="headerlink" href="#why-per-process-temp-directories" title="Permanent link">&para;</a></h3>
-<p>Early versions wrote temp files to <code>/tmp/edsparser_leds_&lt;iteration&gt;/</code>. Running
-two <code>eds2leds</code> processes in parallel (e.g. from experiment scripts) caused them
-to overwrite each other's files and produce corrupted output. The fix is
-<code>/tmp/edsparser_leds_&lt;pid&gt;/</code> — each process owns an isolated directory that is
-cleaned up on completion or error.</p>
 <h3 id="why-the-complexity-estimator">Why the complexity estimator?<a class="headerlink" href="#why-the-complexity-estimator" title="Permanent link">&para;</a></h3>
 <p>The CARTESIAN merge on dense or adjacent degenerate sets produces exponentially
 many alternatives. This is not obvious from file size alone — a 10 MB EDS with
@@ -1209,7 +1180,9 @@ lived:</p>
   EDS. Every subsequent decision — the LRU cache, the <code>copy_range_to_stream()</code>
   optimisation, the distinction between <code>read_source()</code> (value, thread-safe) and
   <code>read_source_ref()</code> (reference, single-threaded only) — was driven by that one
-  observation.</p>
+  observation. The text-based <code>.seds</code> format is also inherently verbose; a compact
+  binary format (<code>.edz</code>) is planned as future work to reduce file size and parsing
+  overhead for large cohorts.</p>
 </li>
 <li>
 <p><strong>The sequential-seek elimination</strong> was a profiling surprise. <code>seekg()</code> on a
