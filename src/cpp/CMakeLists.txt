@@ -29,7 +29,9 @@ include_directories(BEFORE ${CMAKE_INCLUDE_PATH})
 # Link directories
 link_directories(BEFORE ${CMAKE_LIBRARY_PATH})
 
-# Find required packages
+# Find required packages — prefer static Boost so the binary is portable
+# across machines that may have a different Boost shared-library version.
+set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost REQUIRED COMPONENTS program_options)
 include_directories(${Boost_INCLUDE_DIRS})
 
