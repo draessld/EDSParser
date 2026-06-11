@@ -149,7 +149,7 @@ fi
 echo ""
 
 # Run tests
-if [ -d "../tests/cpp" ] && [ "$(ls -A ../tests/cpp/*.cpp 2>/dev/null)" ]; then
+if [ -d "../tests/unit" ]; then
     echo -e "${BLUE}Running tests...${NC}"
     cd src/cpp
     ctest --output-on-failure
@@ -223,13 +223,13 @@ else
     echo "Usage:"
 fi
 echo "  # Transformation examples:"
-echo "  eds2leds -i data.eds -s data.seds -l 5 --method linear"
+echo "  eds2leds -i data.eds -s data.seds -l 5 -o data.leds    # linear (sources provided)"
 echo "  msa2eds -i alignment.msa"
 echo "  vcf2eds -i variants.vcf -r reference.fa"
 echo "  # Utility examples:"
 echo "  edsparser-stats -i data.eds --sources=auto"
 echo "  edsparser-genpatterns -i data.eds -o patterns.txt -n 100"
-echo "  genrandomeds -o random.eds --ref-size-mb 10 -v 0.1"
+echo "  genrandomeds -o random.eds --ref-size-mb 10 --variability 0.1"
 echo ""
 echo "To use the library in other projects:"
 echo "  The library is available via CMake:"
