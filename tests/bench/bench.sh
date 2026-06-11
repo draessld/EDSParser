@@ -28,9 +28,13 @@ show_help() {
     cat <<EOF
 Usage: bench.sh [--size PRESET] [--scenario NAME]
 
-  --size quick      N=5,  EDS 1-5 MB,    transform at 1+5 MB          (~30 s)
-  --size standard   N=30, EDS 1-10 MB,   transform at 1+5+10 MB        (~5 min)  [default]
-  --size large      N=30, EDS 5-50 MB,   transform at 5+10+20+50 MB    (~25 min)
+  --size quick      N=5,  EDS 1-5 MB,    transform at 1+5 MB                     (~30 s)
+  --size standard   N=30, EDS 1-10 MB,   transform at 1+5+10 MB                   (~5 min)  [default]
+  --size large      N=30, EDS 5-50 MB,   transform at 5+10+20+50 MB               (~25 min)
+  --size scaling    N=10, EDS 10 MB,     sweeps: var×5, ctx×5, paths×4, memstab×2 (~15 min)
+                    Designed to show how runtime and memory grow with:
+                      variability (0.01–0.40), context l (3–20), paths (2–16)
+                    Uses fixed path counts (N:N) for clean 1-variable sweeps.
 
   --scenario NAME   run only the named scenario (default: all)
                     valid names:
@@ -39,9 +43,9 @@ Usage: bench.sh [--size PRESET] [--scenario NAME]
                       eds2leds_linear      eds2leds linear size sweep
                       edsparser_stats      edsparser-stats size sweep
                       edsparser_genpatterns edsparser-genpatterns size sweep
-                      variability_sweep    eds2leds throughput vs variant density
-                      context_length_sweep eds2leds throughput vs context length l
-                      path_count_sweep     eds2leds throughput vs max alternatives
+                      variability_sweep    eds2leds runtime vs variant density
+                      context_length_sweep eds2leds runtime vs context length l
+                      path_count_sweep     eds2leds runtime vs number of paths
                       memory_stability     peak RSS check on large files (limit=500 MB)
                       all                  run everything (default)
 
@@ -50,10 +54,10 @@ the full SIZES_MB array so that the size-sweep plot shows trend lines, not
 single points.
 
 Sweep scenarios (variability, context length, path count) are included in
-standard and large presets but skipped in quick.
+standard, large, and scaling presets but skipped in quick.
 
 Memory stability scenario (large-file peak RSS check, limit=500 MB) is included
-in standard (20+50 MB) and large (50+100+200 MB) presets; skipped in quick.
+in standard (20+50 MB), large (50+100+200 MB), and scaling (50+100 MB) presets.
 
 Results are written to tests/bench/results/YYYY-MM-DD_HH-MM-SS.csv.
 Run bench_compare.sh afterwards to check for regressions.
@@ -111,8 +115,22 @@ case "$PRESET" in
         PATH_SWEEP_CFGS=(2:2 2:4 2:8 4:8)
         MEM_STAB_SIZES=(50 100 200)
         ;;
+    scaling)
+        # Purpose: measure how runtime and memory grow with variability, context l, and
+        # number of paths on a fixed 10 MB input. Uses fixed min=max path counts (N:N)
+        # so each data point has exactly N alternatives per degenerate symbol.
+        N_REPS=10
+        SIZES_MB=(10)
+        VAR_SWEEP_MB=10
+        CTX_SWEEP_MB=10
+        PATH_SWEEP_MB=10
+        VAR_SWEEP_VALS=(0.01 0.05 0.10 0.20 0.40)
+        CTX_SWEEP_VALS=(3 5 10 15 20)
+        PATH_SWEEP_CFGS=(2:2 4:4 8:8 16:16)
+        MEM_STAB_SIZES=(50 100)
+        ;;
     *)
-        bench_err "Unknown preset: $PRESET (use quick|standard|large)"
+        bench_err "Unknown preset: $PRESET (use quick|standard|large|scaling)"
         exit 1
         ;;
 esac
