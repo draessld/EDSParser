@@ -14,8 +14,11 @@ run_scenario_genrandomeds() {
         local scenario="genrandomeds_${ref_size}mb"
 
         bench_log "scenario=$scenario  (N=$n_reps)"
-        run_bench_scenario "$n_reps" \
-            "$tool" --ref-size-mb "$ref_size" --seed 42 --min-context 5 -o "$out_eds"
+        if ! run_bench_scenario "$n_reps" \
+                "$tool" --ref-size-mb "$ref_size" --seed 42 --min-context 5 -o "$out_eds"; then
+            bench_err "Skipping $scenario — tool failed."
+            continue
+        fi
 
         local size_mb throughput
         size_mb=$(file_size_mb "$out_eds")

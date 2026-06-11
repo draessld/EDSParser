@@ -70,7 +70,22 @@ run_bench_scenario() {
 
     # Warmup run: warms executable page cache and OS file cache for input.
     # Output and performance line are discarded; only measurement runs count.
-    "$@" >/dev/null 2>&1 || true
+    local warmup_log
+    warmup_log=$(mktemp)
+    if ! "$@" >"$warmup_log" 2>&1; then
+        bench_err "Command failed during warmup: $*"
+        bench_err "Tool output:"
+        sed 's/^/  /' "$warmup_log" >&2
+        rm -f "$warmup_log"
+        # Set globals to 0 so callers can detect failure via empty/zero values.
+        BENCH_RUNTIME_S=0 BENCH_PEAK_MEMORY_MB=0
+        BENCH_RUNTIME_MEDIAN_S=0 BENCH_RUNTIME_MEAN_S=0 BENCH_RUNTIME_STDDEV_S=0
+        BENCH_RUNTIME_P95_S=0   BENCH_RUNTIME_P99_S=0
+        BENCH_MEMORY_MEDIAN_MB=0 BENCH_MEMORY_MEAN_MB=0 BENCH_MEMORY_STDDEV_MB=0
+        BENCH_MEMORY_P95_MB=0    BENCH_MEMORY_P99_MB=0
+        return 1
+    fi
+    rm -f "$warmup_log"
 
     local runtimes=() memories=()
     for (( i=0; i<n; i++ )); do
@@ -95,8 +110,15 @@ run_bench_scenario() {
 }
 
 # Return actual on-disk file size in MB (3 decimal places).
+# Prints 0.000 and returns 1 if the file does not exist.
 file_size_mb() {
     local path="$1"
+    if [[ ! -f "$path" ]]; then
+        bench_err "file_size_mb: file not found: $path"
+        bench_err "  The preceding tool likely failed — see errors above."
+        echo "0.000"
+        return 1
+    fi
     local bytes
     bytes=$(stat -c "%s" "$path")
     awk "BEGIN { printf \"%.3f\", $bytes / 1048576 }"
