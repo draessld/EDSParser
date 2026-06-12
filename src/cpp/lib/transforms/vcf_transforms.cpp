@@ -2,7 +2,6 @@
 #include "eds_transforms.hpp"
 #include "../formats/eds.hpp"
 #include "../common.hpp"
-#include "../pipe_stream.hpp"
 #include <fstream>
 #include <sstream>
 #include <map>
@@ -15,9 +14,8 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
-#include <thread>
-#include <atomic>
-#include <exception>
+#include <system_error>
+#include <unistd.h>
 
 namespace edsparser {
 
@@ -963,48 +961,63 @@ void parse_vcf_to_leds_streaming_direct(
     VCFStats* stats,
     size_t block_size)
 {
-    // Create in-memory pipes for intermediate EDS/sEDS data
-    // This eliminates disk I/O between VCF→EDS and EDS→l-EDS stages
-    auto [eds_pipe_out, eds_pipe_in] = make_pipe();
-    auto [seds_pipe_out, seds_pipe_in] = make_pipe();
+    // Two-stage pipeline VCF→EDS→l-EDS routed through temp files.
+    //
+    // We deliberately do NOT use an in-memory pipe here. The second stage,
+    // eds_to_leds_linear(), consumes its entire EDS input to EOF before it
+    // touches the SEDS input. Feeding both streams through bounded pipes from a
+    // single producer thread therefore deadlocks as soon as the intermediate
+    // SEDS exceeds the pipe buffer: the producer blocks writing SEDS while the
+    // consumer blocks waiting for more EDS the producer can no longer emit —
+    // which happens precisely on the large population VCFs this path targets.
+    //
+    // Materialising the intermediate EDS/SEDS to temp files removes the ordering
+    // dependency entirely. It also costs no extra disk versus the pipe version:
+    // eds_to_leds_linear() copies its input streams into its own temp directory
+    // up front regardless, so the data was always going to land on disk.
 
-    // Exception handling for producer thread
-    std::exception_ptr producer_exception = nullptr;
-    std::atomic<bool> producer_done{false};
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_vcf2leds_" + std::to_string(getpid()));
+    std::filesystem::create_directories(temp_dir);
 
-    // Producer thread: VCF → EDS (writes to pipes)
-    std::thread producer([&]() {
-        try {
-            parse_vcf_to_eds_streaming(vcf_stream, fasta_stream,
-                                       eds_pipe_out, seds_pipe_out,
-                                       stats, block_size);
-        } catch (...) {
-            producer_exception = std::current_exception();
+    // Remove the temp directory on every exit path (normal return or exception).
+    struct TempGuard {
+        std::filesystem::path dir;
+        ~TempGuard() {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
         }
+    } guard{temp_dir};
 
-        // Signal end of data
-        eds_pipe_out.close();
-        seds_pipe_out.close();
-        producer_done = true;
-    });
+    std::filesystem::path temp_eds  = temp_dir / "stage1.eds";
+    std::filesystem::path temp_seds = temp_dir / "stage1.seds";
 
-    // Consumer (main thread): EDS → l-EDS (reads from pipes, writes to output)
-    try {
-        eds_to_leds_linear(eds_pipe_in, leds_output, context_length,
-                          &seds_pipe_in, &seds_output);
-    } catch (...) {
-        // Wait for producer to finish before rethrowing
-        producer.join();
-        throw;
+    // ── Stage 1: VCF → EDS/SEDS (written to temp files) ──────────────────────
+    {
+        std::ofstream eds_tmp(temp_eds);
+        if (!eds_tmp) {
+            throw std::runtime_error("Failed to create temp EDS file: " + temp_eds.string());
+        }
+        std::ofstream seds_tmp(temp_seds);
+        if (!seds_tmp) {
+            throw std::runtime_error("Failed to create temp SEDS file: " + temp_seds.string());
+        }
+        parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_tmp, seds_tmp,
+                                   stats, block_size);
+    }  // ofstreams flushed and closed here before stage 2 reopens them
+
+    // ── Stage 2: EDS → l-EDS (reads temp files, writes the final output) ─────
+    std::ifstream eds_in(temp_eds);
+    if (!eds_in) {
+        throw std::runtime_error("Failed to reopen temp EDS file: " + temp_eds.string());
+    }
+    std::ifstream seds_in(temp_seds);
+    if (!seds_in) {
+        throw std::runtime_error("Failed to reopen temp SEDS file: " + temp_seds.string());
     }
 
-    // Wait for producer to complete
-    producer.join();
-
-    // Check if producer had an exception
-    if (producer_exception) {
-        std::rethrow_exception(producer_exception);
-    }
+    eds_to_leds_linear(eds_in, leds_output, context_length,
+                       &seds_in, &seds_output);
 }
 
 /**

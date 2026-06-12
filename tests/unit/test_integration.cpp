@@ -481,6 +481,68 @@ void test_pipeline_vcf_to_leds() {
     if (fs::exists(leds_file)) fs::remove(leds_file);
 }
 
+// Regression: vcf2eds -l (linear merge, with sources, default compact output)
+// must produce an l-EDS whose cardinality matches its .seds, so that the pair
+// loads back cleanly. The bug: adjacent common symbols left by the merge lose
+// their brackets in compact output and re-parse as a single symbol, dropping the
+// EDS cardinality below the SEDS cardinality (EDS::load then throws).
+void test_vcf2leds_cardinality_consistency() {
+    test("vcf2eds -l output loads back (EDS/SEDS cardinality match)");
+    auto temp = create_temp_dir();
+    auto vcf_file = temp / "card.vcf";
+    auto ref_file = temp / "card_ref.fa";
+    auto leds_file = temp / "card.leds";
+    // vcf2eds derives the sources path from the VCF stem: <stem>_l<N>.seds
+    auto seds_file = temp / "card_l2.seds";
+
+    {
+        std::ofstream ofs(ref_file);
+        ofs << ">chr1\nACGTACGTACGTACGTACGTACGT\n";
+    }
+    // Two close variants leave a short common block between/around them, which
+    // the linear merge collapses — the scenario that produced adjacent commons.
+    {
+        std::ofstream ofs(vcf_file);
+        ofs << "##fileformat=VCFv4.2\n";
+        ofs << "##contig=<ID=chr1,length=24>\n";
+        ofs << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n";
+        ofs << "chr1\t3\t.\tG\tA\t.\tPASS\t.\tGT\t0/1\t1/1\n";
+        ofs << "chr1\t5\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\t0/1\n";
+        ofs << "chr1\t6\t.\tC\tG\t.\tPASS\t.\tGT\t0/1\t1/1\n";
+    }
+
+    std::string output;
+    int code = run_cmd(TOOLS_DIR + "/vcf2eds -i " + vcf_file.string() +
+                       " -r " + ref_file.string() +
+                       " -l 2 -o " + leds_file.string(), &output);
+    if (code != 0 || !file_exists_with_content(leds_file)) {
+        fail("vcf2eds -l failed: " + output);
+        return;
+    }
+    if (!file_exists_with_content(seds_file)) {
+        fail("expected sources file not produced: " + seds_file.string());
+        return;
+    }
+
+    // edsparser-stats with -s exercises EDS::load(eds, seds), which validates
+    // that Sources::cardinality() == EDS::m_ and exits non-zero on mismatch.
+    std::string stats_out;
+    int stats_code = run_cmd(TOOLS_DIR + "/edsparser-stats -i " + leds_file.string() +
+                             " -s " + seds_file.string(), &stats_out);
+    if (stats_code != 0 ||
+        stats_out.find("does not match") != std::string::npos) {
+        fail("l-EDS/SEDS cardinality mismatch: " + stats_out);
+        return;
+    }
+
+    pass();
+
+    fs::remove(vcf_file);
+    fs::remove(ref_file);
+    if (fs::exists(leds_file)) fs::remove(leds_file);
+    if (fs::exists(seds_file)) fs::remove(seds_file);
+}
+
 // ===== MAIN =====
 
 int main(int argc, char* argv[]) {
@@ -528,6 +590,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- End-to-End Pipelines ---\n";
     test_pipeline_msa_to_leds();
     test_pipeline_vcf_to_leds();
+    test_vcf2leds_cardinality_consistency();
 
     // Summary
     std::cout << "\n===========================================\n";

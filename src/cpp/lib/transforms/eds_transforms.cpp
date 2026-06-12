@@ -5,6 +5,7 @@
 #include <fstream>
 #include <filesystem>
 #include <stdexcept>
+#include <system_error>
 #include <unistd.h>
 
 #ifdef _OPENMP
@@ -15,18 +16,43 @@ namespace edsparser {
 
 namespace {
     /**
+     * RAII cleanup for the per-process temp directory used by the l-EDS merge
+     * loop. Removes the directory (and all iteration files inside it) on every
+     * scope exit — normal return or exception. Without this, a mid-transform
+     * throw (e.g. an empty source intersection, or an I/O error) would strand
+     * the iteration temp files, which can total hundreds of GB for 100GB+ inputs.
+     * Uses the std::error_code overload so the destructor never throws.
+     */
+    struct TempDirGuard {
+        std::filesystem::path dir;
+        ~TempDirGuard() {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
+        }
+    };
+
+    /**
      * Reason why a pair of adjacent positions needs to be merged
      *
      * ADJACENT_DEGENERATE : both symbols are degenerate (implicit empty common block)
      * SHORT_COMMON_LEFT   : pos1 is a short common block being absorbed into pos2 (degen on right)
      * SHORT_COMMON_RIGHT  : pos2 is a short common block being absorbed into pos1 (degen on left)
      * SHORT_COMMON_BOTH   : both pos1 and pos2 are short common blocks
+     * ADJACENT_COMMON     : both symbols are non-degenerate (regardless of length).
+     *                       Two adjacent common blocks are a non-canonical form:
+     *                       {AB}{CD} is semantically identical to {ABCD}, and in
+     *                       compact output both lose their brackets and serialise
+     *                       as the single run "ABCD" — re-parsing then yields one
+     *                       symbol, not two, so the EDS cardinality silently drops
+     *                       below the SEDS cardinality. Coalescing them here keeps
+     *                       EDS/SEDS consistent and makes compact output lossless.
      */
     enum class MergeReason {
         ADJACENT_DEGENERATE,
         SHORT_COMMON_LEFT,
         SHORT_COMMON_RIGHT,
         SHORT_COMMON_BOTH,
+        ADJACENT_COMMON,
     };
 
     /**
@@ -98,15 +124,20 @@ namespace {
                 continue;  // Position already in a pair
             }
 
-            // Only merge if it would fix an l-EDS violation
-            // Cases to merge:
+            // Merge when it fixes an l-EDS violation OR removes a non-canonical
+            // adjacent-common pair. Cases to merge:
             // 1. Internal common block with length < l
             // 2. Two adjacent degenerate symbols (implicit empty common block)
+            // 3. Two adjacent common blocks (non-canonical; lossy in compact form)
             bool should_merge = false;
 
             bool left_short = false;   // pos i is a short common block
             bool right_short = false;  // pos i+1 is a short common block
             bool adj_degen = false;    // both are degenerate
+            // Both non-degenerate: coalesce regardless of length. An EDS in
+            // canonical form never has two adjacent common blocks; leaving them
+            // separate corrupts compact serialisation (see MergeReason docs).
+            bool adj_common = (!is_degenerate[i] && !is_degenerate[i + 1]);
 
             // Check if position i is an internal common block that's too short
             if (!is_degenerate[i] && i > 0 && i < eds.length() - 1) {
@@ -131,17 +162,21 @@ namespace {
                 adj_degen = true;
             }
 
-            should_merge = left_short || right_short || adj_degen;
+            should_merge = left_short || right_short || adj_degen || adj_common;
 
             if (should_merge) {
                 MergeReason reason;
                 if (adj_degen)
                     reason = MergeReason::ADJACENT_DEGENERATE;
-                else if (left_short && right_short)
-                    reason = MergeReason::SHORT_COMMON_BOTH;
+                else if (adj_common)
+                    // Both common — subsumes the both-short case; merge regardless
+                    // of length to keep the canonical (no-adjacent-commons) form.
+                    reason = MergeReason::ADJACENT_COMMON;
                 else if (left_short)
+                    // i is a short common, i+1 is degenerate.
                     reason = MergeReason::SHORT_COMMON_LEFT;
                 else
+                    // i is degenerate, i+1 is a short common.
                     reason = MergeReason::SHORT_COMMON_RIGHT;
 
                 pairs.emplace_back(i, i + 1, reason);
@@ -840,6 +875,10 @@ void eds_to_leds_linear(
         / ("edsparser_leds_" + std::to_string(getpid()));
     std::filesystem::create_directories(temp_dir);
 
+    // Remove temp_dir on every exit path (normal return or exception thrown
+    // anywhere below), so partial iteration files are never left behind.
+    TempDirGuard temp_guard{temp_dir};
+
     // Save input stream to temp file (needed for METADATA_ONLY loading)
     std::filesystem::path temp_input = temp_dir / "input.eds";
     {
@@ -906,13 +945,14 @@ void eds_to_leds_linear(
         size_t total_symbols = eds.length();
         size_t total_pairs = pairs.size();
         {
-            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0;
+            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0, n_common = 0;
             for (const auto& p : pairs) {
                 switch (p.reason) {
-                    case MergeReason::ADJACENT_DEGENERATE: ++n_adj;   break;
-                    case MergeReason::SHORT_COMMON_LEFT:   ++n_left;  break;
-                    case MergeReason::SHORT_COMMON_RIGHT:  ++n_right; break;
-                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;  break;
+                    case MergeReason::ADJACENT_DEGENERATE: ++n_adj;    break;
+                    case MergeReason::SHORT_COMMON_LEFT:   ++n_left;   break;
+                    case MergeReason::SHORT_COMMON_RIGHT:  ++n_right;  break;
+                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;   break;
+                    case MergeReason::ADJACENT_COMMON:     ++n_common; break;
                 }
             }
             std::cerr << "[l-EDS] Iter " << iteration
@@ -924,6 +964,7 @@ void eds_to_leds_linear(
             if (n_left)  { sep(); std::cerr << n_left  << " short-ctx←left";  }
             if (n_right) { sep(); std::cerr << n_right << " short-ctx→right"; }
             if (n_both)  { sep(); std::cerr << n_both  << " short-ctx-both";  }
+            if (n_common){ sep(); std::cerr << n_common<< " adj-common";      }
             std::cerr << ")\n";
         }
 
@@ -1075,13 +1116,8 @@ void eds_to_leds_linear(
         *phasing_output << final_seds.rdbuf();
     }
 
-    // Cleanup temp directory
-    try {
-        std::filesystem::remove_all(temp_dir);
-    } catch (const std::exception& e) {
-        // Non-fatal: temp cleanup failed, but transformation succeeded
-        std::cerr << "Warning: Failed to cleanup temp directory " << temp_dir << ": " << e.what() << "\n";
-    }
+    // Temp directory is removed by temp_guard (RAII) when this function returns,
+    // covering both the normal path here and any exception thrown above.
 }
 
 /**
@@ -1109,6 +1145,10 @@ void eds_to_leds_cartesian(
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
         / ("edsparser_leds_cart_" + std::to_string(getpid()));
     std::filesystem::create_directories(temp_dir);
+
+    // Remove temp_dir on every exit path (normal return or exception thrown
+    // anywhere below), so partial iteration files are never left behind.
+    TempDirGuard temp_guard{temp_dir};
 
     // Save input stream to temp file (needed for METADATA_ONLY loading)
     std::filesystem::path temp_input = temp_dir / "input.eds";
@@ -1152,13 +1192,14 @@ void eds_to_leds_cartesian(
         size_t total_symbols = eds.length();
         size_t total_pairs = pairs.size();
         {
-            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0;
+            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0, n_common = 0;
             for (const auto& p : pairs) {
                 switch (p.reason) {
-                    case MergeReason::ADJACENT_DEGENERATE: ++n_adj;   break;
-                    case MergeReason::SHORT_COMMON_LEFT:   ++n_left;  break;
-                    case MergeReason::SHORT_COMMON_RIGHT:  ++n_right; break;
-                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;  break;
+                    case MergeReason::ADJACENT_DEGENERATE: ++n_adj;    break;
+                    case MergeReason::SHORT_COMMON_LEFT:   ++n_left;   break;
+                    case MergeReason::SHORT_COMMON_RIGHT:  ++n_right;  break;
+                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;   break;
+                    case MergeReason::ADJACENT_COMMON:     ++n_common; break;
                 }
             }
             std::cerr << "[l-EDS] Iter " << iteration
@@ -1170,6 +1211,7 @@ void eds_to_leds_cartesian(
             if (n_left)  { sep(); std::cerr << n_left  << " short-ctx←left";  }
             if (n_right) { sep(); std::cerr << n_right << " short-ctx→right"; }
             if (n_both)  { sep(); std::cerr << n_both  << " short-ctx-both";  }
+            if (n_common){ sep(); std::cerr << n_common<< " adj-common";      }
             std::cerr << ")\n";
         }
 
@@ -1286,13 +1328,8 @@ void eds_to_leds_cartesian(
     }
     output << '\n';
 
-    // Cleanup temp directory
-    try {
-        std::filesystem::remove_all(temp_dir);
-    } catch (const std::exception& e) {
-        // Non-fatal: temp cleanup failed, but transformation succeeded
-        std::cerr << "Warning: Failed to cleanup temp directory " << temp_dir << ": " << e.what() << "\n";
-    }
+    // Temp directory is removed by temp_guard (RAII) when this function returns,
+    // covering both the normal path here and any exception thrown above.
 }
 
 } // namespace edsparser
