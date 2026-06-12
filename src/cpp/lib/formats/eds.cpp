@@ -128,56 +128,93 @@ void EDS::parse(std::istream& is, bool with_strings) {
         n_++;
     };
 
-    char ch;
-    std::string current_token;
-    size_t byte_offset = 0;
+    // ── Bulk-buffered scan ───────────────────────────────────────────────────
+    // Read the stream in 64 KB chunks and scan each chunk in memory, tracking the
+    // absolute byte offset ourselves.  This avoids a virtual streambuf round-trip
+    // per byte (the old is.get()/is.peek() loop), mirroring the bulk-read index
+    // build documented in Sources::parse_seds().  Per-symbol semantics are
+    // identical to the previous char-at-a-time implementation.
+    //
+    // State machine (the cursor is always in exactly one of these modes):
+    //   BETWEEN    — skipping inter-symbol whitespace; no token in progress.
+    //   IN_BARE    — accumulating a bare (non-bracketed) symbol in current_token.
+    //   IN_BRACKET — accumulating a bracket body in bracketed_content until '}'.
+    //
+    // base_positions[symbol] is recorded at the symbol's first byte: the '{' for a
+    // bracketed symbol, or the first character for a bare one.
+    enum class Scan { BETWEEN, IN_BARE, IN_BRACKET };
+    Scan mode = Scan::BETWEEN;
+    std::string current_token;      // bare-token accumulator (spans chunks)
+    std::string bracketed_content;  // bracket-body accumulator (spans chunks)
 
-    // Consume leading whitespace manually (track byte offset)
-    while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
-        is.get(ch);
-        byte_offset++;
+    // std::isspace matches ' ', '\t', '\n', '\v', '\f', '\r' under the default
+    // "C" locale; inline the check to avoid a libc call per byte in the hot loop.
+    auto is_ws = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' ||
+               c == '\v' || c == '\f' || c == '\r';
+    };
+
+    constexpr std::streamsize CHUNK = 64 * 1024;   // 64 KB per I/O call
+    std::vector<char> buf(CHUNK);
+    std::streamoff file_offset = 0;   // byte offset of buf[0] in the stream
+
+    while (is) {
+        is.read(buf.data(), CHUNK);
+        std::streamsize n = is.gcount();
+        if (n <= 0) break;
+
+        for (std::streamsize i = 0; i < n; ++i) {
+            const char ch = buf[i];
+
+            if (mode == Scan::IN_BRACKET) {
+                // Inside a {...} group: everything up to the matching '}' is body.
+                if (ch == SET_CLOSE) {
+                    process_token(bracketed_content, /*is_bracketed=*/true);
+                    bracketed_content.clear();
+                    mode = Scan::BETWEEN;
+                } else {
+                    bracketed_content += ch;
+                }
+                continue;
+            }
+
+            if (ch == SET_OPEN) {
+                // Start of a bracketed symbol. Flush any bare token in progress.
+                if (mode == Scan::IN_BARE) {
+                    process_token(current_token, /*is_bracketed=*/false);
+                    current_token.clear();
+                }
+                metadata_.base_positions.push_back(
+                    static_cast<std::streampos>(file_offset + i));   // offset of '{'
+                mode = Scan::IN_BRACKET;
+            } else if (is_ws(ch)) {
+                // Inter-symbol whitespace terminates a bare token (if any).
+                if (mode == Scan::IN_BARE) {
+                    process_token(current_token, /*is_bracketed=*/false);
+                    current_token.clear();
+                    mode = Scan::BETWEEN;
+                }
+                // Otherwise already BETWEEN: skip the whitespace byte.
+            } else {
+                // Normal character of a bare (non-bracketed) symbol.
+                if (mode == Scan::BETWEEN) {
+                    metadata_.base_positions.push_back(
+                        static_cast<std::streampos>(file_offset + i));  // first char
+                    mode = Scan::IN_BARE;
+                }
+                current_token += ch;
+            }
+        }
+
+        file_offset += n;
     }
 
-    while (is.peek() != EOF) {
-        if (is.peek() == SET_OPEN) {
-            // Flush any accumulated non-bracketed token
-            if (!current_token.empty()) {
-                process_token(current_token, false);
-                current_token.clear();
-            }
-
-            // Record position of '{', then consume it
-            metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
-            is.get(ch); // consume '{'
-            byte_offset++;
-
-            std::string bracketed_content;
-            std::getline(is, bracketed_content, SET_CLOSE);
-            if (!is) throw std::runtime_error("Unmatched '{' in EDS stream.");
-            byte_offset += bracketed_content.size() + 1; // +1 for the consumed '}'
-
-            process_token(bracketed_content, true);
-        } else {
-            if (current_token.empty()) {
-                metadata_.base_positions.push_back(static_cast<std::streampos>(byte_offset));
-            }
-            is.get(ch);
-            byte_offset++;
-            current_token += ch;
-        }
-
-        if (is.peek() == SET_OPEN || is.peek() == EOF ||
-            std::isspace(static_cast<unsigned char>(is.peek()))) {
-            if (!current_token.empty()) {
-                process_token(current_token, false);
-                current_token.clear();
-            }
-            // Consume whitespace manually
-            while (is.peek() != EOF && std::isspace(static_cast<unsigned char>(is.peek()))) {
-                is.get(ch);
-                byte_offset++;
-            }
-        }
+    // Drain trailing state at end of stream.
+    if (mode == Scan::IN_BRACKET) {
+        throw std::runtime_error("Unmatched '{' in EDS stream.");
+    }
+    if (mode == Scan::IN_BARE) {
+        process_token(current_token, /*is_bracketed=*/false);
     }
 
     if (n_ == 0) {
