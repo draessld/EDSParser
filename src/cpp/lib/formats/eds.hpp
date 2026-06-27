@@ -151,7 +151,6 @@ private:
     // Helper methods
     // with_strings=true: also populate sets_ for in-memory access (stream/string ctors)
     void parse(std::istream& is, bool with_strings = false);
-    void calculate_statistics();
     std::string normalize_eds_format(const std::string& input) const;
 
     // Streaming helpers

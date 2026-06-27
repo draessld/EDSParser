@@ -83,6 +83,13 @@ int main(int argc, char** argv) {
             std::cout << "  Default output: <input_base>_l<N>.leds\n";
             std::cout << "  With sources:   <input_base>_l<N>.seds (source tracking preserved)\n";
             std::cout << "  where <N> is the context length value\n\n";
+            std::cout << "DISK SPACE:\n";
+            std::cout << "  Requires ~3× the input file size as temporary disk space:\n";
+            std::cout << "    1× working copy of the input\n";
+            std::cout << "    2× for the previous and current iteration files during each merge pass\n";
+            std::cout << "  Temp files live in " << std::filesystem::temp_directory_path().string()
+                      << "/edsparser_leds_<pid>/ and are cleaned up on exit.\n";
+            std::cout << "  Set $TMPDIR to redirect temp files to a volume with enough space.\n\n";
             print_performance();
             return 0;
         }

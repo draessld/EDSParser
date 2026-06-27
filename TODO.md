@@ -54,22 +54,20 @@ Handles '\r\n' CRLF line endings too. Location: `vcf_transforms.cpp:~120`.
 - **Idea:** add a `const StringSet&` overload for in-memory mode; keep the by-value path only for
   METADATA_ONLY where the set is freshly constructed.
 
-### [DISK] ~2× temp footprint plus a full up-front input copy
+### ~~[DISK] ~2× temp footprint plus a full up-front input copy~~ DOCUMENTED (2026-06-27)
 
-- **Location:** `eds_to_leds_linear()` / `eds_to_leds_cartesian()`
-- **Problem:** each iteration writes `iter_N.eds` while `iter_(N-1).eds` still exists (deleted only
-  afterward) → peak temp ≈ 2× current file size, on top of the initial full copy of the input to
-  `input.eds`. For 100 GB inputs that is a real provisioning constraint not reflected in the
-  memory-only figures in `performance.md`.
-- **Action:** at minimum document the temp-disk requirement; ideally delete the predecessor
-  before/while writing the successor where the iteration chain allows.
+Peak temp usage is ~3× input size (input copy + previous iter file + current iter file being
+written simultaneously — the last two cannot be overlapped without the [ARCH] fix).
+Documented in `eds2leds --help` (DISK SPACE section) and `$TMPDIR` hint. A stderr warning
+is printed at runtime for inputs > 500 MB. The predecessor is already deleted immediately after
+each iteration's write completes — no further improvement is possible without path-based API
+overloads (future work, linked to [ARCH] fix).
 
-### [CLEANUP] Dead/duplicated code in `eds.cpp`
+### ~~[CLEANUP] Dead/duplicated code in `eds.cpp`~~ FIXED (2026-06-27)
 
-- `EDS::calculate_statistics()` is now dead weight — `parse()` computes the same stats inline.
-  ~100 lines that can silently diverge from `parse()`; remove or repurpose.
-- `read_symbol_from_stream()` parses bracket bodies char-by-char; secondary to the items above
-  but rides the same cleanup pass.
+Removed `EDS::calculate_statistics()` (~100 lines) — `parse()` has computed all the same
+fields inline since the bulk-buffered index build refactor. Declaration removed from `eds.hpp`,
+implementation removed from `eds.cpp`. No callers existed.
 
 ---
 

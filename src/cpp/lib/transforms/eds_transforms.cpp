@@ -945,6 +945,17 @@ void eds_to_leds_linear(
         ? EDS::load(temp_input, temp_sources_input)
         : EDS::load(temp_input);
 
+    // Warn when temp space requirement is non-trivial.
+    // Peak usage: input copy + previous iteration + current iteration = ~3× input size.
+    {
+        auto input_size = std::filesystem::file_size(temp_input);
+        if (input_size > 500ULL * 1024 * 1024) {  // > 500 MB
+            auto gb = [](uintmax_t b) { return b / double(1ULL << 30); };
+            std::cerr << "[l-EDS] Temp disk needed: ~" << std::fixed << std::setprecision(1)
+                      << gb(input_size * 3) << " GB in " << temp_dir << "\n";
+        }
+    }
+
     // ===== COMPLEXITY ESTIMATION =====
     // Warn users about potentially slow transformations BEFORE starting
     auto complexity = estimate_leds_complexity(eds, context_length);
@@ -1206,6 +1217,15 @@ void eds_to_leds_cartesian(
 
     if (eds.has_sources()) {
         throw std::invalid_argument("Cartesian mode cannot be used with source files");
+    }
+
+    {
+        auto input_size = std::filesystem::file_size(temp_input);
+        if (input_size > 500ULL * 1024 * 1024) {
+            auto gb = [](uintmax_t b) { return b / double(1ULL << 30); };
+            std::cerr << "[l-EDS] Temp disk needed: ~" << std::fixed << std::setprecision(1)
+                      << gb(input_size * 3) << " GB in " << temp_dir << "\n";
+        }
     }
 
     // Iterative merging until convergence
