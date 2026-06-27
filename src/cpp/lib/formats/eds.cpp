@@ -21,7 +21,8 @@ EDS::EDS(std::istream& eds_stream) : is_empty_(false), sources_(nullptr) {
 // Keeps strings in sets_ so read_symbol() works without a file.
 EDS::EDS(const std::string& eds_string) : is_empty_(false), sources_(nullptr) {
     std::string normalized = normalize_eds_format(eds_string);
-    normalized.erase(std::remove_if(normalized.begin(), normalized.end(), ::isspace), normalized.end());
+    normalized.erase(std::remove_if(normalized.begin(), normalized.end(),
+        [](unsigned char c) { return std::isspace(c); }), normalized.end());
     std::istringstream iss(normalized);
     parse(iss, /*with_strings=*/true);
 }
@@ -334,7 +335,7 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
 // (Deleted: read_source_from_stream() - now in Sources class)
 
 // Read source set (delegates to Sources object)
-std::set<int> EDS::read_source(size_t string_id) const {
+PathSet EDS::read_source(size_t string_id) const {
     if (!sources_) {
         throw std::runtime_error("No sources loaded");
     }
@@ -874,7 +875,7 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
                 // Finished one alternative; save it and reset the accumulator.
                 result.push_back(current_str);
                 current_str.clear();
-            } else if (!std::isspace(ch)) {
+            } else if (!std::isspace(static_cast<unsigned char>(ch))) {
                 // Normal DNA character; append to the current alternative.
                 current_str += ch;
             }
@@ -972,7 +973,7 @@ bool EDS::check_position(Position common_pos,
 
     // Source validation: check if path intersection is non-empty
     if (sources_) {
-        std::set<int> path_intersection;
+        PathSet path_intersection;
         try {
             path_intersection = calculate_path_intersection(
                 start_symbol, offset_in_symbol,
@@ -1262,17 +1263,17 @@ String EDS::reconstruct_from_file(size_t start_symbol,
 }
 
 // Position checking helper: calculate path intersection for source validation
-std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
-                                               Position offset_in_symbol,
-                                               const std::vector<int>& degenerate_strings,
-                                               Length pattern_length) const {
+PathSet EDS::calculate_path_intersection(size_t start_symbol,
+                                         Position offset_in_symbol,
+                                         const std::vector<int>& degenerate_strings,
+                                         Length pattern_length) const {
     // If no sources loaded, return universal set {0}
     if (!sources_) {
         return {0};
     }
 
     // Start with universal set (all paths)
-    std::set<int> intersection;
+    PathSet intersection;
     bool first = true;
 
     size_t deg_idx = 0;
@@ -1333,7 +1334,7 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
             );
         }
 
-        const std::set<int> current_sources = sources_->read_source(global_string_idx);
+        const PathSet current_sources = sources_->read_source(global_string_idx);
 
         // Compute intersection
         if (first) {
@@ -1341,30 +1342,24 @@ std::set<int> EDS::calculate_path_intersection(size_t start_symbol,
             first = false;
         } else {
             // Intersection with special handling for universal marker {0}
-            std::set<int> new_intersection;
-
-            bool current_has_universal = current_sources.count(0) > 0;
-            bool accum_has_universal = intersection.count(0) > 0;
+            bool current_has_universal = !current_sources.empty() && current_sources.front() == 0;
+            bool accum_has_universal   = !intersection.empty()     && intersection.front()     == 0;
 
             if (current_has_universal && accum_has_universal) {
-                // {0} ∩ {0} = {0}
-                new_intersection.insert(0);
+                intersection = {0};
             } else if (current_has_universal) {
-                // {0} ∩ {x,y,...} = {x,y,...}
-                new_intersection = intersection;
+                // intersection unchanged
             } else if (accum_has_universal) {
-                // {x,y,...} ∩ {0} = {x,y,...}
-                new_intersection = current_sources;
+                intersection = current_sources;
             } else {
-                // Regular set intersection
+                PathSet new_intersection;
                 std::set_intersection(
                     intersection.begin(), intersection.end(),
                     current_sources.begin(), current_sources.end(),
-                    std::inserter(new_intersection, new_intersection.begin())
+                    std::back_inserter(new_intersection)
                 );
+                intersection = std::move(new_intersection);
             }
-
-            intersection = new_intersection;
         }
 
         // Early termination if intersection becomes empty

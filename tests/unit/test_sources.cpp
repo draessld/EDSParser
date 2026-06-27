@@ -7,9 +7,9 @@
 #include <sstream>
 #include <iostream>
 #include <cassert>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <set>
 #include <vector>
 #include <cstdint>
 
@@ -19,7 +19,7 @@
 // independent of the implementation under test.
 // ─────────────────────────────────────────────────────────────────────────────
 static void write_test_edz(const std::filesystem::path& path,
-                             const std::vector<std::set<int>>& sets) {
+                             const std::vector<std::vector<int>>& sets) {
     auto varint = [](uint64_t v, std::vector<uint8_t>& out) {
         do {
             uint8_t b = v & 0x7F;
@@ -103,11 +103,11 @@ void test_load_sources_from_file() {
     auto src2 = eds.read_source(2);
     auto src3 = eds.read_source(3);
     auto src4 = eds.read_source(4);
-    assert(src0.count(0) == 1);
-    assert(src1.count(1) == 1);
-    assert(src2.count(2) == 1);
-    assert(src3.count(3) == 1);
-    assert(src4.count(0) == 1);
+    assert(std::binary_search(src0.begin(), src0.end(), 0));
+    assert(std::binary_search(src1.begin(), src1.end(), 1));
+    assert(std::binary_search(src2.begin(), src2.end(), 2));
+    assert(std::binary_search(src3.begin(), src3.end(), 3));
+    assert(std::binary_search(src4.begin(), src4.end(), 0));
 
     // Clean up
     std::filesystem::remove(temp_path);
@@ -169,7 +169,7 @@ void test_save_without_sources() {
 void test_edz_load_basic() {
     std::cout << "EDZ Test 1: Load basic EDZ file... ";
 
-    std::vector<std::set<int>> expected = {
+    std::vector<std::vector<int>> expected = {
         {0},        // universal marker
         {1},
         {2},
@@ -194,7 +194,7 @@ void test_edz_load_basic() {
 void test_edz_auto_detect() {
     std::cout << "EDZ Test 2: Auto-detect EDZ format from magic bytes... ";
 
-    std::vector<std::set<int>> sets = {{1}, {2}, {1, 2}};
+    std::vector<std::vector<int>> sets = {{1}, {2}, {1, 2}};
     auto path = std::filesystem::temp_directory_path() / "test_edz_detect.edz";
     write_test_edz(path, sets);
 
@@ -202,9 +202,9 @@ void test_edz_auto_detect() {
 
     auto sources = Sources::load(path);  // auto-detect
     assert(sources->cardinality() == 3);
-    assert(sources->read_source(0) == (std::set<int>{1}));
-    assert(sources->read_source(1) == (std::set<int>{2}));
-    assert(sources->read_source(2) == (std::set<int>{1, 2}));
+    assert(sources->read_source(0) == (std::vector<int>{1}));
+    assert(sources->read_source(1) == (std::vector<int>{2}));
+    assert(sources->read_source(2) == (std::vector<int>{1, 2}));
 
     std::filesystem::remove(path);
     std::cout << "PASSED\n";
@@ -213,7 +213,7 @@ void test_edz_auto_detect() {
 void test_edz_save_load_roundtrip() {
     std::cout << "EDZ Test 3: Save EDZ and reload (roundtrip)... ";
 
-    std::vector<std::set<int>> original = {{1}, {2}, {3}, {1, 2}, {0}};
+    std::vector<std::vector<int>> original = {{1}, {2}, {3}, {1, 2}, {0}};
     auto path1 = std::filesystem::temp_directory_path() / "test_edz_rt1.edz";
     auto path2 = std::filesystem::temp_directory_path() / "test_edz_rt2.edz";
 
@@ -237,7 +237,7 @@ void test_edz_large_path_ids() {
     std::cout << "EDZ Test 4: Large path IDs requiring multi-byte varints... ";
 
     // Each entry exercises a different varint byte-count tier
-    std::vector<std::set<int>> sets = {
+    std::vector<std::vector<int>> sets = {
         {127},      // 7-bit: one-byte varint
         {128},      // 8-bit: two-byte varint starts here
         {16383},    // 14-bit max: two-byte varint
@@ -260,7 +260,7 @@ void test_edz_large_path_ids() {
 void test_edz_lru_cache() {
     std::cout << "EDZ Test 5: LRU cache eviction with EDZ backend... ";
 
-    std::vector<std::set<int>> sets;
+    std::vector<std::vector<int>> sets;
     for (int i = 1; i <= 20; ++i) sets.push_back({i});
 
     auto path = std::filesystem::temp_directory_path() / "test_edz_cache.edz";

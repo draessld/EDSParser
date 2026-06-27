@@ -4,6 +4,8 @@
 #include <sstream>
 #include <fstream>
 #include <filesystem>
+#include <atomic>
+#include <unordered_map>
 #include <stdexcept>
 #include <system_error>
 #include <unistd.h>
@@ -74,7 +76,7 @@ namespace {
         size_t original_pos1;
         size_t original_pos2;
         StringSet merged_set;
-        std::vector<std::set<int>> merged_sources;  // Empty if no sources
+        std::vector<PathSet> merged_sources;  // Empty if no sources
     };
 
     /**
@@ -86,7 +88,7 @@ namespace {
         size_t original_pos2;
         size_t merged_size;  // Number of strings in merged symbol
         std::vector<Length> merged_string_lengths;  // Length of each string (no actual strings)
-        std::vector<std::set<int>> merged_sources;  // Empty if no sources
+        std::vector<PathSet> merged_sources;  // Empty if no sources
         std::vector<std::pair<size_t, size_t>> valid_indices;  // (i,j) pairs for LINEAR merge
     };
     
@@ -207,27 +209,54 @@ namespace {
     ) {
         std::vector<MergeMetadata> results(pairs.size());
 
-        // Lambda function to compute metadata for a single pair
-        auto compute_pair_metadata = [&eds](const MergePair& pair) -> MergeMetadata {
+        // Hoist invariants out of the per-pair lambda.
+        const bool has_sources = eds.has_sources();
+        const auto& metadata   = eds.get_metadata();
+
+        // --- Source preloading (LINEAR mode + parallel only) ---
+        //
+        // When num_threads > 1, every read_source() call inside the parallel
+        // region acquires Sources::io_mutex_, serialising all workers onto a
+        // single lock — making --threads effectively useless for LINEAR mode.
+        //
+        // Fix: read every source set we need in a single-threaded pass *before*
+        // the parallel region and store the results in a flat hash map keyed by
+        // global string index.  Workers then read from preloaded (no mutex).
+        // unordered_map read-only access is safe under concurrent reads.
+        std::unordered_map<size_t, PathSet> preloaded;
+#ifdef _OPENMP
+        if (has_sources && num_threads > 1 && !pairs.empty()) {
+            // Reserve to avoid rehashing during sequential population.
+            size_t total_strings = 0;
+            for (const auto& p : pairs)
+                total_strings += metadata.symbol_sizes[p.pos1] + metadata.symbol_sizes[p.pos2];
+            preloaded.reserve(total_strings);
+
+            for (const auto& p : pairs) {
+                size_t idx1 = metadata.cum_set_sizes[p.pos1], sz1 = metadata.symbol_sizes[p.pos1];
+                size_t idx2 = metadata.cum_set_sizes[p.pos2], sz2 = metadata.symbol_sizes[p.pos2];
+                for (size_t i = 0; i < sz1; ++i) preloaded.emplace(idx1 + i, eds.read_source(idx1 + i));
+                for (size_t j = 0; j < sz2; ++j) preloaded.emplace(idx2 + j, eds.read_source(idx2 + j));
+            }
+        }
+#endif
+
+        // Lambda: uses preloaded map when populated (parallel path, lock-free),
+        // or falls back to eds.read_source() (sequential path, LRU cache + mutex).
+        auto compute_pair_metadata = [&](const MergePair& pair) -> MergeMetadata {
             MergeMetadata result;
             result.original_pos1 = pair.pos1;
             result.original_pos2 = pair.pos2;
 
-            // Get metadata for both positions
-            const auto& metadata = eds.get_metadata();
             size_t global_string_idx1 = metadata.cum_set_sizes[pair.pos1];
             size_t global_string_idx2 = metadata.cum_set_sizes[pair.pos2];
             size_t set1_size = metadata.symbol_sizes[pair.pos1];
             size_t set2_size = metadata.symbol_sizes[pair.pos2];
 
-            // Determine if we're doing LINEAR or CARTESIAN merge
-            bool has_sources = eds.has_sources();
-
             if (!has_sources) {
                 // CARTESIAN merge: size is product of set sizes
                 result.merged_size = set1_size * set2_size;
 
-                // Calculate string lengths for all combinations and store ALL i,j pairs
                 result.merged_string_lengths.reserve(result.merged_size);
                 result.valid_indices.reserve(result.merged_size);
                 for (size_t i = 0; i < set1_size; ++i) {
@@ -235,40 +264,44 @@ namespace {
                     for (size_t j = 0; j < set2_size; ++j) {
                         Length len2 = metadata.string_lengths[global_string_idx2 + j];
                         result.merged_string_lengths.push_back(len1 + len2);
-                        result.valid_indices.push_back({i, j});  // All combinations are valid
+                        result.valid_indices.push_back({i, j});
                     }
                 }
             } else {
                 // LINEAR merge: only keep valid combinations (non-empty source intersection).
 
-                // Preload all source sets for both symbols once — eliminates repeated
-                // read_source() mutex/cache overhead from the inner loop.
-                std::vector<std::set<int>> src1(set1_size), src2(set2_size);
-                for (size_t i = 0; i < set1_size; ++i)
-                    src1[i] = eds.read_source(global_string_idx1 + i);
-                for (size_t j = 0; j < set2_size; ++j)
-                    src2[j] = eds.read_source(global_string_idx2 + j);
+                // Read sources from preloaded (no mutex) when available, otherwise
+                // fall back to eds.read_source() which holds Sources::io_mutex_.
+                auto get_src = [&](size_t idx) -> PathSet {
+                    if (!preloaded.empty()) return preloaded.at(idx);
+                    return eds.read_source(idx);
+                };
+
+                std::vector<PathSet> src1(set1_size), src2(set2_size);
+                for (size_t i = 0; i < set1_size; ++i) src1[i] = get_src(global_string_idx1 + i);
+                for (size_t j = 0; j < set2_size; ++j) src2[j] = get_src(global_string_idx2 + j);
 
                 // Bitset fast path: if all path IDs fit in [1, 63], represent each
-                // source set as a uint64_t bitmask (bit k-1 = path k).
-                // Universal marker {0} maps to ~0ULL.  Intersection = bitwise AND: O(1).
+                // source set as a uint64_t bitmask.  Intersection = bitwise AND: O(1).
+                // PathSet is sorted, so max element is at back() — O(1) check per set.
                 bool use_bits = true;
                 for (size_t i = 0; i < set1_size && use_bits; ++i)
-                    for (int id : src1[i]) if (id > 63) { use_bits = false; break; }
+                    if (!src1[i].empty() && src1[i].back() > 63) use_bits = false;
                 for (size_t j = 0; j < set2_size && use_bits; ++j)
-                    for (int id : src2[j]) if (id > 63) { use_bits = false; break; }
+                    if (!src2[j].empty() && src2[j].back() > 63) use_bits = false;
 
-                auto to_bits = [](const std::set<int>& s) -> uint64_t {
-                    if (s.count(0)) return ~0ULL;  // universal
+                auto to_bits = [](const PathSet& s) -> uint64_t {
+                    if (!s.empty() && s[0] == 0) return ~0ULL;
                     uint64_t b = 0;
                     for (int id : s) b |= (1ULL << (id - 1));
                     return b;
                 };
-                auto bits_to_set = [](uint64_t b) -> std::set<int> {
+                // Produces a sorted PathSet (k increases 0..62 → IDs 1..63 in order).
+                auto bits_to_set = [](uint64_t b) -> PathSet {
                     if (b == ~0ULL) return {0};
-                    std::set<int> s;
+                    PathSet s;
                     for (int k = 0; k < 63; ++k)
-                        if (b & (1ULL << k)) s.insert(k + 1);
+                        if (b & (1ULL << k)) s.push_back(k + 1);
                     return s;
                 };
 
@@ -293,7 +326,7 @@ namespace {
                             if (isect == 0) continue;
                             result.merged_sources.push_back(bits_to_set(isect));
                         } else {
-                            std::set<int> isect = Sources::intersect_sources(src1[i], src2[j]);
+                            PathSet isect = Sources::intersect_sources(src1[i], src2[j]);
                             if (isect.empty()) continue;
                             result.merged_sources.push_back(std::move(isect));
                         }
@@ -326,14 +359,18 @@ namespace {
             // Exceptions must not propagate out of a parallel region (UB in OpenMP).
             // Each thread catches locally; the first exception is re-thrown after join.
             std::exception_ptr first_exception;
+            std::atomic<bool> exception_occurred{false};
             #pragma omp parallel for num_threads(num_threads)
             for (size_t i = 0; i < pairs.size(); ++i) {
-                if (first_exception) continue;
+                if (exception_occurred.load(std::memory_order_relaxed)) continue;
                 try {
                     results[i] = compute_pair_metadata(pairs[i]);
                 } catch (...) {
                     #pragma omp critical
-                    if (!first_exception) first_exception = std::current_exception();
+                    if (!first_exception) {
+                        first_exception = std::current_exception();
+                        exception_occurred.store(true, std::memory_order_relaxed);
+                    }
                 }
             }
             if (first_exception) std::rethrow_exception(first_exception);
@@ -690,7 +727,7 @@ namespace {
                     if (sources_out) {
                         *sources_out << '{';
                         bool first_path = true;
-                        const std::set<int>& merged_source = merge_meta.merged_sources[idx];
+                        const PathSet& merged_source = merge_meta.merged_sources[idx];
                         for (int path_id : merged_source) {
                             if (!first_path) *sources_out << ',';
                             *sources_out << path_id;

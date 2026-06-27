@@ -99,6 +99,23 @@ static size_t count_degenerate(const std::string& eds_str) {
     return count;
 }
 
+// Sum of the lengths of the first (reference) haplotype in every EDS symbol.
+// With a well-formed EDS each reference position must appear exactly once, so
+// this total must equal the length of the original reference sequence.
+static size_t ref_path_length(const std::string& eds_str) {
+    size_t total = 0;
+    size_t i = 0;
+    while (i < eds_str.size()) {
+        if (eds_str[i] != '{') { i++; continue; }
+        size_t j = i + 1;
+        while (j < eds_str.size() && eds_str[j] != ',' && eds_str[j] != '}') j++;
+        total += j - (i + 1);
+        while (j < eds_str.size() && eds_str[j] != '}') j++;
+        i = j + 1;
+    }
+    return total;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -117,7 +134,9 @@ void test_basic_vcf_parsing() {
     size_t degenerate_count = count_degenerate(eds_str);
     std::cout << "  EDS length: " << eds_str.size() << std::endl;
     std::cout << "  Degenerate symbols: " << degenerate_count << std::endl;
-    assert(degenerate_count >= 10 && "Should have at least 10 degenerate symbols");
+    // 9 degenerate symbols: variant at pos 20 has FASTA_ref==VCF_ALT so it
+    // collapses to a single haplotype (non-degenerate). This is correct output.
+    assert(degenerate_count >= 9 && "Should have at least 9 degenerate symbols");
 
     std::cout << "  PASS" << std::endl;
 }
@@ -335,6 +354,192 @@ void test_variant_across_block_boundary() {
     std::cout << "  PASS" << std::endl;
 }
 
+void test_block_boundary_no_reference_duplication() {
+    std::cout << "Test 13: Block-boundary variant must not duplicate reference..." << std::endl;
+
+    // Reference: 20 chars.  A variant at VCF POS=3 (0-indexed [2,8)) with
+    // REF="GTACGT" (6 chars) crosses the block boundary at position 5.
+    // Bug: block 2 would re-emit ref[5:10) duplicating positions 5-7 that are
+    //      already the REF haplotype of the degenerate symbol from block 1.
+    // Fix: block 2 must start from position 8 (the true end of the variant).
+
+    const std::string ref_seq = "ACGTACGTACGTACGTACGT";  // 20 chars
+    std::stringstream vcf(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t3\t.\tGTACGT\tT\t.\tPASS\t.\n");
+    std::stringstream fa(">chr1\n" + ref_seq + "\n");
+
+    // block_size=5 forces the boundary at pos 5, squarely inside REF=[2,8)
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, nullptr, 5);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    // The degenerate symbol must be present.
+    if (eds_str.find("{GTACGT,T}") == std::string::npos)
+        throw std::runtime_error("Degenerate symbol {GTACGT,T} spanning block boundary not found in EDS");
+
+    // The reference path (first haplotype in every symbol) must cover exactly
+    // the 20 positions of the reference sequence -- no more, no less.
+    size_t rpl = ref_path_length(eds_str);
+    std::cout << "  Reference path length: " << rpl
+              << " (expected " << ref_seq.size() << ")" << std::endl;
+    if (rpl != ref_seq.size())
+        throw std::runtime_error(
+            "Reference path length " + std::to_string(rpl) +
+            " != " + std::to_string(ref_seq.size()) +
+            " -- block-boundary variant duplicated reference region");
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_block_boundary_overlapping_grouping() {
+    std::cout << "Test 14: Overlapping variants across block boundary must be merged..." << std::endl;
+
+    // Reference: ACGTACGTACGTACGTACGT (20 chars, 0-indexed)
+    //   pos 2-7: G T A C G T
+    //   pos 5-6: C G
+    //
+    // V1: POS=3 (1-idx, 0-idx=2), REF=GTACGT (6 chars), spans [2,8), ALT=T
+    // V2: POS=6 (1-idx, 0-idx=5), REF=CG     (2 chars), spans [5,7), ALT=AA
+    //   → V2 starts inside V1's REF span [2,8) and should be merged with V1.
+    //
+    // block_size=5: boundary at 5. V1 (start=2 < 5) → block N; V2 (start=5 ≥ 5) → carryover.
+    //
+    // Bug: V1 and V2 are processed in separate blocks and produce 2 degenerate symbols,
+    //      duplicating positions 5-6 in the reference path.
+    // Fix: after reading block N's variants, the overlap-extension loop detects that
+    //      carryover V2 starts inside V1's reach (5 < 8) and pulls it into block N.
+
+    const std::string ref_seq = "ACGTACGTACGTACGTACGT";
+    std::stringstream vcf(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t3\t.\tGTACGT\tT\t.\tPASS\t.\n"
+        "chr1\t6\t.\tCG\tAA\t.\tPASS\t.\n");
+    std::stringstream fa(">chr1\n" + ref_seq + "\n");
+
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, nullptr, 5);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    size_t rpl = ref_path_length(eds_str);
+    std::cout << "  Reference path length: " << rpl << " (expected 20)" << std::endl;
+    if (rpl != ref_seq.size())
+        throw std::runtime_error(
+            "Reference path length " + std::to_string(rpl) +
+            " != 20 -- overlapping variants across block boundary were not merged");
+
+    size_t degen = count_degenerate(eds_str);
+    std::cout << "  Degenerate symbols: " << degen << " (expected 1)" << std::endl;
+    if (degen != 1)
+        throw std::runtime_error(
+            "Expected 1 merged degenerate symbol but got " + std::to_string(degen) +
+            " -- V1 and V2 were not grouped despite overlapping across block boundary");
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_multi_chromosome_filtering() {
+    std::cout << "Test 15: Multi-chromosome VCF — wrong-chrom variants are skipped..." << std::endl;
+
+    // FASTA is chr1 (10 chars). VCF has one chr1 variant and one chr2 variant.
+    // The chr2 variant must be skipped, not applied to chr1 positions.
+    std::stringstream vcf(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t3\t.\tG\tA\t.\tPASS\t.\n"
+        "chr2\t3\t.\tG\tT\t.\tPASS\t.\n");
+    std::stringstream fa(">chr1\nACGTACGTAC\n");
+
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, &stats);
+
+    std::cout << "  EDS: " << eds_str << std::endl;
+    std::cout << "  skipped_wrong_chrom: " << stats.skipped_wrong_chrom << std::endl;
+
+    if (stats.skipped_wrong_chrom != 1)
+        throw std::runtime_error("Expected 1 skipped_wrong_chrom, got " +
+                                 std::to_string(stats.skipped_wrong_chrom));
+
+    // Only the chr1 variant (G→A at pos 3) should appear in the EDS
+    if (eds_str.find("{G,A}") == std::string::npos)
+        throw std::runtime_error("chr1 variant {G,A} not found in EDS");
+
+    // The chr2 variant (G→T) must NOT appear — its ALT 'T' should not be present
+    // at any position as a degenerate alternative to 'G' here
+    if (count_degenerate(eds_str) != 1)
+        throw std::runtime_error("Expected exactly 1 degenerate symbol, got " +
+                                 std::to_string(count_degenerate(eds_str)));
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_no_genotype_seds_cardinality() {
+    std::cout << "Test 16: No-genotype VCF — EDS/SEDS cardinality must match..." << std::endl;
+
+    // VCF without FORMAT/SAMPLE columns: haplotype_to_samples is always empty.
+    // Bug: emitting N alternatives in EDS but only 1 {0} in SEDS → cardinality
+    // mismatch when EDS::load validates the pair.
+    std::stringstream vcf(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t3\t.\tG\tA\t.\tPASS\t.\n"
+        "chr1\t7\t.\tC\tT\t.\tPASS\t.\n");
+    std::stringstream fa(">chr1\nACGTACGTAC\n");
+
+    std::ostringstream eds_ss, seds_ss;
+    parse_vcf_to_eds_streaming(vcf, fa, eds_ss, seds_ss);
+
+    const std::string eds_str  = eds_ss.str();
+    const std::string seds_str = seds_ss.str();
+    std::cout << "  EDS:  " << eds_str  << std::endl;
+    std::cout << "  SEDS: " << seds_str << std::endl;
+
+    // Count EDS cardinality (total strings = sum of alternatives per symbol)
+    size_t eds_card = 0;
+    for (size_t i = 0; i < eds_str.size(); ) {
+        if (eds_str[i] != '{') { i++; continue; }
+        size_t j = i + 1;
+        eds_card++;  // at least one string
+        while (j < eds_str.size() && eds_str[j] != '}') {
+            if (eds_str[j] == ',') eds_card++;
+            j++;
+        }
+        i = j + 1;
+    }
+
+    // Count SEDS cardinality (number of {…} sets)
+    size_t seds_card = 0;
+    for (size_t i = 0; i < seds_str.size(); ) {
+        if (seds_str[i] != '{') { i++; continue; }
+        seds_card++;
+        while (i < seds_str.size() && seds_str[i] != '}') i++;
+        i++;
+    }
+
+    std::cout << "  EDS cardinality:  " << eds_card  << std::endl;
+    std::cout << "  SEDS cardinality: " << seds_card << std::endl;
+
+    if (eds_card != seds_card)
+        throw std::runtime_error(
+            "EDS/SEDS cardinality mismatch: EDS=" + std::to_string(eds_card) +
+            " SEDS=" + std::to_string(seds_card));
+
+    // Also verify the pair loads back cleanly via EDS::load
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto eds_path  = temp_dir / "test_nogenotype.eds";
+    auto seds_path = temp_dir / "test_nogenotype.seds";
+    { std::ofstream f(eds_path);  f << eds_str; }
+    { std::ofstream f(seds_path); f << seds_str; }
+    EDS loaded = EDS::load(eds_path, seds_path);  // throws if cardinality mismatches
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(seds_path);
+
+    std::cout << "  EDS::load succeeded (cardinality consistent)" << std::endl;
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -349,6 +554,10 @@ int main() {
         test_multiallelic_cnv_inv();
         test_header_only_vcf();
         test_variant_across_block_boundary();
+        test_block_boundary_no_reference_duplication();
+        test_block_boundary_overlapping_grouping();
+        test_multi_chromosome_filtering();
+        test_no_genotype_seds_cardinality();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

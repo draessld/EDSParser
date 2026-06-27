@@ -35,13 +35,14 @@ struct VCFVariant {
     size_t pos;                  // Position (1-indexed)
     std::string ref;             // Reference allele
     std::vector<std::string> alts;  // Alternative alleles
-    std::vector<std::vector<int>> genotypes;  // Genotype for each sample (ALT indices)
+    // Flat diploid genotypes: [s0_a0, s0_a1, s1_a0, s1_a1, ...]; -1 = missing/hemizygous pad
+    // n_samples = genotypes.size() / 2
+    std::vector<int> genotypes;
 };
 
 struct VariantGroup {
     size_t start_pos;            // 0-indexed start position in reference
     size_t end_pos;              // 0-indexed end position (exclusive)
-    std::vector<VCFVariant> variants;  // All variants in this group
     std::vector<std::string> merged_haplotypes;  // All possible haplotype strings
     std::vector<std::vector<int>> merged_genotypes;  // Remapped genotypes per sample
 };
@@ -114,26 +115,63 @@ std::string read_fasta_region(std::istream& fasta_stream,
         length = meta.seq_size - start_pos;
     }
 
-    // Pre-allocate string to avoid reallocations
-    std::string result;
-    result.reserve(length);
-
-    // Calculate file position (accounting for newlines)
+    // Seek to the start of the requested region.
+    // file_offset accounts for the '\n' after each line_width-char FASTA line.
     std::streamoff file_offset = start_pos + (start_pos / meta.line_width);
     fasta_stream.clear();
     fasta_stream.seekg(meta.seq_start + file_offset);
 
-    // Read characters, skipping newlines
+    // Read in segments aligned to FASTA line boundaries.
+    // Each segment fits within one line so no newlines appear inside a read().
+    // This replaces the old char-at-a-time get() loop — O(length/line_width)
+    // read() calls instead of O(length) get() calls.
+    std::string result(length, '\0');
     size_t chars_read = 0;
-    char c;
-    while (chars_read < length && fasta_stream.get(c)) {
-        if (c != '\n' && c != '\r') {
-            result += c;  // More efficient than ostringstream::operator<<
-            chars_read++;
+    size_t cur_seq_pos = start_pos;
+
+    while (chars_read < length && fasta_stream.good()) {
+        size_t line_off = cur_seq_pos % meta.line_width;
+        size_t to_read  = std::min(length - chars_read, meta.line_width - line_off);
+
+        fasta_stream.read(&result[chars_read], static_cast<std::streamsize>(to_read));
+        std::streamsize n = fasta_stream.gcount();
+        if (n <= 0) break;
+
+        chars_read    += static_cast<size_t>(n);
+        cur_seq_pos   += static_cast<size_t>(n);
+
+        // If we consumed exactly to the end of this FASTA line and still need
+        // more chars, skip the '\n' separator before the next line.
+        if (static_cast<size_t>(n) == meta.line_width - line_off && chars_read < length) {
+            char nl;
+            fasta_stream.get(nl);  // skip '\n' (or first byte of '\r\n')
+            if (nl == '\r' && fasta_stream.good() && fasta_stream.peek() == '\n')
+                fasta_stream.get(nl);  // skip second byte of Windows CRLF
         }
     }
 
+    result.resize(chars_read);
     return result;
+}
+
+// ============================================================================
+// CHROMOSOME NAME MATCHING
+// ============================================================================
+
+// Return true if two chromosome names refer to the same sequence.
+// Handles the common "chr1" vs "1" and "chrX" vs "X" mismatches between UCSC
+// (chr-prefixed) and Ensembl (bare) reference naming conventions.
+static bool chrom_matches(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    auto strip_chr = [](const std::string& s) -> std::string {
+        if (s.size() > 3 &&
+            (s[0]=='c'||s[0]=='C') &&
+            (s[1]=='h'||s[1]=='H') &&
+            (s[2]=='r'||s[2]=='R'))
+            return s.substr(3);
+        return s;
+    };
+    return strip_chr(a) == strip_chr(b);
 }
 
 // ============================================================================
@@ -387,42 +425,49 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
         return nullptr;
     }
 
-    // Parse remaining genotype fields if present
+    // Parse remaining genotype fields if present.
+    // Flat diploid layout: 2 ints per sample; -1 = missing or hemizygous pad.
     if (field_count >= 10) {
-        // Pre-reserve for genotypes
-        var->genotypes.reserve(field_count - 9);
+        var->genotypes.reserve((field_count - 9) * 2);
 
-        // Process fields already parsed
-        for (size_t i = 9; i < field_count; i++) {
-            std::string_view gt_sv = fields[i];
+        // Helper: push one GT string_view as 2 flat ints
+        auto push_gt = [&](std::string_view gt_sv) {
             // Extract GT field (before first ':')
             size_t colon_pos = gt_sv.find(':');
-            if (colon_pos != std::string::npos) {
+            if (colon_pos != std::string::npos)
                 gt_sv = gt_sv.substr(0, colon_pos);
+            // Parse allele indices (stop after 2)
+            int a[2] = {-1, -1};
+            int n = 0;
+            for (size_t i = 0; i <= gt_sv.size() && n < 2; i++) {
+                char c = (i < gt_sv.size()) ? gt_sv[i] : '\0';
+                if (c == '|' || c == '/' || c == '\0') {
+                    // end of an allele token — nothing to push yet
+                } else if (c >= '0' && c <= '9') {
+                    if (a[n] < 0) a[n] = 0;
+                    a[n] = a[n] * 10 + (c - '0');
+                    continue;
+                } else if (c != '.') {
+                    continue;
+                }
+                // Token complete
+                n++;
             }
-            var->genotypes.push_back(parse_genotype(std::string(gt_sv)));
-        }
+            var->genotypes.push_back(a[0]);
+            var->genotypes.push_back(a[1]);
+        };
 
-        // Continue parsing if there are more samples beyond the array
+        for (size_t i = 9; i < field_count; i++)
+            push_gt(fields[i]);
+
+        // Continue parsing if there are more samples beyond the initial array
         if (field_count == fields.size()) {
-            // More fields to parse, continue from where we left off
             while (pos < len) {
-                // Skip delimiter
                 while (pos < len && (line[pos] == '\t' || line[pos] == ' ')) pos++;
                 if (pos >= len) break;
-
-                // Find end of field
                 size_t start = pos;
                 while (pos < len && line[pos] != '\t' && line[pos] != ' ') pos++;
-
-                std::string_view sample_sv(line.data() + start, pos - start);
-
-                // Extract GT field (before first ':')
-                size_t colon_pos = sample_sv.find(':');
-                if (colon_pos != std::string::npos) {
-                    sample_sv = sample_sv.substr(0, colon_pos);
-                }
-                var->genotypes.push_back(parse_genotype(std::string(sample_sv)));
+                push_gt(std::string_view(line.data() + start, pos - start));
             }
         }
     }
@@ -504,12 +549,11 @@ VariantGroup merge_variant_group(
     size_t span_start)
 {
     VariantGroup group;
-    group.variants = group_variants;
     group.start_pos = span_start;
     group.end_pos = span_start + reference_span.size();
 
-    // Determine number of samples from first variant
-    size_t n_samples = group_variants.empty() ? 0 : group_variants[0].genotypes.size();
+    // Flat layout: 2 ints per sample; n_samples = genotypes.size() / 2
+    size_t n_samples = group_variants.empty() ? 0 : group_variants[0].genotypes.size() / 2;
 
     // Initialize merged genotypes (one vector per sample)
     group.merged_genotypes.resize(n_samples);
@@ -546,33 +590,30 @@ VariantGroup merge_variant_group(
         // For each variant in the group
         for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
             const VCFVariant& var = group_variants[var_idx];
+            size_t var_n_samples = var.genotypes.size() / 2;
 
-            if (sample_idx >= var.genotypes.size()) {
+            if (sample_idx >= var_n_samples) {
                 continue;  // Sample not in this variant
             }
 
-            const std::vector<int>& genotype = var.genotypes[sample_idx];
+            // Flat layout: 2 ints per sample at [sample_idx*2] and [sample_idx*2+1]
+            for (int a = 0; a < 2; a++) {
+                int allele_idx = var.genotypes[sample_idx * 2 + a];
+                if (allele_idx < 0) continue;  // missing / hemizygous pad
 
-            // For each allele in this sample's genotype
-            for (int allele_idx : genotype) {
-                // Generate the haplotype for this allele
                 std::string haplotype = apply_variant_to_span(
                     reference_span, span_start, var, allele_idx);
 
-                // Find its index in merged haplotypes
                 auto it = haplotype_to_index.find(haplotype);
-                if (it != haplotype_to_index.end()) {
+                if (it != haplotype_to_index.end())
                     sample_haplotype_indices.insert(it->second);
-                }
             }
         }
 
         // If no variants for this sample, they have reference (index 0)
-        if (sample_haplotype_indices.empty()) {
+        if (sample_haplotype_indices.empty())
             sample_haplotype_indices.insert(0);
-        }
 
-        // Convert set to vector
         group.merged_genotypes[sample_idx].assign(
             sample_haplotype_indices.begin(), sample_haplotype_indices.end());
     }
@@ -664,9 +705,11 @@ std::vector<VariantGroup> group_overlapping_variants(
  * @param seds_out Output stream for sEDS
  * @param start_pos Starting position in reference (0-indexed)
  * @param end_pos Ending position in reference (0-indexed, exclusive)
- * @return Number of variant groups created (for statistics)
+ * @return {num_groups, actual_write_cursor} where actual_write_cursor is the
+ *         true position in the reference after this call.  It may exceed end_pos
+ *         when a variant's REF span crosses the block boundary.
  */
-size_t generate_eds_from_variants(
+std::pair<size_t, size_t> generate_eds_from_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     const std::vector<VCFVariant>& variants,
@@ -726,7 +769,12 @@ size_t generate_eds_from_variants(
                 }
             }
             eds_out << '}';
-            seds_out << "{0}";  // Universal path
+            // Emit one {0} per haplotype so SEDS cardinality == EDS string count.
+            // A single {0} would cause EDS::load to throw on cardinality mismatch
+            // whenever the degenerate symbol has more than one alternative.
+            for (size_t i = 0; i < group.merged_haplotypes.size(); i++) {
+                seds_out << "{0}";
+            }
 
             current_pos = group.end_pos;
             continue;
@@ -781,9 +829,14 @@ size_t generate_eds_from_variants(
             eds_out << '{' << ref_region << '}';
             seds_out << "{0}";
         }
+        current_pos = flush_end;
     }
 
-    return num_groups;
+    // Return both the group count (for statistics) and the true write cursor.
+    // current_pos may exceed end_pos when a variant's REF spans past the block
+    // boundary; the caller must use it as start_pos for the next block so the
+    // reference region is not emitted a second time.
+    return {num_groups, current_pos};
 }
 
 // ============================================================================
@@ -823,6 +876,25 @@ void parse_vcf_to_eds_streaming(
     size_t current_block_start = 0;
     size_t current_block_end = block_size;
 
+    // Chromosome filter: warn once and skip all variants from chromosomes that do
+    // not match the FASTA reference.  Handles "chr1" vs "1" naming differences.
+    bool chrom_warned = false;
+    auto accept_chrom = [&](const std::string& chrom) -> bool {
+        if (chrom_matches(chrom, fasta_meta.seq_name)) return true;
+        if (!chrom_warned) {
+            std::cerr << "Warning: VCF contains variants on '" << chrom
+                      << "' but FASTA reference is '" << fasta_meta.seq_name
+                      << "'. Skipping non-matching variants (split VCF by chromosome first).\n";
+            chrom_warned = true;
+        }
+        return false;
+    };
+    // actual_write_pos tracks where the EDS cursor truly is after each block.
+    // It can exceed current_block_end when a variant's REF span crosses the
+    // block boundary; the next generate_eds_from_variants call must start here
+    // (not at current_block_start) to avoid re-emitting that reference region.
+    size_t actual_write_pos = 0;
+
     bool vcf_finished = false;
 
     while (current_block_start < fasta_meta.seq_size) {
@@ -851,6 +923,16 @@ void parse_vcf_to_eds_streaming(
                 }
 
                 if (var) {
+                    if (!accept_chrom(var->chrom)) {
+                        // Undo the processed_variants increment done above;
+                        // chromosome mismatches are tracked separately.
+                        if (stats) {
+                            stats->processed_variants--;
+                            stats->skipped_wrong_chrom++;
+                        }
+                        continue;
+                    }
+
                     size_t var_start = var->pos - 1;  // 0-indexed
 
                     // Check if variant starts beyond current block end
@@ -872,16 +954,84 @@ void parse_vcf_to_eds_streaming(
             }
         }
 
+        // ── Overlap-extension ────────────────────────────────────────────────
+        // A variant V1 in block N can have a REF that reaches past block_end.
+        // If a carryover variant V2 starts inside V1's REF span it must be
+        // grouped with V1, but the start-position carryover heuristic puts V2
+        // in the next block, producing two separate degenerate symbols and
+        // duplicating the overlapping reference region.
+        //
+        // Fix: after collecting block_variants, compute max_reach (the furthest
+        // 0-indexed reference position covered by any variant in block_variants)
+        // and pull any carryover variant whose start falls before that reach into
+        // the current block.  As each such variant is absorbed its own end may
+        // push max_reach further, so we keep reading from the VCF stream until
+        // the next carryover candidate is truly outside the block's reach.
+        if (!vcf_finished || !carryover_variants.empty()) {
+            size_t max_reach = current_block_end;
+            for (const auto& v : block_variants)
+                max_reach = std::max(max_reach, (v.pos - 1) + v.ref.size());
+
+            while (!carryover_variants.empty()) {
+                size_t carry_start = carryover_variants.front().pos - 1;
+                if (carry_start >= max_reach) break;  // truly outside reach
+
+                // Absorb this carryover; its own REF may extend max_reach further.
+                max_reach = std::max(max_reach,
+                    carry_start + carryover_variants.front().ref.size());
+                block_variants.push_back(std::move(carryover_variants.front()));
+                carryover_variants.clear();
+
+                // Refill carryover: read until we find a variant outside max_reach
+                // (or EOF).  Any variant still inside max_reach is also absorbed.
+                if (!vcf_finished) {
+                    while (std::getline(vcf_stream, line)) {
+                        SkipReason skip_reason;
+                        auto var = parse_vcf_line(line, n_samples, skip_reason);
+                        if (stats) {
+                            if      (skip_reason == SkipReason::NONE)
+                                { stats->total_variants++; stats->processed_variants++; }
+                            else if (skip_reason == SkipReason::MALFORMED)
+                                { stats->total_variants++; stats->skipped_malformed++; }
+                            else if (skip_reason == SkipReason::UNSUPPORTED_SV)
+                                { stats->total_variants++; stats->skipped_unsupported_sv++; }
+                        }
+                        if (var) {
+                            if (!accept_chrom(var->chrom)) {
+                                if (stats) {
+                                    stats->processed_variants--;
+                                    stats->skipped_wrong_chrom++;
+                                }
+                                continue;
+                            }
+                            size_t var_start = var->pos - 1;
+                            if (var_start >= max_reach) {
+                                carryover_variants.push_back(*var);
+                                break;
+                            }
+                            max_reach = std::max(max_reach, var_start + var->ref.size());
+                            block_variants.push_back(*var);
+                        }
+                    }
+                    if (vcf_stream.eof() || vcf_stream.fail()) vcf_finished = true;
+                }
+            }
+        }
+
         // Sort block variants by position (should mostly be sorted already from VCF)
         std::sort(block_variants.begin(), block_variants.end(),
                   [](const VCFVariant& a, const VCFVariant& b) {
                       return a.pos < b.pos;
                   });
 
-        // Generate EDS for this block and count groups
-        size_t block_groups = generate_eds_from_variants(fasta_stream, fasta_meta, block_variants, n_samples,
-                                                          eds_output, seds_output,
-                                                          current_block_start, current_block_end);
+        // Generate EDS for this block and count groups.
+        // Pass actual_write_pos (not current_block_start) so that a variant whose
+        // REF extended past the previous block boundary is not re-emitted here.
+        auto [block_groups, new_write_pos] = generate_eds_from_variants(
+            fasta_stream, fasta_meta, block_variants, n_samples,
+            eds_output, seds_output,
+            actual_write_pos, current_block_end);
+        actual_write_pos = new_write_pos;
 
         // Flush output to disk after each block (prevent memory accumulation)
         eds_output.flush();
@@ -895,7 +1045,7 @@ void parse_vcf_to_eds_streaming(
         // Clear block variants to free memory
         block_variants.clear();
 
-        // Move to next block
+        // Move to next block (logical boundaries for VCF reading are unchanged)
         current_block_start = current_block_end;
         current_block_end = std::min(current_block_start + block_size, fasta_meta.seq_size);
 

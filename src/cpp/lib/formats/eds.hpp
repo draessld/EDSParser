@@ -6,7 +6,6 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <set>
 #include <list>
 #include <unordered_map>
 #include <fstream>
@@ -123,7 +122,7 @@ public:
 
     // Source access (delegated to Sources object)
     bool has_sources() const { return sources_ != nullptr; }
-    std::set<int> read_source(size_t string_id) const;  // Delegates to sources_->read_source()
+    PathSet read_source(size_t string_id) const;  // Delegates to sources_->read_source()
 
     // Direct Sources object access (for advanced users)
     std::shared_ptr<Sources> get_sources_object() const { return sources_; }
@@ -169,7 +168,7 @@ private:
                                  Position offset_in_symbol,
                                  const std::vector<int>& degenerate_strings,
                                  Length pattern_length) const;
-    std::set<int> calculate_path_intersection(size_t start_symbol,
+    PathSet calculate_path_intersection(size_t start_symbol,
                                               Position offset_in_symbol,
                                               const std::vector<int>& degenerate_strings,
                                               Length pattern_length) const;

@@ -454,7 +454,7 @@ void Sources::parse_edz_compressed(std::istream& is) {
 // STREAMING ACCESS
 // ================================================================================
 
-std::set<int> Sources::read_from_seds(size_t string_id) const {
+PathSet Sources::read_from_seds(size_t string_id) const {
     if (!stream_.is_open()) {
         throw std::runtime_error("Sources file stream not available");
     }
@@ -469,7 +469,7 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
     }
 
     // Parse one source set: {path_id1,path_id2,...}
-    std::set<int> result;
+    PathSet result;
     char ch;
 
     // Expect '{'
@@ -483,7 +483,7 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
     while (stream_.get(ch) && ch != SET_CLOSE) {
         if (ch == SET_SEPARATOR) {
             if (current_number >= 0) {
-                result.insert(current_number);
+                result.push_back(current_number);
                 current_number = -1;
             }
         } else if (std::isdigit(static_cast<unsigned char>(ch))) {
@@ -496,13 +496,17 @@ std::set<int> Sources::read_from_seds(size_t string_id) const {
 
     // Add last number
     if (current_number >= 0) {
-        result.insert(current_number);
+        result.push_back(current_number);
     }
+
+    // Maintain PathSet invariant: sorted, deduplicated
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
 
     return result;
 }
 
-std::set<int> Sources::read_from_edz(size_t string_id) const {
+PathSet Sources::read_from_edz(size_t string_id) const {
     if (!stream_.is_open()) {
         throw std::runtime_error("EDZ stream not open");
     }
@@ -529,14 +533,18 @@ std::set<int> Sources::read_from_edz(size_t string_id) const {
     size_t pos = 0;
     uint64_t count = varint_decode(buf.data(), size, pos);
 
-    std::set<int> result;
+    PathSet result;
+    result.reserve(static_cast<size_t>(count));
     for (uint64_t i = 0; i < count; ++i) {
-        result.insert(static_cast<int>(varint_decode(buf.data(), size, pos)));
+        result.push_back(static_cast<int>(varint_decode(buf.data(), size, pos)));
     }
+    // Maintain PathSet invariant: sorted, deduplicated
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
 }
 
-std::set<int> Sources::read_from_edz_compressed(size_t string_id) const {
+PathSet Sources::read_from_edz_compressed(size_t string_id) const {
     throw std::runtime_error("EDZ_COMPRESSED streaming not yet implemented (Phase 3)");
 }
 
@@ -655,7 +663,7 @@ void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream&
         // these formats are not yet fully implemented, so this branch is rarely
         // taken in production.
         for (size_t i = 0; i < count; ++i) {
-            const std::set<int> src = read_source(start_idx + i);
+            const PathSet src = read_source(start_idx + i);
             out << '{';
             bool first = true;
             for (int p : src) {
@@ -790,7 +798,7 @@ void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream&
     }
 }
 
-std::set<int> Sources::read_source(size_t string_id) const {
+PathSet Sources::read_source(size_t string_id) const {
     // Validation
     if (string_id >= cardinality_) {
         throw std::out_of_range("String ID " + std::to_string(string_id) +
@@ -808,7 +816,7 @@ std::set<int> Sources::read_source(size_t string_id) const {
     }
 
     // Cache miss: read from file
-    std::set<int> paths;
+    PathSet paths;
     switch (format_) {
         case Format::SEDS:
             paths = read_from_seds(string_id);
@@ -827,7 +835,7 @@ std::set<int> Sources::read_source(size_t string_id) const {
     return paths;
 }
 
-const std::set<int>& Sources::read_source_ref(size_t string_id) const {
+const PathSet& Sources::read_source_ref(size_t string_id) const {
     if (string_id >= cardinality_) {
         throw std::out_of_range("String ID " + std::to_string(string_id) +
                                " out of range (cardinality=" + std::to_string(cardinality_) + ")");
@@ -843,7 +851,7 @@ const std::set<int>& Sources::read_source_ref(size_t string_id) const {
     }
 
     // Cache miss: read from file, add to cache, return reference to cached entry
-    std::set<int> paths;
+    PathSet paths;
     switch (format_) {
         case Format::SEDS:
             paths = read_from_seds(string_id);
@@ -863,41 +871,37 @@ const std::set<int>& Sources::read_source_ref(size_t string_id) const {
 // SOURCE MERGING
 // ================================================================================
 
-std::set<int> Sources::intersect_sources(
-    const std::set<int>& sources1,
-    const std::set<int>& sources2
+PathSet Sources::intersect_sources(
+    const PathSet& sources1,
+    const PathSet& sources2
 ) {
-    std::set<int> intersection;
-    bool sources1_has_universal = sources1.count(0) > 0;
-    bool sources2_has_universal = sources2.count(0) > 0;
+    bool sources1_has_universal = !sources1.empty() && sources1.front() == 0;
+    bool sources2_has_universal = !sources2.empty() && sources2.front() == 0;
 
     if (sources1_has_universal && sources2_has_universal) {
-        // {0} ∩ {0} = {0}
-        intersection.insert(0);
+        return {0};
     } else if (sources1_has_universal) {
-        // {0} ∩ {x,y,...} = {x,y,...}
-        intersection = sources2;
+        return sources2;
     } else if (sources2_has_universal) {
-        // {x,y,...} ∩ {0} = {x,y,...}
-        intersection = sources1;
+        return sources1;
     } else {
-        // Regular set intersection
+        PathSet intersection;
         std::set_intersection(
             sources1.begin(), sources1.end(),
             sources2.begin(), sources2.end(),
-            std::inserter(intersection, intersection.begin())
+            std::back_inserter(intersection)
         );
+        return intersection;
     }
-    return intersection;
 }
 
-std::vector<std::set<int>> Sources::merge_adjacent_sources(
+std::vector<PathSet> Sources::merge_adjacent_sources(
     size_t symbol1_start, size_t symbol1_size,
     size_t symbol2_start, size_t symbol2_size
 ) const {
     // Preload both symbols' sources once — eliminates repeated read_source() mutex/cache
     // overhead that would otherwise occur symbol1_size times per symbol2 entry.
-    std::vector<std::set<int>> src1(symbol1_size), src2(symbol2_size);
+    std::vector<PathSet> src1(symbol1_size), src2(symbol2_size);
     for (size_t i = 0; i < symbol1_size; ++i)
         src1[i] = read_source(symbol1_start + i);
     for (size_t j = 0; j < symbol2_size; ++j)
@@ -905,23 +909,25 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
 
     // Bitset fast path: if all path IDs fit in [1, 63], represent each source set as
     // a uint64_t bitmask (bit k-1 = path k); universal marker {0} → ~0ULL.
+    // Sorted vector: max element is at back(), so the check is O(1) per set.
     bool use_bits = true;
     for (size_t i = 0; i < symbol1_size && use_bits; ++i)
-        for (int id : src1[i]) if (id > 63) { use_bits = false; break; }
+        if (!src1[i].empty() && src1[i].back() > 63) use_bits = false;
     for (size_t j = 0; j < symbol2_size && use_bits; ++j)
-        for (int id : src2[j]) if (id > 63) { use_bits = false; break; }
+        if (!src2[j].empty() && src2[j].back() > 63) use_bits = false;
 
-    auto to_bits = [](const std::set<int>& s) -> uint64_t {
-        if (s.count(0)) return ~0ULL;
+    auto to_bits = [](const PathSet& s) -> uint64_t {
+        if (!s.empty() && s[0] == 0) return ~0ULL;
         uint64_t b = 0;
         for (int id : s) b |= (1ULL << (id - 1));
         return b;
     };
-    auto bits_to_set = [](uint64_t b) -> std::set<int> {
+    // bits_to_set produces a sorted PathSet (k increases 0..62 → IDs 1..63 in order).
+    auto bits_to_set = [](uint64_t b) -> PathSet {
         if (b == ~0ULL) return {0};
-        std::set<int> s;
+        PathSet s;
         for (int k = 0; k < 63; ++k)
-            if (b & (1ULL << k)) s.insert(k + 1);
+            if (b & (1ULL << k)) s.push_back(k + 1);
         return s;
     };
 
@@ -932,7 +938,7 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
         for (size_t j = 0; j < symbol2_size; ++j) bits2[j] = to_bits(src2[j]);
     }
 
-    std::vector<std::set<int>> merged_sources;
+    std::vector<PathSet> merged_sources;
     merged_sources.reserve(symbol1_size * symbol2_size);
 
     for (size_t i = 0; i < symbol1_size; ++i) {
@@ -943,7 +949,7 @@ std::vector<std::set<int>> Sources::merge_adjacent_sources(
                 if (isect == 0) continue;
                 merged_sources.push_back(bits_to_set(isect));
             } else {
-                std::set<int> isect = intersect_sources(src1[i], src2[j]);
+                PathSet isect = intersect_sources(src1[i], src2[j]);
                 if (isect.empty()) continue;
                 merged_sources.push_back(std::move(isect));
             }
@@ -987,7 +993,7 @@ void Sources::save_seds(const std::filesystem::path& path) const {
     std::string buf;
     buf.reserve(64);
     for (size_t i = 0; i < cardinality_; i++) {
-        const std::set<int>& paths = read_source_ref(i);
+        const PathSet& paths = read_source_ref(i);
         buf.clear();
         buf += SET_OPEN;
         bool first = true;
@@ -1041,7 +1047,7 @@ void Sources::save_edz(const std::filesystem::path& path) const {
 
     for (size_t i = 0; i < cardinality_; ++i) {
         blob.clear();
-        const std::set<int> paths = read_source(i);
+        const PathSet paths = read_source(i);
         varint_encode(static_cast<uint64_t>(paths.size()), blob);
         for (int id : paths) {
             varint_encode(static_cast<uint64_t>(id), blob);
@@ -1070,7 +1076,7 @@ void Sources::save_edz_compressed(const std::filesystem::path& path) const {
 // CACHE MANAGEMENT
 // ================================================================================
 
-void Sources::add_to_cache(size_t string_id, std::set<int> paths) const {
+void Sources::add_to_cache(size_t string_id, PathSet paths) const {
     if (cache_capacity_ == 0) {
         return;  // Caching disabled
     }

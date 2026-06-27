@@ -26,11 +26,12 @@ struct VCFStats {
     size_t processed_variants = 0;    // Successfully processed variants
     size_t skipped_malformed = 0;     // Skipped due to malformed VCF lines
     size_t skipped_unsupported_sv = 0;  // Skipped due to unsupported SV types
+    size_t skipped_wrong_chrom = 0;   // Skipped: chromosome doesn't match FASTA reference
     size_t variant_groups = 0;        // Number of variant groups created (after merging overlaps)
 
     // Helper to get total skipped count
     size_t total_skipped() const {
-        return skipped_malformed + skipped_unsupported_sv;
+        return skipped_malformed + skipped_unsupported_sv + skipped_wrong_chrom;
     }
 };
 

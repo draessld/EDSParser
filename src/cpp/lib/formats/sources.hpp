@@ -2,7 +2,6 @@
 #define SOURCES_HPP
 
 #include <vector>
-#include <set>
 #include <string>
 #include <fstream>
 #include <filesystem>
@@ -11,6 +10,10 @@
 #include <unordered_map>
 #include <cstdint>
 #include <mutex>
+
+// Sorted, deduplicated list of integer path IDs.
+// Invariant: elements are in ascending order, no duplicates.
+using PathSet = std::vector<int>;
 
 /**
  * Sources class - Manages provenance/source tracking for EDS strings
@@ -52,16 +55,16 @@ public:
     void save(const std::filesystem::path& path) const;
 
     // Access (always uses streaming with cache)
-    std::set<int> read_source(size_t string_id) const;
+    PathSet read_source(size_t string_id) const;
 
     // Fast reference access — avoids the copy on cache hit.
     // The reference is stable for the duration of the call unless the caller
     // triggers further cache mutations (safe for tight loops that read, then act).
-    const std::set<int>& read_source_ref(size_t string_id) const;
+    const PathSet& read_source_ref(size_t string_id) const;
 
     // Bulk byte-copy: writes the raw SEDS bytes for strings [start_idx, start_idx+count)
     // directly to `out` without parsing or reformatting.  One seek + sequential reads;
-    // avoids per-string read_source() calls and std::set allocations.
+    // avoids per-string read_source() calls and PathSet allocations.
     // Only valid for SEDS format sources that were loaded from a file.
     void copy_range_to_stream(size_t start_idx, size_t count, std::ostream& out) const;
 
@@ -78,9 +81,9 @@ public:
      * @param sources2 Source set for second string alternative
      * @return Intersection of sources (empty if no valid paths)
      */
-    static std::set<int> intersect_sources(
-        const std::set<int>& sources1,
-        const std::set<int>& sources2
+    static PathSet intersect_sources(
+        const PathSet& sources1,
+        const PathSet& sources2
     );
 
     /**
@@ -96,7 +99,7 @@ public:
      * @return Vector of merged source sets (only non-empty intersections)
      * @throws std::runtime_error if all intersections are empty
      */
-    std::vector<std::set<int>> merge_adjacent_sources(
+    std::vector<PathSet> merge_adjacent_sources(
         size_t symbol1_start, size_t symbol1_size,
         size_t symbol2_start, size_t symbol2_size
     ) const;
@@ -128,7 +131,7 @@ private:
     // LRU cache
     struct CacheEntry {
         size_t string_id;
-        std::set<int> paths;
+        PathSet paths;
     };
     mutable std::list<CacheEntry> cache_;
     mutable std::unordered_map<size_t, std::list<CacheEntry>::iterator> cache_map_;
@@ -143,9 +146,9 @@ private:
     void parse_edz_compressed(std::istream& is);
 
     // Format-specific streaming
-    std::set<int> read_from_seds(size_t string_id) const;
-    std::set<int> read_from_edz(size_t string_id) const;
-    std::set<int> read_from_edz_compressed(size_t string_id) const;
+    PathSet read_from_seds(size_t string_id) const;
+    PathSet read_from_edz(size_t string_id) const;
+    PathSet read_from_edz_compressed(size_t string_id) const;
 
     // Format-specific saving
     void save_seds(const std::filesystem::path& path) const;
@@ -153,7 +156,7 @@ private:
     void save_edz_compressed(const std::filesystem::path& path) const;
 
     // Helper: Add to cache (takes by value to enable move)
-    void add_to_cache(size_t string_id, std::set<int> paths) const;
+    void add_to_cache(size_t string_id, PathSet paths) const;
 };
 
 #endif // SOURCES_HPP

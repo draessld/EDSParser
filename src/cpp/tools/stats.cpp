@@ -1,6 +1,7 @@
 #include "formats/eds.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>
+#include <set>
 #include <iostream>
 #include <fstream>
 #include <filesystem>

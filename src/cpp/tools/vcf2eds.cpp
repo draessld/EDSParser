@@ -100,11 +100,14 @@ int main(int argc, char** argv) {
             std::cout << "  Only active regions loaded into memory.\n";
             std::cout << "  Block-based processing limits memory usage for large VCF files.\n\n";
             std::cout << "MEMORY OPTIMIZATION:\n";
+            std::cout << "  Peak RAM ≈ 2 × (block_size × variant_density × n_samples × 8 bytes)\n";
             std::cout << "  --block-size: Control memory usage vs performance tradeoff\n";
-            std::cout << "    - Default 10M bases: Good balance for most use cases\n";
-            std::cout << "    - Smaller (e.g., 1M): Lower memory, more I/O overhead\n";
-            std::cout << "    - Larger (e.g., 100M): Higher memory, fewer I/O operations\n";
-            std::cout << "    - 0: Load all variants (legacy behavior, high memory)\n\n";
+            std::cout << "    - Default 10M bases: OK for sparse or small-sample VCFs\n";
+            std::cout << "    - 1M: 100 samples → ~300MB; 2500 samples → ~650MB\n";
+            std::cout << "    - 200K: 2500 samples (1000 Genomes density) → ~300MB\n";
+            std::cout << "    - Smaller: Lower memory, more I/O overhead\n";
+            std::cout << "    - Larger: Higher memory, fewer I/O operations\n";
+            std::cout << "    - 0: Load all variants (legacy behavior, very high memory)\n\n";
             print_performance();
             return 0;
         }
@@ -221,6 +224,7 @@ int main(int argc, char** argv) {
         std::cout << "  Successfully processed:     " << stats.processed_variants << "\n";
         std::cout << "  Skipped (malformed):        " << stats.skipped_malformed << "\n";
         std::cout << "  Skipped (unsupported SV):   " << stats.skipped_unsupported_sv << "\n";
+        std::cout << "  Skipped (wrong chromosome): " << stats.skipped_wrong_chrom << "\n";
         std::cout << "  Total skipped:              " << stats.total_skipped() << "\n";
         std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
 

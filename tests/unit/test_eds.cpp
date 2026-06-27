@@ -6,6 +6,7 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <set>
 
 // Helper function to create temporary EDS file and load it
 edsparser::EDS create_temp_eds(const std::string& eds_content) {
