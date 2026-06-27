@@ -171,6 +171,45 @@ Benchmark `vcf2eds` on a real or large synthetic VCF with block sizes 1M, 5M, 10
 
 ---
 
+## Fixed (2026-06-27)
+
+### [BUG] Multi-chromosome VCF silently applied wrong-chromosome variants
+
+`accept_chrom` lambda was defined in `parse_vcf_to_eds_streaming` but never
+called — chr2 variants were applied to a chr1 FASTA reference without any error.
+Fix: wired the lambda into both variant-reading loops (main block loop and the
+overlap-extension loop). Wrong-chromosome variants now increment `skipped_wrong_chrom`
+and are excluded from `processed_variants`. Warning printed on first occurrence.
+Regression test: Test 15 in `tests/unit/test_vcf.cpp`.
+
+### [BUG] SEDS cardinality mismatch for no-genotype VCF
+
+`generate_eds_from_variants` emitted N EDS strings but only 1 `{0}` SEDS entry
+in the no-genotype path (`haplotype_to_samples.empty()`). `EDS::load` validation
+(`Sources::cardinality() == EDS::m_`) then threw `std::invalid_argument`.
+Fix: emit one `{0}` per haplotype in the no-genotype branch.
+Regression test: Test 16 in `tests/unit/test_vcf.cpp`.
+
+### [MEM] VCFVariant genotype memory — ~75% overhead from nested vectors
+
+`VCFVariant.genotypes` was `vector<vector<int>>` (24-byte overhead per inner
+vector for just 2 ints in the diploid case). Fix: flattened to `vector<int>`
+with stride 2 (`[s0_a0, s0_a1, s1_a0, s1_a1, ...]`, -1 = missing). Also removed
+the dead `VariantGroup.variants` field (full copy written but never read after
+`merge_variant_group` returned). Combined reduction: 1.6 GB → 650 MB peak for
+100 samples × 1 M-base block (2.5×); runtime 69 s → 35 s on the same workload.
+
+### [UX] No progress feedback during vcf2eds / msa2eds / eds2leds
+
+Long transforms ran silently with no indication of progress. Fix: added
+`progress_bar.hpp` (`CountingStreambuf` + `ProgressBar`) — a background-threaded
+animated bar (speed + ETA) shown on stderr when stderr is a TTY; fully suppressed
+when piped to a file. vcf2eds and msa2eds wrap their primary input stream with
+`CountingStreambuf`. eds2leds existing `\r` bar is now guarded by `isatty()` so
+it doesn't corrupt log files.
+
+---
+
 ## Fixed (2026-06-14)
 
 ### [UB] Data race on `first_exception` in the OpenMP merge loop
