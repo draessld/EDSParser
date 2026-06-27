@@ -1,5 +1,6 @@
 #include "transforms/msa_transforms.hpp"
 #include "common.hpp"
+#include "progress_bar.hpp"
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <fstream>
@@ -157,11 +158,18 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());
         }
 
-        // Perform transformation with streaming output
-        if (create_leds) {
-            edsparser::parse_msa_to_leds_streaming(msa_in, eds_out, seds_out, context_length);
-        } else {
-            edsparser::parse_msa_to_eds_streaming(msa_in, eds_out, seds_out);
+        // Wrap MSA input so the progress bar can track bytes consumed.
+        edsparser::CountingStreambuf msa_cbuf(msa_in.rdbuf());
+        std::istream msa_stream(&msa_cbuf);
+        size_t msa_file_size = std::filesystem::file_size(input_file);
+
+        {
+            edsparser::ProgressBar pb("MSA", msa_file_size, msa_cbuf);
+            if (create_leds) {
+                edsparser::parse_msa_to_leds_streaming(msa_stream, eds_out, seds_out, context_length);
+            } else {
+                edsparser::parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+            }
         }
 
         // Close files

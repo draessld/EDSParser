@@ -1,5 +1,6 @@
 #include "transforms/vcf_transforms.hpp"
 #include "common.hpp"
+#include "progress_bar.hpp"
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <fstream>
@@ -196,16 +197,23 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());
         }
 
+        // Wrap VCF input with a counting streambuf so the progress bar can track
+        // how many bytes have been read without modifying the transform functions.
+        edsparser::CountingStreambuf vcf_cbuf(vcf_in.rdbuf());
+        std::istream vcf_stream(&vcf_cbuf);
+        size_t vcf_file_size = std::filesystem::file_size(input_file);
+
         // Perform transformation with statistics tracking
         // Output written directly to files (memory-efficient for large VCF)
         edsparser::VCFStats stats;
 
-        if (create_leds) {
-            // For l-EDS, use streaming output with temp files (no memory accumulation!)
-            edsparser::parse_vcf_to_leds_streaming_direct(vcf_in, fasta_in, eds_out, seds_out, context_length, &stats, block_size);
-        } else {
-            // For regular EDS, use streaming output (no memory accumulation!)
-            edsparser::parse_vcf_to_eds_streaming(vcf_in, fasta_in, eds_out, seds_out, &stats, block_size);
+        {
+            edsparser::ProgressBar pb("VCF", vcf_file_size, vcf_cbuf);
+            if (create_leds) {
+                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size);
+            } else {
+                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size);
+            }
         }
 
         vcf_in.close();

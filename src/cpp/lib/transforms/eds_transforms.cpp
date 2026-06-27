@@ -1005,8 +1005,11 @@ void eds_to_leds_linear(
             std::cerr << ")\n";
         }
 
-        // Helper: print progress bar in-place using \r
+        // Helper: print merge-pairs progress bar in-place using \r.
+        // Suppressed when stderr is not a terminal to avoid polluting log files.
+        const bool stderr_tty = isatty(STDERR_FILENO);
         auto print_bar = [&](size_t done) {
+            if (!stderr_tty) return;
             const int BAR_WIDTH = 40;
             float frac = total_pairs > 0 ? static_cast<float>(done) / total_pairs : 1.0f;
             int filled = static_cast<int>(BAR_WIDTH * frac);
@@ -1064,7 +1067,7 @@ void eds_to_leds_linear(
                                  std::make_move_iterator(batch_metadata.end()));
         }
         print_bar(total_pairs);
-        std::cerr << "\n";
+        if (stderr_tty) std::cerr << "\n";
 
         // Stream full result to file once (each position written exactly once).
         // Also captures output metadata inline — avoids re-reading the file next iteration.
@@ -1252,8 +1255,9 @@ void eds_to_leds_cartesian(
             std::cerr << ")\n";
         }
 
-        // Helper: print progress bar in-place using \r
+        const bool stderr_tty = isatty(STDERR_FILENO);
         auto print_bar = [&](size_t done) {
+            if (!stderr_tty) return;
             const int BAR_WIDTH = 40;
             float frac = total_pairs > 0 ? static_cast<float>(done) / total_pairs : 1.0f;
             int filled = static_cast<int>(BAR_WIDTH * frac);
@@ -1301,7 +1305,7 @@ void eds_to_leds_cartesian(
                                  std::make_move_iterator(batch_metadata.end()));
         }
         print_bar(total_pairs);
-        std::cerr << "\n";
+        if (stderr_tty) std::cerr << "\n";
 
         // Stream full result to file once (each position written exactly once).
         // Also captures output metadata inline — avoids re-reading the file next iteration.
