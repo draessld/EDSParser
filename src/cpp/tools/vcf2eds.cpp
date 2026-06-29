@@ -1,4 +1,5 @@
 #include "transforms/vcf_transforms.hpp"
+#include "formats/sources.hpp"
 #include "common.hpp"
 #include "progress_bar.hpp"
 #include <boost/program_options.hpp>
@@ -34,6 +35,7 @@ int main(int argc, char** argv) {
         std::filesystem::path sources_file;
         Length context_length;
         size_t block_size;
+        std::string source_format_str;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -41,9 +43,10 @@ int main(int argc, char** argv) {
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input VCF file (.vcf)")
             ("reference,r", po::value<std::filesystem::path>(&reference_file)->required(), "Reference FASTA file")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
+            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds or .edz)")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
-            ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)");
+            ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
+            ("source-format", po::value<std::string>(&source_format_str)->default_value("seds"), "Source file format: seds (text, default) or edz (binary bitset, ~8× smaller)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -115,6 +118,15 @@ int main(int argc, char** argv) {
 
         po::notify(vm);
 
+        // Parse source format
+        Sources::Format seds_format = Sources::Format::SEDS;
+        if (source_format_str == "edz") {
+            seds_format = Sources::Format::EDZ;
+        } else if (source_format_str != "seds") {
+            std::cerr << "Error: --source-format must be 'seds' or 'edz', got: " << source_format_str << "\n";
+            return 1;
+        }
+
         // Validate input file extension
         if (input_file.extension() != ".vcf") {
             std::cerr << "Error: Input file must be a VCF file (.vcf)\n";
@@ -163,8 +175,9 @@ int main(int argc, char** argv) {
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
 
+        const std::string src_ext = (seds_format == Sources::Format::EDZ) ? ".edz" : ".seds";
+
         if (create_leds) {
-            // l-EDS output with _l<N> suffix
             std::string base_name = input_file.stem().string();
             std::string suffix = "_l" + std::to_string(context_length);
 
@@ -173,16 +186,15 @@ int main(int argc, char** argv) {
                 : output_file;
 
             seds_path = sources_file.empty()
-                ? eds_path.parent_path() / (base_name + suffix + ".seds")
+                ? eds_path.parent_path() / (base_name + suffix + src_ext)
                 : sources_file;
         } else {
-            // Regular EDS output
             eds_path = output_file.empty()
                 ? input_file.parent_path() / (input_file.stem().string() + ".eds")
                 : output_file;
 
             seds_path = sources_file.empty()
-                ? eds_path.parent_path() / (eds_path.stem().string() + ".seds")
+                ? eds_path.parent_path() / (eds_path.stem().string() + src_ext)
                 : sources_file;
         }
 
@@ -192,7 +204,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Failed to open output file: " + eds_path.string());
         }
 
-        std::ofstream seds_out(seds_path);
+        auto seds_open_flags = std::ios::out | std::ios::trunc
+                             | (seds_format == Sources::Format::EDZ ? std::ios::binary : std::ios::openmode{});
+        std::ofstream seds_out(seds_path, seds_open_flags);
         if (!seds_out) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());
         }
@@ -212,7 +226,7 @@ int main(int argc, char** argv) {
             if (create_leds) {
                 edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size);
             } else {
-                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size);
+                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format);
             }
         }
 

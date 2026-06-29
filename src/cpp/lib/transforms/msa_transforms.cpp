@@ -12,6 +12,45 @@
 namespace edsparser {
 
 // ============================================================================
+// SEDS WRITE HELPERS  (same encoding as vcf_transforms)
+// ============================================================================
+
+static void write_ranges_msa(std::ostream& out, const std::set<int>& ids, bool prefix_comma = false) {
+    bool first = !prefix_comma;
+    auto it = ids.begin();
+    while (it != ids.end()) {
+        int lo = *it, hi = lo;
+        while (std::next(it) != ids.end() && *std::next(it) == hi + 1) { ++it; ++hi; }
+        if (!first) out << ',';
+        first = false;
+        if (hi > lo + 1) {
+            out << lo << '-' << hi;
+        } else if (hi == lo + 1) {
+            out << lo << ',' << hi;
+        } else {
+            out << lo;
+        }
+        ++it;
+    }
+}
+
+static void write_seds_entry_msa(std::ostream& out, const std::set<int>& paths, size_t total_paths) {
+    out << '{';
+    if (paths.empty()) {
+        out << '0';
+    } else if (paths.size() > total_paths / 2) {
+        std::set<int> exceptions;
+        for (int p = 1; p <= static_cast<int>(total_paths); ++p)
+            if (!paths.count(p)) exceptions.insert(p);
+        out << '0';
+        if (!exceptions.empty()) write_ranges_msa(out, exceptions, true);
+    } else {
+        write_ranges_msa(out, paths);
+    }
+    out << '}';
+}
+
+// ============================================================================
 // HELPER STRUCTURES
 // ============================================================================
 
@@ -305,16 +344,8 @@ void generate_output(
                     eds_out << ',';
                 }
 
-                // Output source set (one set per string alternative)
-                seds_out << '{';
-                auto it = paths.begin();
-                for (size_t p = 0; p < paths.size(); p++, it++) {
-                    seds_out << *it;
-                    if (p < paths.size() - 1) {
-                        seds_out << ',';
-                    }
-                }
-                seds_out << '}';
+                // Output source set with range + complement encoding
+                write_seds_entry_msa(seds_out, paths, meta.n_sequences);
             }
         }
 

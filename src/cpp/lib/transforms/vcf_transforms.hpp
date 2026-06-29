@@ -2,6 +2,7 @@
 #define EDSPARSER_TRANSFORMS_VCF_TRANSFORMS_HPP
 
 #include "../common.hpp"
+#include "../formats/sources.hpp"
 #include <iostream>
 #include <string>
 #include <utility>
@@ -54,7 +55,8 @@ void parse_vcf_to_eds_streaming(
     std::ostream& eds_output,
     std::ostream& seds_output,
     VCFStats* stats = nullptr,
-    size_t block_size = 10000000);
+    size_t block_size = 10000000,
+    Sources::Format seds_format = Sources::Format::SEDS);
 
 /**
  * Parse VCF + FASTA reference to EDS with source tracking (string return).

@@ -16,9 +16,10 @@ static const char SET_SEPARATOR = ',';
 Sources::Sources(size_t cardinality, Format format)
     : cardinality_(cardinality)
     , format_(format)
-    , cache_capacity_(10000)  // Default cache size
+    , num_paths_(0)
+    , is_bitset_(false)
+    , cache_capacity_(10000)
 {
-    // cardinality==0 is allowed as a sentinel for auto-detect during load()
 }
 
 Sources::~Sources() {
@@ -31,6 +32,8 @@ Sources::~Sources() {
 Sources::Sources(Sources&& other) noexcept
     : cardinality_(other.cardinality_)
     , format_(other.format_)
+    , num_paths_(other.num_paths_)
+    , is_bitset_(other.is_bitset_)
     , file_path_(std::move(other.file_path_))
     , stream_(std::move(other.stream_))
     , base_positions_(std::move(other.base_positions_))
@@ -43,14 +46,16 @@ Sources::Sources(Sources&& other) noexcept
 
 Sources& Sources::operator=(Sources&& other) noexcept {
     if (this != &other) {
-        cardinality_ = other.cardinality_;
-        format_ = other.format_;
-        file_path_ = std::move(other.file_path_);
-        stream_ = std::move(other.stream_);
+        cardinality_  = other.cardinality_;
+        format_       = other.format_;
+        num_paths_    = other.num_paths_;
+        is_bitset_    = other.is_bitset_;
+        file_path_    = std::move(other.file_path_);
+        stream_       = std::move(other.stream_);
         base_positions_ = std::move(other.base_positions_);
         binary_index_ = std::move(other.binary_index_);
-        cache_ = std::move(other.cache_);
-        cache_map_ = std::move(other.cache_map_);
+        cache_        = std::move(other.cache_);
+        cache_map_    = std::move(other.cache_map_);
         cache_capacity_ = other.cache_capacity_;
     }
     return *this;
@@ -406,7 +411,6 @@ static uint64_t varint_decode(const uint8_t* data, size_t data_size, size_t& off
 // ================================================================================
 
 void Sources::parse_edz(std::istream& is) {
-    // Validate magic
     char magic[4];
     is.read(magic, 4);
     if (is.gcount() != 4 || magic[0] != 'E' || magic[1] != 'D' ||
@@ -414,30 +418,60 @@ void Sources::parse_edz(std::istream& is) {
         throw std::runtime_error("EDZ: invalid magic bytes (not an EDZ file)");
     }
 
-    // Flags: bit 0 set means compressed → that is EDZ_COMPRESSED, not EDZ
     uint16_t flags = read_le<uint16_t>(is);
     if (flags & 0x0001) {
         throw std::runtime_error(
             "EDZ: compression flag is set — use EDZ_COMPRESSED format instead");
     }
-    read_le<uint16_t>(is);  // reserved, ignored
+    read_le<uint16_t>(is);  // reserved
 
-    // Cardinality
     uint64_t card = read_le<uint64_t>(is);
-    if (card == 0) {
-        throw std::runtime_error("EDZ: file declares cardinality 0");
+
+    if (flags & 0x0002) {
+        // ── Bitset EDZ format ────────────────────────────────────────────────
+        // Header layout (24 bytes):
+        //   [0..3]   'E','D','Z','\0'
+        //   [4..5]   flags = 0x0002
+        //   [6..7]   reserved
+        //   [8..15]  cardinality (may be 0 if written by a streaming writer that
+        //            could not seek back; compute from file size in that case)
+        //   [16..23] num_paths
+        uint64_t np = read_le<uint64_t>(is);
+        if (np == 0) throw std::runtime_error("EDZ bitset: num_paths is 0 in header");
+        num_paths_ = static_cast<size_t>(np);
+        is_bitset_ = true;
+
+        // If cardinality was not written (placeholder 0), compute from file size.
+        if (card == 0) {
+            auto cur = is.tellg();
+            is.seekg(0, std::ios::end);
+            auto sz = is.tellg();
+            is.seekg(cur);
+            if (sz <= 24) throw std::runtime_error("EDZ bitset: file too small");
+            card = static_cast<uint64_t>((static_cast<size_t>(sz) - 24) / edz_bpe(num_paths_));
+        }
+
+        // Validate or set cardinality_
+        if (cardinality_ == 0) {
+            cardinality_ = static_cast<size_t>(card);
+        } else if (cardinality_ != static_cast<size_t>(card)) {
+            throw std::runtime_error("EDZ bitset: cardinality mismatch (expected " +
+                std::to_string(cardinality_) + ", got " + std::to_string(card) + ")");
+        }
+        // No index section; entries start immediately at byte 24.
+        return;
     }
 
-    // Index section: card * (uint64_t offset + uint32_t size)
+    // ── Legacy varint EDZ format ─────────────────────────────────────────────
+    if (card == 0) throw std::runtime_error("EDZ: file declares cardinality 0");
+
     binary_index_.resize(static_cast<size_t>(card));
     for (uint64_t i = 0; i < card; ++i) {
         uint64_t offset = read_le<uint64_t>(is);
         uint32_t size   = read_le<uint32_t>(is);
         binary_index_[static_cast<size_t>(i)] = {offset, size};
     }
-    // Stream is now positioned at the start of the data section.
 
-    // Validate or set cardinality_
     if (cardinality_ == 0) {
         cardinality_ = static_cast<size_t>(card);
     } else if (cardinality_ != static_cast<size_t>(card)) {
@@ -478,14 +512,34 @@ PathSet Sources::read_from_seds(size_t string_id) const {
                                 std::to_string(string_id));
     }
 
-    // Parse path IDs using integer accumulation (no heap allocation)
+    // Parse path IDs. Supports:
+    //   {1,3,7}        — explicit list (legacy and current format)
+    //   {1-3,7}        — range notation: 1-3 expands to 1,2,3
+    //   {0}            — universal set (all paths); 0 is the complement sentinel
+    //   {0,5-10,20}    — complement set: all paths EXCEPT 5,6,7,8,9,10,20
     int current_number = -1;
+    int range_start    = -1;  // set when we've seen 'a-' waiting for range end
+
+    auto flush_token = [&]() {
+        if (current_number < 0) return;
+        if (range_start >= 0) {
+            // Expand range [range_start, current_number]
+            for (int p = range_start; p <= current_number; ++p)
+                result.push_back(p);
+            range_start = -1;
+        } else {
+            result.push_back(current_number);
+        }
+        current_number = -1;
+    };
+
     while (stream_.get(ch) && ch != SET_CLOSE) {
         if (ch == SET_SEPARATOR) {
-            if (current_number >= 0) {
-                result.push_back(current_number);
-                current_number = -1;
-            }
+            flush_token();
+        } else if (ch == '-' && current_number >= 0) {
+            // Range separator: current_number is the start of the range
+            range_start    = current_number;
+            current_number = -1;
         } else if (std::isdigit(static_cast<unsigned char>(ch))) {
             current_number = (current_number < 0 ? 0 : current_number * 10) + (ch - '0');
         } else if (!std::isspace(static_cast<unsigned char>(ch))) {
@@ -493,35 +547,101 @@ PathSet Sources::read_from_seds(size_t string_id) const {
                                    std::string(1, ch));
         }
     }
+    flush_token();  // final token before '}'
 
-    // Add last number
-    if (current_number >= 0) {
-        result.push_back(current_number);
-    }
-
-    // Maintain PathSet invariant: sorted, deduplicated
+    // Maintain PathSet invariant: sorted (0 first if present), deduplicated.
+    // sort() naturally places 0 at front, which is the complement-flag convention.
     std::sort(result.begin(), result.end());
     result.erase(std::unique(result.begin(), result.end()), result.end());
 
     return result;
 }
 
+// ── EDZ bitset encode / decode ────────────────────────────────────────────────
+
+void Sources::pathset_to_bitset(uint8_t* buf, size_t bpe, size_t num_paths,
+                                const PathSet& ps) {
+    if (!ps.empty() && ps[0] == 0) {
+        // Complement / universal: start all-ones, clear exception bits
+        std::fill(buf, buf + bpe, uint8_t{0xFF});
+        // Clear any padding bits beyond num_paths
+        if (num_paths % 8 != 0) {
+            buf[bpe - 1] = static_cast<uint8_t>((1u << (num_paths % 8)) - 1u);
+        }
+        // Clear exception bits (ps[1..])
+        for (size_t i = 1; i < ps.size(); ++i) {
+            int id = ps[i];
+            if (id >= 1 && static_cast<size_t>(id) <= num_paths) {
+                size_t bit = static_cast<size_t>(id - 1);
+                buf[bit / 8] &= ~(uint8_t{1} << (bit % 8));
+            }
+        }
+    } else {
+        std::fill(buf, buf + bpe, uint8_t{0});
+        for (int id : ps) {
+            if (id >= 1 && static_cast<size_t>(id) <= num_paths) {
+                size_t bit = static_cast<size_t>(id - 1);
+                buf[bit / 8] |= (uint8_t{1} << (bit % 8));
+            }
+        }
+    }
+}
+
+PathSet Sources::bitset_to_pathset(const uint8_t* buf, size_t bpe, size_t num_paths) {
+    // Check for all-ones (universal set → PathSet{0})
+    bool all_ones = true;
+    for (size_t i = 0; i < bpe && all_ones; ++i) {
+        uint8_t expected = (i + 1 < bpe) ? 0xFF
+                         : (num_paths % 8 == 0) ? 0xFF
+                         : static_cast<uint8_t>((1u << (num_paths % 8)) - 1u);
+        if (buf[i] != expected) all_ones = false;
+    }
+    if (all_ones) return {0};
+
+    PathSet result;
+    result.reserve(num_paths / 4);  // rough estimate
+    for (size_t bit = 0; bit < num_paths; ++bit) {
+        if (buf[bit / 8] & (uint8_t{1} << (bit % 8)))
+            result.push_back(static_cast<int>(bit + 1));
+    }
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 PathSet Sources::read_from_edz(size_t string_id) const {
     if (!stream_.is_open()) {
         throw std::runtime_error("EDZ stream not open");
     }
 
+    if (is_bitset_) {
+        // Bitset format: fixed-size entry at a known byte offset (no index lookup)
+        size_t bpe    = edz_bpe(num_paths_);
+        size_t offset = 24 + string_id * bpe;
+        auto target   = static_cast<std::streampos>(offset);
+        if (!stream_.good() || stream_.tellg() != target) {
+            stream_.clear();
+            stream_.seekg(target);
+        }
+        std::vector<uint8_t> buf(bpe);
+        stream_.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(bpe));
+        if (static_cast<size_t>(stream_.gcount()) != bpe) {
+            throw std::runtime_error("EDZ bitset: short read for source set " +
+                                     std::to_string(string_id));
+        }
+        return bitset_to_pathset(buf.data(), bpe, num_paths_);
+    }
+
+    // Legacy varint format
     const uint64_t offset = binary_index_[string_id].first;
     const uint32_t size   = binary_index_[string_id].second;
 
-    // Seek to the data blob (seek guard: skip if already at target)
     auto target = static_cast<std::streampos>(offset);
     if (!stream_.good() || stream_.tellg() != target) {
         stream_.clear();
         stream_.seekg(target);
     }
 
-    // Read the varint-encoded blob for this source set
     std::vector<uint8_t> buf(size);
     stream_.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(size));
     if (static_cast<uint32_t>(stream_.gcount()) != size) {
@@ -529,16 +649,13 @@ PathSet Sources::read_from_edz(size_t string_id) const {
                                  std::to_string(string_id));
     }
 
-    // Decode: first varint = path count, then count path IDs
     size_t pos = 0;
     uint64_t count = varint_decode(buf.data(), size, pos);
-
     PathSet result;
     result.reserve(static_cast<size_t>(count));
     for (uint64_t i = 0; i < count; ++i) {
         result.push_back(static_cast<int>(varint_decode(buf.data(), size, pos)));
     }
-    // Maintain PathSet invariant: sorted, deduplicated
     std::sort(result.begin(), result.end());
     result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
@@ -656,12 +773,60 @@ PathSet Sources::read_from_edz_compressed(size_t string_id) const {
 void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream& out) const {
     if (count == 0) return;
 
+    if (format_ == Format::EDZ && is_bitset_) {
+        // EDZ bitset: entries are fixed-size; copy raw bytes then re-serialise
+        // each one as SEDS text (range+complement) for the SEDS temp-file output.
+        // A future optimisation could write EDZ directly when the output is also EDZ.
+        std::lock_guard<std::mutex> lock(io_mutex_);
+        const size_t bpe = edz_bpe(num_paths_);
+        const size_t byte_start = 24 + start_idx * bpe;
+        auto target = static_cast<std::streampos>(byte_start);
+        if (!stream_.good() || stream_.tellg() != target) {
+            stream_.clear();
+            stream_.seekg(target);
+        }
+        std::vector<uint8_t> buf(bpe);
+        for (size_t i = 0; i < count; ++i) {
+            stream_.read(reinterpret_cast<char*>(buf.data()),
+                         static_cast<std::streamsize>(bpe));
+            if (static_cast<size_t>(stream_.gcount()) != bpe)
+                throw std::runtime_error("EDZ bitset copy_range: short read");
+            PathSet ps = bitset_to_pathset(buf.data(), bpe, num_paths_);
+            // Re-serialise to SEDS using range+complement encoding
+            out << '{';
+            bool is_compl = !ps.empty() && ps[0] == 0;
+            if (is_compl) {
+                out << '0';
+                // Exceptions: ps[1..]
+                int prev_end = -1;
+                for (size_t j = 1; j < ps.size(); ++j) {
+                    out << ',';
+                    int lo = ps[j], hi = lo;
+                    while (j + 1 < ps.size() && ps[j+1] == hi + 1) { ++j; ++hi; }
+                    if (hi > lo + 1) out << lo << '-' << hi;
+                    else if (hi == lo + 1) out << lo << ',' << hi;
+                    else out << lo;
+                    (void)prev_end; prev_end = hi;
+                }
+            } else {
+                for (size_t j = 0; j < ps.size(); ) {
+                    if (j > 0) out << ',';
+                    int lo = ps[j], hi = lo;
+                    while (j + 1 < ps.size() && ps[j+1] == hi + 1) { ++j; ++hi; }
+                    if (hi > lo + 1) out << lo << '-' << hi;
+                    else if (hi == lo + 1) out << lo << ',' << hi;
+                    else out << lo;
+                    ++j;
+                }
+            }
+            out << '}';
+        }
+        return;
+    }
+
     if (format_ != Format::SEDS) {
-        // Non-SEDS formats (EDZ, EDZ_COMPRESSED) do not have a file-backed
-        // byte stream for raw copying.  Fall back to the slow path: read each
-        // source set through the LRU cache and re-serialise it.  In practice
-        // these formats are not yet fully implemented, so this branch is rarely
-        // taken in production.
+        // Legacy varint EDZ or EDZ_COMPRESSED: read through LRU cache and
+        // re-serialise to SEDS text.
         for (size_t i = 0; i < count; ++i) {
             const PathSet src = read_source(start_idx + i);
             out << '{';
@@ -875,24 +1040,49 @@ PathSet Sources::intersect_sources(
     const PathSet& sources1,
     const PathSet& sources2
 ) {
-    bool sources1_has_universal = !sources1.empty() && sources1.front() == 0;
-    bool sources2_has_universal = !sources2.empty() && sources2.front() == 0;
+    // Convention: a PathSet whose first element is 0 is a complement set.
+    //   {0}          = universal (all paths) — complement of {}
+    //   {0,5,10}     = all paths EXCEPT 5 and 10
+    //   {3,7}        = exactly paths 3 and 7 (normal explicit set)
+    //
+    // 0 is never a valid path ID (path IDs are 1-indexed), so this is unambiguous.
+    //
+    // Intersection cases:
+    //   explicit  ∩ explicit    → standard std::set_intersection
+    //   compl(E1) ∩ compl(E2)  → complement of (E1 ∪ E2)   i.e. {0} + union of exceptions
+    //   compl(E)  ∩ explicit S → S \ E
+    //   explicit S ∩ compl(E)  → S \ E
 
-    if (sources1_has_universal && sources2_has_universal) {
-        return {0};
-    } else if (sources1_has_universal) {
-        return sources2;
-    } else if (sources2_has_universal) {
-        return sources1;
-    } else {
-        PathSet intersection;
-        std::set_intersection(
-            sources1.begin(), sources1.end(),
-            sources2.begin(), sources2.end(),
-            std::back_inserter(intersection)
-        );
-        return intersection;
+    bool c1 = !sources1.empty() && sources1.front() == 0;
+    bool c2 = !sources2.empty() && sources2.front() == 0;
+
+    if (!c1 && !c2) {
+        PathSet result;
+        std::set_intersection(sources1.begin(), sources1.end(),
+                              sources2.begin(), sources2.end(),
+                              std::back_inserter(result));
+        return result;
     }
+
+    if (c1 && c2) {
+        // compl(E1) ∩ compl(E2) = compl(E1 ∪ E2)
+        PathSet exceptions;
+        std::set_union(sources1.begin() + 1, sources1.end(),
+                       sources2.begin() + 1, sources2.end(),
+                       std::back_inserter(exceptions));
+        PathSet result = {0};
+        result.insert(result.end(), exceptions.begin(), exceptions.end());
+        return result;
+    }
+
+    // One complement, one explicit: result = explicit \ exceptions
+    const PathSet& compl_set = c1 ? sources1 : sources2;
+    const PathSet& expl_set  = c1 ? sources2 : sources1;
+    PathSet result;
+    std::set_difference(expl_set.begin(), expl_set.end(),
+                        compl_set.begin() + 1, compl_set.end(),
+                        std::back_inserter(result));
+    return result;
 }
 
 std::vector<PathSet> Sources::merge_adjacent_sources(
@@ -917,7 +1107,13 @@ std::vector<PathSet> Sources::merge_adjacent_sources(
         if (!src2[j].empty() && src2[j].back() > 63) use_bits = false;
 
     auto to_bits = [](const PathSet& s) -> uint64_t {
-        if (!s.empty() && s[0] == 0) return ~0ULL;
+        if (!s.empty() && s[0] == 0) {
+            // Complement set: start with all-ones and clear exception bits
+            uint64_t b = ~0ULL;
+            for (size_t i = 1; i < s.size(); ++i)
+                b &= ~(1ULL << (s[i] - 1));
+            return b;
+        }
         uint64_t b = 0;
         for (int id : s) b |= (1ULL << (id - 1));
         return b;
@@ -1019,53 +1215,63 @@ void Sources::save_seds(const std::filesystem::path& path) const {
 }
 
 void Sources::save_edz(const std::filesystem::path& path) const {
-    // Strategy: write placeholder zeros for the index section, write data blobs
-    // sequentially while recording (offset, size) per entry, then seek back and
-    // fill in the real index.  This avoids loading all blobs into memory at once
-    // while still writing a single output file with no temp files.
+    // If num_paths_ was not explicitly set (e.g. loaded from old varint-EDZ that
+    // didn't store num_paths), derive it by scanning all entries for the max path ID.
+    size_t np = num_paths_;
+    if (np == 0) {
+        for (size_t i = 0; i < cardinality_; ++i) {
+            PathSet ps = read_source(i);
+            for (int id : ps) {
+                if (id > 0 && static_cast<size_t>(id) > np)
+                    np = static_cast<size_t>(id);
+            }
+        }
+        if (np == 0) np = 1;  // degenerate fallback
+    }
+
     std::ofstream os(path, std::ios::binary);
-    if (!os.is_open()) {
-        throw std::runtime_error("Failed to open file for writing: " + path.string());
+    if (!os) throw std::runtime_error("Failed to open for writing: " + path.string());
+
+    // Write header (placeholder cardinality; filled in at the end via seekp)
+    write_edz_header(os, np);
+
+    // Write one bitset entry per source set
+    const size_t bpe = edz_bpe(np);
+    std::vector<uint8_t> buf(bpe);
+    for (size_t i = 0; i < cardinality_; ++i) {
+        const PathSet ps = read_source(i);
+        pathset_to_bitset(buf.data(), bpe, np, ps);
+        os.write(reinterpret_cast<const char*>(buf.data()),
+                 static_cast<std::streamsize>(bpe));
     }
 
-    // Header
+    write_edz_finalize(os, cardinality_);
+}
+
+// ── Static streaming write API ────────────────────────────────────────────────
+// Allows vcf2eds / msa2eds to write an EDZ file entry-by-entry during streaming
+// without building a Sources object in memory.
+
+void Sources::write_edz_header(std::ostream& os, size_t num_paths) {
     os.write("EDZ\0", 4);
-    write_le<uint16_t>(os, uint16_t{0});  // flags: uncompressed
-    write_le<uint16_t>(os, uint16_t{0});  // reserved
-    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality_));
+    write_le<uint16_t>(os, uint16_t{0x0002});   // flags: bitset format
+    write_le<uint16_t>(os, uint16_t{0});         // reserved
+    write_le<uint64_t>(os, uint64_t{0});         // cardinality placeholder
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_paths));
+}
 
-    // Placeholder index (zeros; overwritten after the data section is written)
-    const std::streamoff index_start = os.tellp();
-    for (size_t i = 0; i < cardinality_; ++i) {
-        write_le<uint64_t>(os, uint64_t{0});
-        write_le<uint32_t>(os, uint32_t{0});
-    }
+void Sources::write_edz_entry(std::ostream& os, const PathSet& paths, size_t num_paths) {
+    const size_t bpe = edz_bpe(num_paths);
+    std::vector<uint8_t> buf(bpe);
+    pathset_to_bitset(buf.data(), bpe, num_paths, paths);
+    os.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(bpe));
+}
 
-    // Data section: one blob per source set; accumulate (offset, size) for index
-    std::vector<std::pair<uint64_t, uint32_t>> idx(cardinality_);
-    std::vector<uint8_t> blob;
-
-    for (size_t i = 0; i < cardinality_; ++i) {
-        blob.clear();
-        const PathSet paths = read_source(i);
-        varint_encode(static_cast<uint64_t>(paths.size()), blob);
-        for (int id : paths) {
-            varint_encode(static_cast<uint64_t>(id), blob);
-        }
-
-        idx[i] = {static_cast<uint64_t>(os.tellp()), static_cast<uint32_t>(blob.size())};
-        if (!blob.empty()) {
-            os.write(reinterpret_cast<const char*>(blob.data()),
-                     static_cast<std::streamsize>(blob.size()));
-        }
-    }
-
-    // Seek back to the index section and write the real offsets and sizes
-    os.seekp(index_start);
-    for (size_t i = 0; i < cardinality_; ++i) {
-        write_le<uint64_t>(os, idx[i].first);
-        write_le<uint32_t>(os, idx[i].second);
-    }
+void Sources::write_edz_finalize(std::ostream& os, size_t cardinality) {
+    // Seek back to bytes [8..15] and overwrite the cardinality placeholder.
+    os.seekp(8);
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
+    os.seekp(0, std::ios::end);
 }
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {

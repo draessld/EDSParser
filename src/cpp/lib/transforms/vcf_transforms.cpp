@@ -20,6 +20,56 @@
 namespace edsparser {
 
 // ============================================================================
+// SEDS WRITE HELPERS
+// ============================================================================
+//
+// Format: {path_ids_or_ranges}
+//   Ranges:     {1-3,7}      → paths 1,2,3,7
+//   Complement: {0,5-10}     → all paths EXCEPT 5..10  (0 = complement sentinel)
+//   Universal:  {0}          → all paths
+//
+// write_seds_entry() chooses complement encoding when the set has >50% of all
+// paths, because the exception list is then smaller than the membership list.
+
+static void write_ranges(std::ostream& out, const std::set<int>& ids, bool prefix_comma = false) {
+    bool first = !prefix_comma;
+    auto it = ids.begin();
+    while (it != ids.end()) {
+        int lo = *it, hi = lo;
+        while (std::next(it) != ids.end() && *std::next(it) == hi + 1) { ++it; ++hi; }
+        if (!first) out << ',';
+        first = false;
+        if (hi > lo + 1) {          // 3+ consecutive: use a-b range notation
+            out << lo << '-' << hi;
+        } else if (hi == lo + 1) {  // exactly 2: a,b (range saves nothing)
+            out << lo << ',' << hi;
+        } else {
+            out << lo;
+        }
+        ++it;
+    }
+}
+
+static void write_seds_entry(std::ostream& out, const std::set<int>& paths, size_t total_paths) {
+    out << '{';
+    if (paths.empty()) {
+        // Should not happen; fall back to universal rather than an empty set
+        out << '0';
+    } else if (paths.size() > total_paths / 2) {
+        // Complement form: {0, exceptions...}
+        // Compute the exceptions (all path IDs in 1..total_paths not in paths)
+        std::set<int> exceptions;
+        for (int p = 1; p <= static_cast<int>(total_paths); ++p)
+            if (!paths.count(p)) exceptions.insert(p);
+        out << '0';
+        if (!exceptions.empty()) write_ranges(out, exceptions, /*prefix_comma=*/true);
+    } else {
+        write_ranges(out, paths);
+    }
+    out << '}';
+}
+
+// ============================================================================
 // HELPER STRUCTURES
 // ============================================================================
 
@@ -709,15 +759,17 @@ std::vector<VariantGroup> group_overlapping_variants(
  *         true position in the reference after this call.  It may exceed end_pos
  *         when a variant's REF span crosses the block boundary.
  */
-std::pair<size_t, size_t> generate_eds_from_variants(
+// Returns {num_groups, new_write_pos, seds_entry_count}
+std::tuple<size_t, size_t, size_t> generate_eds_from_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     const std::vector<VCFVariant>& variants,
-    [[maybe_unused]] size_t n_samples,
+    size_t n_samples,
     std::ostream& eds_out,
     std::ostream& seds_out,
     size_t start_pos,
-    size_t end_pos)
+    size_t end_pos,
+    Sources::Format seds_format = Sources::Format::SEDS)
 {
 
     // Group overlapping variants
@@ -726,6 +778,26 @@ std::pair<size_t, size_t> generate_eds_from_variants(
 
     size_t current_pos = start_pos;  // Start from provided position
 
+    // Helper: write one source entry in the chosen format, counting all writes.
+    const PathSet universal_ps{0};
+    size_t seds_entries = 0;
+    auto write_source = [&](const PathSet& ps) {
+        if (seds_format == Sources::Format::EDZ) {
+            Sources::write_edz_entry(seds_out, ps, n_samples);
+        } else {
+            write_seds_entry(seds_out, std::set<int>(ps.begin(), ps.end()), n_samples);
+        }
+        ++seds_entries;
+    };
+    auto write_source_set = [&](const std::set<int>& s) {
+        if (seds_format == Sources::Format::EDZ) {
+            Sources::write_edz_entry(seds_out, PathSet(s.begin(), s.end()), n_samples);
+        } else {
+            write_seds_entry(seds_out, s, n_samples);
+        }
+        ++seds_entries;
+    };
+
     for (const auto& group : groups) {
         // Flush reference region before this variant group
         if (group.start_pos > current_pos) {
@@ -733,7 +805,7 @@ std::pair<size_t, size_t> generate_eds_from_variants(
                                                         current_pos, group.start_pos - current_pos);
             if (!ref_region.empty()) {
                 eds_out << '{' << ref_region << '}';
-                seds_out << "{0}";  // Universal path for common regions
+                write_source(universal_ps);
             }
             current_pos = group.start_pos;
         }
@@ -769,12 +841,8 @@ std::pair<size_t, size_t> generate_eds_from_variants(
                 }
             }
             eds_out << '}';
-            // Emit one {0} per haplotype so SEDS cardinality == EDS string count.
-            // A single {0} would cause EDS::load to throw on cardinality mismatch
-            // whenever the degenerate symbol has more than one alternative.
-            for (size_t i = 0; i < group.merged_haplotypes.size(); i++) {
-                seds_out << "{0}";
-            }
+            for (size_t i = 0; i < group.merged_haplotypes.size(); i++)
+                write_source(universal_ps);
 
             current_pos = group.end_pos;
             continue;
@@ -798,23 +866,8 @@ std::pair<size_t, size_t> generate_eds_from_variants(
         }
         eds_out << '}';
 
-        // Output sources
-        for (const auto& [haplotype, samples] : ordered_haplotypes) {
-            seds_out << '{';
-            if (samples.empty()) {
-                // No samples have this haplotype - should not happen, but use universal path
-                seds_out << '0';
-            } else {
-                auto it = samples.begin();
-                for (size_t i = 0; i < samples.size(); i++, it++) {
-                    seds_out << *it;
-                    if (i < samples.size() - 1) {
-                        seds_out << ',';
-                    }
-                }
-            }
-            seds_out << '}';
-        }
+        for (const auto& [haplotype, samples] : ordered_haplotypes)
+            write_source_set(samples);
 
         // Update position to end of this variant group
         current_pos = group.end_pos;
@@ -827,7 +880,7 @@ std::pair<size_t, size_t> generate_eds_from_variants(
                                                     current_pos, flush_end - current_pos);
         if (!ref_region.empty()) {
             eds_out << '{' << ref_region << '}';
-            seds_out << "{0}";
+            write_source(universal_ps);
         }
         current_pos = flush_end;
     }
@@ -836,7 +889,7 @@ std::pair<size_t, size_t> generate_eds_from_variants(
     // current_pos may exceed end_pos when a variant's REF spans past the block
     // boundary; the caller must use it as start_pos for the next block so the
     // reference region is not emitted a second time.
-    return {num_groups, current_pos};
+    return {num_groups, current_pos, seds_entries};
 }
 
 // ============================================================================
@@ -852,10 +905,17 @@ void parse_vcf_to_eds_streaming(
     std::ostream& eds_output,
     std::ostream& seds_output,
     VCFStats* stats,
-    size_t block_size)
+    size_t block_size,
+    Sources::Format seds_format)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
+
+    // For EDZ format: write placeholder header (num_paths unknown until VCF is parsed;
+    // will be patched at the end via seekp).
+    if (seds_format == Sources::Format::EDZ) {
+        Sources::write_edz_header(seds_output, /*num_paths_placeholder=*/0);
+    }
 
     size_t n_samples = 0;
     size_t total_variant_groups = 0;
@@ -894,6 +954,7 @@ void parse_vcf_to_eds_streaming(
     // block boundary; the next generate_eds_from_variants call must start here
     // (not at current_block_start) to avoid re-emitting that reference region.
     size_t actual_write_pos = 0;
+    size_t total_seds_entries = 0;
 
     bool vcf_finished = false;
 
@@ -1027,11 +1088,12 @@ void parse_vcf_to_eds_streaming(
         // Generate EDS for this block and count groups.
         // Pass actual_write_pos (not current_block_start) so that a variant whose
         // REF extended past the previous block boundary is not re-emitted here.
-        auto [block_groups, new_write_pos] = generate_eds_from_variants(
+        auto [block_groups, new_write_pos, block_seds_entries] = generate_eds_from_variants(
             fasta_stream, fasta_meta, block_variants, n_samples,
             eds_output, seds_output,
-            actual_write_pos, current_block_end);
+            actual_write_pos, current_block_end, seds_format);
         actual_write_pos = new_write_pos;
+        total_seds_entries += block_seds_entries;
 
         // Flush output to disk after each block (prevent memory accumulation)
         eds_output.flush();
@@ -1058,6 +1120,20 @@ void parse_vcf_to_eds_streaming(
     // Update variant groups count
     if (stats) {
         stats->variant_groups = total_variant_groups;
+    }
+
+    // EDZ: patch the 24-byte header with the now-known cardinality and num_paths.
+    if (seds_format == Sources::Format::EDZ) {
+        seds_output.flush();
+        auto write_u64le = [&](std::streamoff off, uint64_t v) {
+            uint8_t buf[8];
+            for (int i = 0; i < 8; ++i) buf[i] = static_cast<uint8_t>(v >> (8 * i));
+            seds_output.seekp(off);
+            seds_output.write(reinterpret_cast<const char*>(buf), 8);
+        };
+        write_u64le(8,  static_cast<uint64_t>(total_seds_entries));  // cardinality
+        write_u64le(16, static_cast<uint64_t>(n_samples));            // num_paths
+        seds_output.seekp(0, std::ios::end);
     }
 
     // Final flush

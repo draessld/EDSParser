@@ -38,7 +38,8 @@ void test_msa_to_eds() {
 
     // Expected outputs
     std::string expected_eds = "{AGTC}{,CC}{T}{C,A}{TATA}";
-    std::string expected_seds = "{0}{1,3}{2}{0}{1}{2,3}{0}";
+    // {1,3} and {2,3} are majority sets (2/3 paths > 50%) → complement form
+    std::string expected_seds = "{0}{0,2}{2}{0}{1}{0,1}{0}";
 
     std::cout << "  Generated EDS:  " << eds_str << "\n";
     std::cout << "  Expected EDS:   " << expected_eds << "\n";

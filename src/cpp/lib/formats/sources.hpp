@@ -21,19 +21,34 @@ using PathSet = std::vector<int>;
  * Uses streaming architecture with LRU cache for memory-efficient access.
  * Sources are streamed from disk on-demand rather than loaded into RAM.
  *
- * Supports multiple formats:
- * - SEDS: Text format {path_ids}{path_ids}... (currently implemented)
- * - EDZ: Binary format with varint encoding (future)
- * - EDZ_COMPRESSED: Binary format with zstd compression (future)
+ * Supported formats:
+ * - SEDS: Text format with range+complement encoding: {0}{1-3,7}{0,100-500}
+ *     0 = universal set (all paths); {0,e1,e2} = complement (all except e1,e2)
+ * - EDZ: Binary bitset format — each entry is ceil(num_paths/8) bytes;
+ *     bit k (0-indexed, LSB-first) = path ID (k+1) in set; all-ones = universal.
+ *     No index section; O(1) random access by byte-offset arithmetic.
+ *     24-byte header: magic(4) + flags(2,=0x0002) + reserved(2) +
+ *                     cardinality(8) + num_paths(8)
+ * - EDZ_COMPRESSED: planned (zstd compression of EDZ data section)
  */
 class Sources {
 public:
     // Format enum
     enum class Format {
-        SEDS,             // Text format (default, backward compatible)
-        EDZ,              // Binary format with varint encoding (not yet implemented)
-        EDZ_COMPRESSED    // Binary format with zstd block compression (not yet implemented)
+        SEDS,             // Text format with range+complement encoding
+        EDZ,              // Binary bitset format (implemented)
+        EDZ_COMPRESSED    // Binary format with zstd block compression (planned)
     };
+
+    // ── Streaming EDZ write API ───────────────────────────────────────────────
+    // Used by vcf2eds/msa2eds to write EDZ directly during streaming output
+    // without constructing a Sources object.  Call in order:
+    //   1. write_edz_header(os, num_paths)  — writes 24-byte placeholder header
+    //   2. write_edz_entry(os, paths, num_paths)  — one call per EDS string
+    //   3. write_edz_finalize(os, cardinality)  — seeks back, fills cardinality
+    static void write_edz_header  (std::ostream& os, size_t num_paths);
+    static void write_edz_entry   (std::ostream& os, const PathSet& paths, size_t num_paths);
+    static void write_edz_finalize(std::ostream& os, size_t cardinality);
 
     // Construction
     explicit Sources(size_t cardinality, Format format = Format::SEDS);
@@ -107,6 +122,10 @@ public:
     // Query
     size_t cardinality() const { return cardinality_; }
     Format get_format() const { return format_; }
+    size_t num_paths() const { return num_paths_; }
+
+    // Set num_paths — required before save_edz() when building Sources in-memory
+    void set_num_paths(size_t n) { num_paths_ = n; }
 
     // Cache management
     void set_cache_capacity(size_t capacity);
@@ -117,8 +136,10 @@ public:
 
 private:
     // Core data
-    size_t cardinality_;                    // Number of strings (m)
-    Format format_;
+    size_t   cardinality_;                  // Number of strings (m)
+    Format   format_;
+    size_t   num_paths_ = 0;               // Total path count (required for EDZ bitset)
+    bool     is_bitset_ = false;           // true → EDZ bitset format (flags & 0x0002)
 
     // Streaming support
     std::filesystem::path file_path_;
@@ -126,7 +147,20 @@ private:
 
     // Index data structures (format-specific)
     std::vector<std::streampos> base_positions_;           // For .seds: file position per source
-    std::vector<std::pair<uint64_t, uint32_t>> binary_index_;  // For .edz: (offset, size) per source
+    std::vector<std::pair<uint64_t, uint32_t>> binary_index_;  // For varint .edz: (offset, size)
+
+    // ── EDZ bitset helpers ────────────────────────────────────────────────────
+    static size_t edz_bpe(size_t num_paths) { return (num_paths + 7) / 8; }
+
+    // Encode a PathSet into a zeroed bitset buffer of `bpe` bytes.
+    // PathSet{0} (universal) → all-ones.  PathSet{0,e1,e2} (complement) → all-ones
+    // except bits for e1,e2.  Explicit PathSet{p1,p2} → set bits p1-1,p2-1.
+    static void pathset_to_bitset(uint8_t* buf, size_t bpe, size_t num_paths,
+                                  const PathSet& ps);
+
+    // Decode a bitset buffer of `bpe` bytes into a PathSet.
+    // All-ones → PathSet{0} (universal).  Otherwise builds explicit list.
+    static PathSet bitset_to_pathset(const uint8_t* buf, size_t bpe, size_t num_paths);
 
     // LRU cache
     struct CacheEntry {
