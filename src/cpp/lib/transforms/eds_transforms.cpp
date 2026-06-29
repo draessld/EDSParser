@@ -57,314 +57,346 @@ namespace {
         ADJACENT_COMMON,
     };
 
-    /**
-     * Represents a pair of adjacent positions to merge
-     */
-    struct MergePair {
-        size_t pos1;
-        size_t pos2;
-        MergeReason reason;
+    // A contiguous run of positions that should all be merged into one output symbol.
+    // Chain detection (select_merge_groups) extends greedily: if pair (i,i+1) and
+    // pair (i+1,i+2) both need merging, they form one group of count=3, not two
+    // separate pairs.  This is the core of the O(chain_length) → O(1) iteration fix.
+    struct MergeGroup {
+        size_t start;   // first position in the group
+        size_t count;   // number of consecutive positions (>= 2)
+        MergeReason reason;  // primary reason (from the first pair in the chain)
 
-        MergePair(size_t p1, size_t p2, MergeReason r)
-            : pos1(p1), pos2(p2), reason(r) {}
+        MergeGroup(size_t s, size_t c, MergeReason r)
+            : start(s), count(c), reason(r) {}
     };
 
-    /**
-     * Result of merging a pair of positions (OLD: for backward compatibility)
-     */
-    struct MergeResult {
-        size_t original_pos1;
-        size_t original_pos2;
-        StringSet merged_set;
-        std::vector<PathSet> merged_sources;  // Empty if no sources
-    };
-
-    /**
-     * Metadata-only result of merging a pair of positions
-     * This struct contains NO string data - only metadata for memory-efficient processing
-     */
+    // Metadata-only result of merging a group of positions.
+    // Contains NO string data — strings are read on-demand during streaming.
+    //
+    // valid_indices_flat encodes, for each output string m and group position k,
+    // which alternative to pick:  valid_indices_flat[m * group_count + k] is the
+    // index into input_eds.read_symbol(group_start + k).
+    // For a 2-position group this is equivalent to the old (i, j) pair encoding.
     struct MergeMetadata {
-        size_t original_pos1;
-        size_t original_pos2;
-        size_t merged_size;  // Number of strings in merged symbol
-        std::vector<Length> merged_string_lengths;  // Length of each string (no actual strings)
-        std::vector<PathSet> merged_sources;  // Empty if no sources
-        std::vector<std::pair<size_t, size_t>> valid_indices;  // (i,j) pairs for LINEAR merge
+        size_t group_start;   // first position in the merged group
+        size_t group_count;   // number of positions merged (>= 2)
+        size_t merged_size;   // number of strings in the merged output symbol
+        std::vector<Length> merged_string_lengths;
+        std::vector<PathSet> merged_sources;     // empty if no source tracking
+        std::vector<size_t>  valid_indices_flat; // size = merged_size * group_count
     };
     
 
-    /**
-     * Select independent pairs of adjacent positions to merge in parallel.
-     *
-     * Strategy: Greedy left-to-right selection, choosing pairs where merging
-     * would help satisfy the l-EDS property. Ensures no overlapping positions
-     * so parallel merging is safe.
-     *
-     * @param eds The EDS to analyze
-     * @param context_length Minimum context length l
-     * @return Vector of non-overlapping merge pairs
-     */
-    std::vector<MergePair> select_independent_merge_pairs(
+    // Returns {true, reason} if positions i and i+1 need to be merged.
+    // Same four conditions as before; extracted so chain detection can reuse them.
+    std::pair<bool, MergeReason> needs_merge(
+        const EDS& eds,
+        size_t i,
+        Length context_length
+    ) {
+        const size_t n = eds.length();
+        const auto& is_degenerate = eds.get_metadata().is_degenerate;
+
+        bool left_short  = false;
+        bool right_short = false;
+        bool adj_degen   = (is_degenerate[i] && is_degenerate[i + 1]);
+        bool adj_common  = (!is_degenerate[i] && !is_degenerate[i + 1]);
+
+        if (!is_degenerate[i] && i > 0 && i < n - 1) {
+            size_t g = eds.get_metadata().cum_set_sizes[i];
+            if (eds.get_string_length(g) < context_length) left_short = true;
+        }
+        if (!is_degenerate[i + 1] && (i + 1) > 0 && (i + 1) < n - 1) {
+            size_t g = eds.get_metadata().cum_set_sizes[i + 1];
+            if (eds.get_string_length(g) < context_length) right_short = true;
+        }
+
+        if (!(left_short || right_short || adj_degen || adj_common))
+            return {false, MergeReason::ADJACENT_DEGENERATE};
+
+        MergeReason reason;
+        if (adj_degen)       reason = MergeReason::ADJACENT_DEGENERATE;
+        else if (adj_common) reason = MergeReason::ADJACENT_COMMON;
+        else if (left_short) reason = MergeReason::SHORT_COMMON_LEFT;
+        else                 reason = MergeReason::SHORT_COMMON_RIGHT;
+
+        return {true, reason};
+    }
+
+    // Select merge groups: maximal contiguous chains where every adjacent pair
+    // needs merging.  Each chain becomes ONE output symbol in a single pass.
+    //
+    // Old approach (select_independent_merge_pairs): picked only non-overlapping
+    // adjacent PAIRS, so a chain of length L required L-1 iterations, each
+    // writing the entire file.  This function instead extends greedily:
+    //
+    //   i=0, found (0,1) needs merge → scan forward while (j, j+1) needs merge
+    //   → emit MergeGroup{0, chain_length, reason}
+    //   → jump past the group and continue
+    //
+    // Result: O(chain_length) → O(1) iterations for typical genomic data.
+    std::vector<MergeGroup> select_merge_groups(
         const EDS& eds,
         Length context_length
     ) {
-        std::vector<MergePair> pairs;
+        std::vector<MergeGroup> groups;
 
-        if (eds.length() < 2) {
-            return pairs;  // Need at least 2 positions to merge
-        }
+        if (eds.length() < 2) return groups;
 
-        // Get degenerate flags from metadata
-        const auto& is_degenerate = eds.get_metadata().is_degenerate;
-
-        // Track which positions are already included in pairs
-        std::vector<bool> used(eds.length(), false);
-
-        // Greedy left-to-right selection
-        for (size_t i = 0; i + 1 < eds.length(); ++i) {
-            if (used[i] || used[i + 1]) {
-                continue;  // Position already in a pair
-            }
-
-            // Merge when it fixes an l-EDS violation OR removes a non-canonical
-            // adjacent-common pair. Cases to merge:
-            // 1. Internal common block with length < l
-            // 2. Two adjacent degenerate symbols (implicit empty common block)
-            // 3. Two adjacent common blocks (non-canonical; lossy in compact form)
-            bool should_merge = false;
-
-            bool left_short = false;   // pos i is a short common block
-            bool right_short = false;  // pos i+1 is a short common block
-            bool adj_degen = false;    // both are degenerate
-            // Both non-degenerate: coalesce regardless of length. An EDS in
-            // canonical form never has two adjacent common blocks; leaving them
-            // separate corrupts compact serialisation (see MergeReason docs).
-            bool adj_common = (!is_degenerate[i] && !is_degenerate[i + 1]);
-
-            // Check if position i is an internal common block that's too short
-            if (!is_degenerate[i] && i > 0 && i < eds.length() - 1) {
-                size_t global_idx1 = eds.get_metadata().cum_set_sizes[i];
-                Length len1 = eds.get_string_length(global_idx1);
-                if (len1 < context_length) {
-                    left_short = true;
+        size_t i = 0;
+        const size_t n = eds.length();
+        while (i + 1 < n) {
+            auto [merge, reason] = needs_merge(eds, i, context_length);
+            if (merge) {
+                size_t group_start = i;
+                // Extend the chain as far as consecutive pairs also need merging.
+                while (i + 2 < n) {
+                    auto [merge_next, ignored] = needs_merge(eds, i + 1, context_length);
+                    if (!merge_next) break;
+                    ++i;
                 }
-            }
-
-            // Check if position i+1 is an internal common block that's too short
-            if (!is_degenerate[i + 1] && (i + 1) > 0 && (i + 1) < eds.length() - 1) {
-                size_t global_idx2 = eds.get_metadata().cum_set_sizes[i + 1];
-                Length len2 = eds.get_string_length(global_idx2);
-                if (len2 < context_length) {
-                    right_short = true;
-                }
-            }
-
-            // Check if both positions are degenerate (implicit empty common)
-            if (is_degenerate[i] && is_degenerate[i + 1]) {
-                adj_degen = true;
-            }
-
-            should_merge = left_short || right_short || adj_degen || adj_common;
-
-            if (should_merge) {
-                MergeReason reason;
-                if (adj_degen)
-                    reason = MergeReason::ADJACENT_DEGENERATE;
-                else if (adj_common)
-                    // Both common — subsumes the both-short case; merge regardless
-                    // of length to keep the canonical (no-adjacent-commons) form.
-                    reason = MergeReason::ADJACENT_COMMON;
-                else if (left_short)
-                    // i is a short common, i+1 is degenerate.
-                    reason = MergeReason::SHORT_COMMON_LEFT;
-                else
-                    // i is degenerate, i+1 is a short common.
-                    reason = MergeReason::SHORT_COMMON_RIGHT;
-
-                pairs.emplace_back(i, i + 1, reason);
-                used[i] = true;
-                used[i + 1] = true;
+                size_t group_count = (i + 1) - group_start + 1;  // inclusive [start, i+1]
+                groups.emplace_back(group_start, group_count, reason);
+                i += 2;  // jump past the last position in the group
+            } else {
+                ++i;
             }
         }
 
-        return pairs;
+        return groups;
     }
 
-    /**
-     * Compute merge metadata for multiple pairs WITHOUT building string data.
-     * This is the memory-efficient version that works with METADATA_ONLY mode.
-     *
-     * Strategy: Calculate merged sizes, lengths, and sources using only metadata.
-     * No actual string concatenation occurs - strings are read on-demand during output streaming.
-     *
-     * @param eds The original EDS (can be METADATA_ONLY mode)
-     * @param pairs Vector of non-overlapping merge pairs
-     * @param num_threads Number of threads to use (1 = sequential)
-     * @return Vector of metadata-only merge results
-     */
+    // Compute merge metadata for a vector of MergeGroups WITHOUT building string data.
+    // Works with METADATA_ONLY mode; strings are read on-demand later during streaming.
+    //
+    // For each group [p₀, p₁, ..., pₖ] the result is computed by an iterative fold:
+    //   step 0: initialise accumulator from p₀
+    //   step j: for each (accumulated string m, alternative j in pⱼ), check source
+    //           compatibility and keep only valid combinations; accumulate lengths.
+    //
+    // valid_indices_flat[m * group_count + k] = which alternative from position
+    // (group_start + k) contributes to output string m.  The streaming function
+    // reads all group positions on-demand and concatenates the indicated alternatives.
     std::vector<MergeMetadata> compute_merge_metadata(
         const EDS& eds,
-        const std::vector<MergePair>& pairs,
+        const std::vector<MergeGroup>& groups,
         size_t num_threads
     ) {
-        std::vector<MergeMetadata> results(pairs.size());
+        std::vector<MergeMetadata> results(groups.size());
 
-        // Hoist invariants out of the per-pair lambda.
         const bool has_sources = eds.has_sources();
         const auto& metadata   = eds.get_metadata();
 
-        // --- Source preloading (LINEAR mode + parallel only) ---
-        //
-        // When num_threads > 1, every read_source() call inside the parallel
-        // region acquires Sources::io_mutex_, serialising all workers onto a
-        // single lock — making --threads effectively useless for LINEAR mode.
-        //
-        // Fix: read every source set we need in a single-threaded pass *before*
-        // the parallel region and store the results in a flat hash map keyed by
-        // global string index.  Workers then read from preloaded (no mutex).
-        // unordered_map read-only access is safe under concurrent reads.
+        // Bitset helpers (used in the per-group lambda below).
+        // Path IDs are 1-based; ID 0 is the sentinel "universal" source.
+        auto to_bits = [](const PathSet& s) -> uint64_t {
+            if (!s.empty() && s[0] == 0) return ~0ULL;
+            uint64_t b = 0;
+            for (int id : s) b |= (1ULL << (id - 1));
+            return b;
+        };
+        auto bits_to_set = [](uint64_t b) -> PathSet {
+            if (b == ~0ULL) return {0};
+            PathSet s;
+            for (int k = 0; k < 63; ++k)
+                if (b & (1ULL << k)) s.push_back(k + 1);
+            return s;
+        };
+
+        // Preload all needed source sets before the parallel region so that
+        // workers can read from the map lock-free instead of going through
+        // Sources::io_mutex_ on every read_source() call.
         std::unordered_map<size_t, PathSet> preloaded;
 #ifdef _OPENMP
-        if (has_sources && num_threads > 1 && !pairs.empty()) {
-            // Reserve to avoid rehashing during sequential population.
+        if (has_sources && num_threads > 1 && !groups.empty()) {
             size_t total_strings = 0;
-            for (const auto& p : pairs)
-                total_strings += metadata.symbol_sizes[p.pos1] + metadata.symbol_sizes[p.pos2];
+            for (const auto& g : groups)
+                for (size_t k = 0; k < g.count; ++k)
+                    total_strings += metadata.symbol_sizes[g.start + k];
             preloaded.reserve(total_strings);
 
-            for (const auto& p : pairs) {
-                size_t idx1 = metadata.cum_set_sizes[p.pos1], sz1 = metadata.symbol_sizes[p.pos1];
-                size_t idx2 = metadata.cum_set_sizes[p.pos2], sz2 = metadata.symbol_sizes[p.pos2];
-                for (size_t i = 0; i < sz1; ++i) preloaded.emplace(idx1 + i, eds.read_source(idx1 + i));
-                for (size_t j = 0; j < sz2; ++j) preloaded.emplace(idx2 + j, eds.read_source(idx2 + j));
-            }
+            for (const auto& g : groups)
+                for (size_t k = 0; k < g.count; ++k) {
+                    size_t pj = g.start + k;
+                    size_t gj = metadata.cum_set_sizes[pj];
+                    size_t szj = metadata.symbol_sizes[pj];
+                    for (size_t j = 0; j < szj; ++j)
+                        preloaded.emplace(gj + j, eds.read_source(gj + j));
+                }
         }
 #endif
 
-        // Lambda: uses preloaded map when populated (parallel path, lock-free),
-        // or falls back to eds.read_source() (sequential path, LRU cache + mutex).
-        auto compute_pair_metadata = [&](const MergePair& pair) -> MergeMetadata {
+        // Returns the source PathSet for global string index idx.
+        // Lock-free when preloaded is populated (parallel path); otherwise
+        // falls back to eds.read_source() with LRU cache + mutex.
+        auto get_src = [&](size_t idx) -> PathSet {
+            if (!preloaded.empty()) return preloaded.at(idx);
+            return eds.read_source(idx);
+        };
+
+        // Per-group computation — runs in parallel when num_threads > 1.
+        // Computes the merged metadata by iterative fold over the group positions.
+        auto compute_group_metadata = [&](const MergeGroup& group) -> MergeMetadata {
             MergeMetadata result;
-            result.original_pos1 = pair.pos1;
-            result.original_pos2 = pair.pos2;
+            result.group_start = group.start;
+            result.group_count = group.count;
 
-            size_t global_string_idx1 = metadata.cum_set_sizes[pair.pos1];
-            size_t global_string_idx2 = metadata.cum_set_sizes[pair.pos2];
-            size_t set1_size = metadata.symbol_sizes[pair.pos1];
-            size_t set2_size = metadata.symbol_sizes[pair.pos2];
+            // ── Initialise accumulator from position p₀ ─────────────────────
+            size_t p0 = group.start;
+            size_t g0 = metadata.cum_set_sizes[p0];
+            size_t sz0 = metadata.symbol_sizes[p0];
 
-            if (!has_sources) {
-                // CARTESIAN merge: size is product of set sizes
-                result.merged_size = set1_size * set2_size;
+            size_t cur_size = sz0;
+            std::vector<Length> cur_lengths(sz0);
+            // cur_flat: flat index array with stride = current fold step.
+            // cur_flat[m * step + k] = which alternative from position (p0+k)
+            // contributes to accumulated string m.  Stride grows by 1 each fold.
+            std::vector<size_t> cur_flat(sz0);
+            for (size_t m = 0; m < sz0; ++m) {
+                cur_lengths[m] = metadata.string_lengths[g0 + m];
+                cur_flat[m]    = m;  // step=1: only position p0, index = m itself
+            }
 
-                result.merged_string_lengths.reserve(result.merged_size);
-                result.valid_indices.reserve(result.merged_size);
-                for (size_t i = 0; i < set1_size; ++i) {
-                    Length len1 = metadata.string_lengths[global_string_idx1 + i];
-                    for (size_t j = 0; j < set2_size; ++j) {
-                        Length len2 = metadata.string_lengths[global_string_idx2 + j];
-                        result.merged_string_lengths.push_back(len1 + len2);
-                        result.valid_indices.push_back({i, j});
-                    }
+            // Source accumulator for LINEAR mode.
+            // use_bits stays true as long as all path IDs fit in [1,63].
+            // If a position breaks the invariant we switch cur_bits → cur_src_sets.
+            bool use_bits = has_sources;
+            std::vector<uint64_t> cur_bits;
+            std::vector<PathSet>  cur_src_sets;
+
+            if (has_sources) {
+                std::vector<PathSet> src0(sz0);
+                for (size_t m = 0; m < sz0; ++m) {
+                    src0[m] = get_src(g0 + m);
+                    if (use_bits && !src0[m].empty() && src0[m][0] != 0 && src0[m].back() > 63)
+                        use_bits = false;
                 }
-            } else {
-                // LINEAR merge: only keep valid combinations (non-empty source intersection).
-
-                // Read sources from preloaded (no mutex) when available, otherwise
-                // fall back to eds.read_source() which holds Sources::io_mutex_.
-                auto get_src = [&](size_t idx) -> PathSet {
-                    if (!preloaded.empty()) return preloaded.at(idx);
-                    return eds.read_source(idx);
-                };
-
-                std::vector<PathSet> src1(set1_size), src2(set2_size);
-                for (size_t i = 0; i < set1_size; ++i) src1[i] = get_src(global_string_idx1 + i);
-                for (size_t j = 0; j < set2_size; ++j) src2[j] = get_src(global_string_idx2 + j);
-
-                // Bitset fast path: if all path IDs fit in [1, 63], represent each
-                // source set as a uint64_t bitmask.  Intersection = bitwise AND: O(1).
-                // PathSet is sorted, so max element is at back() — O(1) check per set.
-                bool use_bits = true;
-                for (size_t i = 0; i < set1_size && use_bits; ++i)
-                    if (!src1[i].empty() && src1[i].back() > 63) use_bits = false;
-                for (size_t j = 0; j < set2_size && use_bits; ++j)
-                    if (!src2[j].empty() && src2[j].back() > 63) use_bits = false;
-
-                auto to_bits = [](const PathSet& s) -> uint64_t {
-                    if (!s.empty() && s[0] == 0) return ~0ULL;
-                    uint64_t b = 0;
-                    for (int id : s) b |= (1ULL << (id - 1));
-                    return b;
-                };
-                // Produces a sorted PathSet (k increases 0..62 → IDs 1..63 in order).
-                auto bits_to_set = [](uint64_t b) -> PathSet {
-                    if (b == ~0ULL) return {0};
-                    PathSet s;
-                    for (int k = 0; k < 63; ++k)
-                        if (b & (1ULL << k)) s.push_back(k + 1);
-                    return s;
-                };
-
-                std::vector<uint64_t> bits1, bits2;
                 if (use_bits) {
-                    bits1.resize(set1_size); bits2.resize(set2_size);
-                    for (size_t i = 0; i < set1_size; ++i) bits1[i] = to_bits(src1[i]);
-                    for (size_t j = 0; j < set2_size; ++j) bits2[j] = to_bits(src2[j]);
+                    cur_bits.resize(sz0);
+                    for (size_t m = 0; m < sz0; ++m) cur_bits[m] = to_bits(src0[m]);
+                } else {
+                    cur_src_sets = std::move(src0);
                 }
+            }
 
-                result.merged_sources.reserve(set1_size * set2_size);
-                result.merged_string_lengths.reserve(set1_size * set2_size);
-                result.valid_indices.reserve(set1_size * set2_size);
+            // ── Fold in positions p₁, p₂, … ─────────────────────────────────
+            for (size_t step = 1; step < group.count; ++step) {
+                size_t pj  = group.start + step;
+                size_t gj  = metadata.cum_set_sizes[pj];
+                size_t szj = metadata.symbol_sizes[pj];
 
-                for (size_t i = 0; i < set1_size; ++i) {
-                    Length len1 = metadata.string_lengths[global_string_idx1 + i];
-                    for (size_t j = 0; j < set2_size; ++j) {
-                        Length len2 = metadata.string_lengths[global_string_idx2 + j];
-                        if (use_bits) {
-                            uint64_t a = bits1[i], b = bits2[j];
-                            uint64_t isect = (a == ~0ULL) ? b : (b == ~0ULL) ? a : a & b;
-                            if (isect == 0) continue;
-                            result.merged_sources.push_back(bits_to_set(isect));
-                        } else {
-                            PathSet isect = Sources::intersect_sources(src1[i], src2[j]);
-                            if (isect.empty()) continue;
-                            result.merged_sources.push_back(std::move(isect));
-                        }
-                        result.merged_string_lengths.push_back(len1 + len2);
-                        result.valid_indices.push_back({i, j});
+                // Load sources for this position and check bitset applicability.
+                std::vector<PathSet>  srcj;
+                std::vector<uint64_t> bitsj;
+                if (has_sources) {
+                    srcj.resize(szj);
+                    for (size_t j = 0; j < szj; ++j) {
+                        srcj[j] = get_src(gj + j);
+                        if (use_bits && !srcj[j].empty() && srcj[j][0] != 0 && srcj[j].back() > 63)
+                            use_bits = false;
+                    }
+                    // If this position broke use_bits, convert cur_bits → cur_src_sets now.
+                    if (!use_bits && !cur_bits.empty()) {
+                        cur_src_sets.resize(cur_size);
+                        for (size_t m = 0; m < cur_size; ++m)
+                            cur_src_sets[m] = bits_to_set(cur_bits[m]);
+                        cur_bits.clear();
+                    }
+                    if (use_bits) {
+                        bitsj.resize(szj);
+                        for (size_t j = 0; j < szj; ++j) bitsj[j] = to_bits(srcj[j]);
                     }
                 }
 
-                result.merged_size = result.merged_sources.size();
+                size_t new_stride   = step + 1;
+                size_t new_max_size = cur_size * szj;
 
-                if (result.merged_size == 0) {
+                std::vector<Length>   new_lengths;
+                std::vector<size_t>   new_flat;
+                std::vector<uint64_t> new_bits;
+                std::vector<PathSet>  new_src;
+
+                new_lengths.reserve(new_max_size);
+                new_flat.reserve(new_max_size * new_stride);
+                if (has_sources) {
+                    if (use_bits) new_bits.reserve(new_max_size);
+                    else          new_src.reserve(new_max_size);
+                }
+
+                for (size_t m = 0; m < cur_size; ++m) {
+                    Length base_len = cur_lengths[m];
+                    for (size_t j = 0; j < szj; ++j) {
+                        if (has_sources) {
+                            if (use_bits) {
+                                uint64_t a = cur_bits[m], b = bitsj[j];
+                                uint64_t isect = (a == ~0ULL) ? b
+                                               : (b == ~0ULL) ? a
+                                               : a & b;
+                                if (isect == 0) continue;
+                                new_bits.push_back(isect);
+                            } else {
+                                PathSet isect = Sources::intersect_sources(cur_src_sets[m], srcj[j]);
+                                if (isect.empty()) continue;
+                                new_src.push_back(std::move(isect));
+                            }
+                        }
+                        new_lengths.push_back(base_len + metadata.string_lengths[gj + j]);
+                        // Copy the prev-step index tuple for m, then append j.
+                        for (size_t k = 0; k < step; ++k)
+                            new_flat.push_back(cur_flat[m * step + k]);
+                        new_flat.push_back(j);
+                    }
+                }
+
+                cur_size     = new_lengths.size();
+                cur_lengths  = std::move(new_lengths);
+                cur_flat     = std::move(new_flat);
+                if (has_sources) {
+                    cur_bits     = std::move(new_bits);
+                    cur_src_sets = std::move(new_src);
+                }
+
+                if (cur_size == 0) {
                     throw std::runtime_error(
-                        "Merging positions " + std::to_string(pair.pos1) + " and " +
-                        std::to_string(pair.pos2) + " results in empty set "
-                        "(no valid source intersections)"
+                        "Merging group at position " + std::to_string(group.start) +
+                        " (count=" + std::to_string(group.count) +
+                        ") produced an empty set after folding position " +
+                        std::to_string(pj) + " (no valid source intersections)"
                     );
+                }
+            }
+
+            // ── Build final result ──────────────────────────────────────────
+            result.merged_size           = cur_size;
+            result.merged_string_lengths = std::move(cur_lengths);
+            result.valid_indices_flat    = std::move(cur_flat);
+
+            if (has_sources) {
+                result.merged_sources.resize(cur_size);
+                if (use_bits) {
+                    for (size_t m = 0; m < cur_size; ++m)
+                        result.merged_sources[m] = bits_to_set(cur_bits[m]);
+                } else {
+                    result.merged_sources = std::move(cur_src_sets);
                 }
             }
 
             return result;
         };
 
-        // Process pairs in parallel or sequentially
-        if (num_threads <= 1 || pairs.empty()) {
-            for (size_t i = 0; i < pairs.size(); ++i) {
-                results[i] = compute_pair_metadata(pairs[i]);
-            }
+        // Process groups in parallel or sequentially.
+        if (num_threads <= 1 || groups.empty()) {
+            for (size_t i = 0; i < groups.size(); ++i)
+                results[i] = compute_group_metadata(groups[i]);
         } else {
 #ifdef _OPENMP
-            // Exceptions must not propagate out of a parallel region (UB in OpenMP).
-            // Each thread catches locally; the first exception is re-thrown after join.
             std::exception_ptr first_exception;
             std::atomic<bool> exception_occurred{false};
             #pragma omp parallel for num_threads(num_threads)
-            for (size_t i = 0; i < pairs.size(); ++i) {
+            for (size_t i = 0; i < groups.size(); ++i) {
                 if (exception_occurred.load(std::memory_order_relaxed)) continue;
                 try {
-                    results[i] = compute_pair_metadata(pairs[i]);
+                    results[i] = compute_group_metadata(groups[i]);
                 } catch (...) {
                     #pragma omp critical
                     if (!first_exception) {
@@ -375,9 +407,8 @@ namespace {
             }
             if (first_exception) std::rethrow_exception(first_exception);
 #else
-            for (size_t i = 0; i < pairs.size(); ++i) {
-                results[i] = compute_pair_metadata(pairs[i]);
-            }
+            for (size_t i = 0; i < groups.size(); ++i)
+                results[i] = compute_group_metadata(groups[i]);
 #endif
         }
 
@@ -559,16 +590,19 @@ namespace {
         std::ostream* sources_out
     ) {
         // ── Build the merge/skip lookup tables ───────────────────────────────
-        // merge_map[pos] = index into merge_metadata if pos is the leading
-        //                  position of a merge pair, else -1.
-        // skip[pos]      = true if pos is the trailing position of a merge pair
-        //                  (it has been absorbed and produces no output).
+        // merge_map[pos] = index into merge_metadata if pos is the START of a
+        //                  merge group, else -1.
+        // skip[pos]      = true for every non-start position in a group (they
+        //                  are absorbed into the group's output symbol and must
+        //                  produce no output of their own).
         std::vector<int> merge_map(input_eds.length(), -1);
         std::vector<bool> skip(input_eds.length(), false);
 
         for (size_t i = 0; i < merge_metadata.size(); ++i) {
-            merge_map[merge_metadata[i].original_pos1] = static_cast<int>(i);
-            skip[merge_metadata[i].original_pos2] = true;
+            const auto& mm = merge_metadata[i];
+            merge_map[mm.group_start] = static_cast<int>(i);
+            for (size_t k = 1; k < mm.group_count; ++k)
+                skip[mm.group_start + k] = true;
         }
 
         bool has_sources = input_eds.has_sources();
@@ -666,69 +700,42 @@ namespace {
             // ════════════════════════════════════════════════════════════════
             if (merge_map[pos] >= 0) {
 
-                // Before writing this merged symbol's SEDS data, flush whatever
-                // unmodified SEDS data has been accumulating in the batch.
-                // The output SEDS file must contain entries in the same order as
-                // the EDS symbols they describe, so the batch for symbols before
-                // this merge must be written before the merge's own entries.
+                // Flush unmodified SEDS data accumulated before this group.
                 flush_seds_batch();
 
                 const auto& merge_meta = merge_metadata[merge_map[pos]];
-                sym_size = merge_meta.merged_size;  // number of output alternatives
+                sym_size = merge_meta.merged_size;
+                const size_t gc = merge_meta.group_count;  // positions in this group
 
-                // ── String lengths: from metadata, no I/O ───────────────────
-                // merge_meta.merged_string_lengths holds the pre-computed length
-                // of each output string: len(set1[i]) + len(set2[j]) for each
-                // valid (i,j) pair.  We record them here for the output metadata
-                // and accumulate the total character count result.N.
                 for (Length len : merge_meta.merged_string_lengths) {
                     result.metadata.string_lengths.push_back(len);
                     result.N += len;
                     if (len == 0) result.metadata.num_empty_strings++;
                 }
 
-                // ── Read both input symbols ──────────────────────────────────
-                // read_symbol() calls read_symbol_from_stream() in METADATA_ONLY
-                // mode.  The sequential-seek optimisation in that function means:
-                //   • The first call (for pos) may need to seek if pos was not
-                //     immediately after the previous output symbol.
-                //   • The second call (for pos+1) will find the stream already
-                //     sitting at base_positions[pos+1] (the stream landed there
-                //     after parsing pos), so it skips its own seekg().
-                // Two symbols, at most one lseek.
-                StringSet set1 = input_eds.read_symbol(pos);
-                StringSet set2 = input_eds.read_symbol(pos + 1);
+                // Read all gc symbols in the group sequentially.
+                // The sequential-seek optimisation fires for every call after the
+                // first because the input stream lands right at the next symbol
+                // after each read — so at most one seek per group, not per symbol.
+                std::vector<StringSet> syms(gc);
+                for (size_t k = 0; k < gc; ++k)
+                    syms[k] = input_eds.read_symbol(pos + k);
 
-                // ── Write the merged EDS symbol ──────────────────────────────
-                // Format: {concat1,concat2,...,concatK}
-                // valid_indices contains the (i,j) pairs pre-selected by
-                // compute_merge_metadata():
-                //   CARTESIAN mode: all (i,j) in [0,|set1|) × [0,|set2|)
-                //   LINEAR mode:    only (i,j) where intersect_sources(i,j) ≠ ∅
+                // Write the merged output symbol.
+                // valid_indices_flat[m * gc + k] = which alternative from syms[k]
+                // contributes to output string m.
                 eds_out << '{';
                 bool first_string = true;
-
-                for (size_t idx = 0; idx < merge_meta.valid_indices.size(); ++idx) {
-                    auto [i, j] = merge_meta.valid_indices[idx];
-
+                for (size_t m = 0; m < sym_size; ++m) {
                     if (!first_string) eds_out << ',';
-                    // Concatenate the two strings directly into the output stream;
-                    // no intermediate buffer needed.
-                    eds_out << set1[i] << set2[j];
+                    for (size_t k = 0; k < gc; ++k)
+                        eds_out << syms[k][merge_meta.valid_indices_flat[m * gc + k]];
                     first_string = false;
 
-                    // ── Write the merged SEDS entry for this output string ───
-                    // The source set for the merged string is
-                    //   intersect_sources(sources_of_set1[i], sources_of_set2[j])
-                    // pre-computed in merge_meta.merged_sources[idx].
-                    // We serialise it here as {p1,p2,...} because the byte
-                    // layout of merged SEDS entries cannot be copied verbatim
-                    // from the input — the merged strings are new creations.
                     if (sources_out) {
                         *sources_out << '{';
                         bool first_path = true;
-                        const PathSet& merged_source = merge_meta.merged_sources[idx];
-                        for (int path_id : merged_source) {
+                        for (int path_id : merge_meta.merged_sources[m]) {
                             if (!first_path) *sources_out << ',';
                             *sources_out << path_id;
                             first_path = false;
@@ -736,7 +743,6 @@ namespace {
                         *sources_out << '}';
                     }
                 }
-
                 eds_out << '}';
 
             } else {
@@ -890,66 +896,36 @@ namespace {
  * @param phasing_output Optional output for updated phasing
  * @param num_threads Number of threads for parallel processing (default: 1)
  */
-void eds_to_leds_linear(
-    std::istream& input,
+// ── Internal helper ──────────────────────────────────────────────────────────
+// Runs the actual l-EDS linear-merge loop given an already-loaded EDS and
+// the temp-directory that will hold iteration files.  Extracted so that both
+// the stream-based and path-based public overloads can share it without
+// duplicating ~200 lines of code.
+//
+// current_eds_file / current_seds_file: the "input" files for iteration 0.
+// These may be plain files (stream path) or symlinks (path-based path).
+// Either way, the loop deletes them after they have been consumed, so they
+// must NOT be files the caller still needs after this function returns.
+// The path-based caller achieves this by creating symlinks in temp_dir;
+// deleting the symlink leaves the underlying stage-1 file intact.
+static void leds_linear_transform(
+    EDS& eds,
+    bool has_sources,
+    std::filesystem::path current_eds_file,
+    std::filesystem::path current_seds_file,
+    const std::filesystem::path& temp_dir,
     std::ostream& output,
-    Length context_length,
-    std::istream* phasing_input,
     std::ostream* phasing_output,
+    Length context_length,
     size_t num_threads,
     bool compact
 ) {
-    if (context_length == 0) {
-        throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
-    }
-
-    // ===== STREAMING ARCHITECTURE FOR MEMORY STABILITY =====
-    // This implementation uses METADATA_ONLY mode with temp files to handle 100GB+ files
-    // with minimal memory footprint (~500MB for 100GB file)
-
-    // Create temp directory for iteration files
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
-        / ("edsparser_leds_" + std::to_string(getpid()));
-    std::filesystem::create_directories(temp_dir);
-
-    // Remove temp_dir on every exit path (normal return or exception thrown
-    // anywhere below), so partial iteration files are never left behind.
-    TempDirGuard temp_guard{temp_dir};
-
-    // Save input stream to temp file (needed for METADATA_ONLY loading)
-    std::filesystem::path temp_input = temp_dir / "input.eds";
-    {
-        std::ofstream temp_out(temp_input);
-        if (!temp_out) {
-            throw std::runtime_error("Failed to create temp input file: " + temp_input.string());
-        }
-        temp_out << input.rdbuf();
-        temp_out.close();
-    }
-
-    // Save sources if provided
-    std::filesystem::path temp_sources_input;
-    bool has_sources = (phasing_input != nullptr);
-    if (has_sources) {
-        temp_sources_input = temp_dir / "input.seds";
-        std::ofstream temp_seds_out(temp_sources_input);
-        if (!temp_seds_out) {
-            throw std::runtime_error("Failed to create temp sources file: " + temp_sources_input.string());
-        }
-        temp_seds_out << phasing_input->rdbuf();
-        temp_seds_out.close();
-    }
-
-    // Load as METADATA_ONLY (only ~100MB for 100GB file!)
-    EDS eds = has_sources
-        ? EDS::load(temp_input, temp_sources_input)
-        : EDS::load(temp_input);
-
     // Warn when temp space requirement is non-trivial.
     // Peak usage: input copy + previous iteration + current iteration = ~3× input size.
     {
-        auto input_size = std::filesystem::file_size(temp_input);
-        if (input_size > 500ULL * 1024 * 1024) {  // > 500 MB
+        std::error_code ec;
+        auto input_size = std::filesystem::file_size(current_eds_file, ec);
+        if (!ec && input_size > 500ULL * 1024 * 1024) {
             auto gb = [](uintmax_t b) { return b / double(1ULL << 30); };
             std::cerr << "[l-EDS] Temp disk needed: ~" << std::fixed << std::setprecision(1)
                       << gb(input_size * 3) << " GB in " << temp_dir << "\n";
@@ -957,7 +933,6 @@ void eds_to_leds_linear(
     }
 
     // ===== COMPLEXITY ESTIMATION =====
-    // Warn users about potentially slow transformations BEFORE starting
     auto complexity = estimate_leds_complexity(eds, context_length);
 
     if (complexity.warn_exponential || complexity.warn_slow) {
@@ -970,59 +945,50 @@ void eds_to_leds_linear(
 
     // Iterative merging until convergence
     size_t iteration = 0;
-    const size_t MAX_ITERATIONS = 10000;  // Safety limit
-    const size_t BATCH_SIZE = 1000;  // Process 1000 pairs per batch to control parallel memory
-
-    std::filesystem::path current_eds_file = temp_input;
-    std::filesystem::path current_seds_file = temp_sources_input;
+    const size_t MAX_ITERATIONS = 10000;
+    const size_t BATCH_SIZE = 1000;
 
     while (iteration < MAX_ITERATIONS) {
-        // Select independent pairs to merge (metadata-only operation)
-        // This checks both l-EDS conditions:
-        // 1. Internal common blocks with length < context_length
-        // 2. Adjacent degenerate symbols (implicit empty common block)
-        auto pairs = select_independent_merge_pairs(eds, context_length);
+        auto groups = select_merge_groups(eds, context_length);
 
-        if (pairs.empty()) {
-            // No violations - EDS satisfies l-EDS property
+        if (groups.empty()) {
             std::cerr << "[l-EDS] Converged after " << iteration << " iterations\n";
             break;
         }
 
-        // Progress header for this iteration
         size_t total_symbols = eds.length();
-        size_t total_pairs = pairs.size();
+        size_t total_groups  = groups.size();
         {
-            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0, n_common = 0;
-            for (const auto& p : pairs) {
-                switch (p.reason) {
+            size_t n_adj = 0, n_left = 0, n_right = 0, n_common = 0;
+            size_t positions_consumed = 0;
+            for (const auto& g : groups) {
+                positions_consumed += g.count;
+                switch (g.reason) {
                     case MergeReason::ADJACENT_DEGENERATE: ++n_adj;    break;
                     case MergeReason::SHORT_COMMON_LEFT:   ++n_left;   break;
                     case MergeReason::SHORT_COMMON_RIGHT:  ++n_right;  break;
-                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;   break;
+                    case MergeReason::SHORT_COMMON_BOTH:   break;
                     case MergeReason::ADJACENT_COMMON:     ++n_common; break;
                 }
             }
             std::cerr << "[l-EDS] Iter " << iteration
-                      << ": " << total_symbols << " symbols, merging " << total_pairs << " pairs";
+                      << ": " << total_symbols << " symbols, "
+                      << total_groups << " groups (" << positions_consumed << " positions consumed)";
             std::cerr << " (";
             bool first = true;
             auto sep = [&]() { if (!first) std::cerr << ", "; first = false; };
             if (n_adj)   { sep(); std::cerr << n_adj   << " adj-degen"; }
             if (n_left)  { sep(); std::cerr << n_left  << " short-ctx←left";  }
             if (n_right) { sep(); std::cerr << n_right << " short-ctx→right"; }
-            if (n_both)  { sep(); std::cerr << n_both  << " short-ctx-both";  }
             if (n_common){ sep(); std::cerr << n_common<< " adj-common";      }
             std::cerr << ")\n";
         }
 
-        // Helper: print merge-pairs progress bar in-place using \r.
-        // Suppressed when stderr is not a terminal to avoid polluting log files.
         const bool stderr_tty = isatty(STDERR_FILENO);
         auto print_bar = [&](size_t done) {
             if (!stderr_tty) return;
             const int BAR_WIDTH = 40;
-            float frac = total_pairs > 0 ? static_cast<float>(done) / total_pairs : 1.0f;
+            float frac = total_groups > 0 ? static_cast<float>(done) / total_groups : 1.0f;
             int filled = static_cast<int>(BAR_WIDTH * frac);
             std::cerr << "\r  [";
             for (int i = 0; i < BAR_WIDTH; i++) {
@@ -1031,57 +997,45 @@ void eds_to_leds_linear(
                 else                  std::cerr << ' ';
             }
             std::cerr << "] " << std::setw(3) << static_cast<int>(frac * 100) << "%"
-                      << " (" << done << "/" << total_pairs << ")    ";
+                      << " (" << done << "/" << total_groups << ")    ";
             std::cerr.flush();
         };
 
-        // Create temp output files for this iteration
-        std::filesystem::path temp_eds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".eds");
+        std::filesystem::path temp_eds_out  = temp_dir / ("iter_" + std::to_string(iteration) + ".eds");
         std::filesystem::path temp_seds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".seds");
 
         std::ofstream eds_out_stream(temp_eds_out);
         std::ofstream seds_out_stream;
 
-        if (!eds_out_stream) {
+        if (!eds_out_stream)
             throw std::runtime_error("Failed to create temp output file: " + temp_eds_out.string());
-        }
 
         if (has_sources) {
             seds_out_stream.open(temp_seds_out);
-            if (!seds_out_stream) {
+            if (!seds_out_stream)
                 throw std::runtime_error("Failed to create temp sources output file: " + temp_seds_out.string());
-            }
         }
 
-        // Compute all merge metadata first (batched for parallel memory control),
-        // then stream the full result once. stream_merged_symbols_to_file iterates
-        // over ALL positions, so calling it once per batch would write every
-        // unmodified symbol N-times (once per batch).
         std::vector<MergeMetadata> all_metadata;
-        all_metadata.reserve(pairs.size());
+        all_metadata.reserve(groups.size());
 
-        for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
+        for (size_t batch_start = 0; batch_start < groups.size(); batch_start += BATCH_SIZE) {
             print_bar(batch_start);
 
-            size_t batch_end = std::min(batch_start + BATCH_SIZE, pairs.size());
-            std::vector<MergePair> batch_pairs(
-                pairs.begin() + batch_start,
-                pairs.begin() + batch_end
+            size_t batch_end = std::min(batch_start + BATCH_SIZE, groups.size());
+            std::vector<MergeGroup> batch_groups(
+                groups.begin() + batch_start,
+                groups.begin() + batch_end
             );
 
-            // Compute merge metadata (NO string data, minimal memory)
-            auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
-
-            // Accumulate metadata across batches
+            auto batch_metadata = compute_merge_metadata(eds, batch_groups, num_threads);
             all_metadata.insert(all_metadata.end(),
                                  std::make_move_iterator(batch_metadata.begin()),
                                  std::make_move_iterator(batch_metadata.end()));
         }
-        print_bar(total_pairs);
+        print_bar(total_groups);
         if (stderr_tty) std::cerr << "\n";
 
-        // Stream full result to file once (each position written exactly once).
-        // Also captures output metadata inline — avoids re-reading the file next iteration.
         auto stream_result = stream_merged_symbols_to_file(
             eds,
             all_metadata,
@@ -1090,11 +1044,8 @@ void eds_to_leds_linear(
         );
 
         eds_out_stream.close();
-        if (has_sources) {
-            seds_out_stream.close();
-        }
+        if (has_sources) seds_out_stream.close();
 
-        // Log merge outcome and new metadata state
         {
             const auto& m = stream_result.metadata;
             std::cerr << "[l-EDS]   Merged:   " << total_symbols << " → " << stream_result.n
@@ -1110,8 +1061,6 @@ void eds_to_leds_linear(
                       << " (built inline, no re-parse)\n";
         }
 
-        // Replace EDS with temp file using pre-built metadata (no re-parse needed).
-        // Sources still require a re-read (Sources has its own index-building pass).
         if (has_sources) {
             std::cerr << "[l-EDS]   Sources: re-indexing " << temp_seds_out.filename().string() << "\n";
             auto new_sources = Sources::load(temp_seds_out, Sources::Format::SEDS);
@@ -1125,28 +1074,21 @@ void eds_to_leds_linear(
                                      temp_eds_out);
         }
 
-        // Delete previous iteration files immediately (Linux: fd valid after unlink)
+        // Remove the file (or symlink) that was the input for this iteration.
+        // If current_eds_file is a symlink (path-based overload), only the symlink
+        // is removed — the stage-1 file it pointed to is unaffected.
         std::filesystem::remove(current_eds_file);
-        if (has_sources) {
-            std::filesystem::remove(current_seds_file);
-        }
+        if (has_sources) std::filesystem::remove(current_seds_file);
 
-        // Update file pointers
-        current_eds_file = temp_eds_out;
+        current_eds_file  = temp_eds_out;
         current_seds_file = temp_seds_out;
 
         iteration++;
     }
 
-    if (iteration >= MAX_ITERATIONS) {
+    if (iteration >= MAX_ITERATIONS)
         throw std::runtime_error("Maximum iterations reached without convergence");
-    }
 
-    // Serialise final result to the output stream.
-    // Intermediate temp files always use full-bracket format (required for METADATA_ONLY
-    // seeks); the requested output format is applied only here, on the final EDS object.
-    // Using read_symbol() rather than a raw rdbuf() copy ensures the format flag is
-    // honoured even when the input was already l-EDS compliant (zero iterations run).
     for (size_t i = 0; i < eds.length(); ++i) {
         const StringSet sym = eds.read_symbol(i);
         bool use_brackets = !compact || sym.size() > 1;
@@ -1166,9 +1108,114 @@ void eds_to_leds_linear(
         }
         *phasing_output << final_seds.rdbuf();
     }
+}
 
-    // Temp directory is removed by temp_guard (RAII) when this function returns,
-    // covering both the normal path here and any exception thrown above.
+// ── Stream-based overload (existing callers: eds2leds tool) ──────────────────
+void eds_to_leds_linear(
+    std::istream& input,
+    std::ostream& output,
+    Length context_length,
+    std::istream* phasing_input,
+    std::ostream* phasing_output,
+    size_t num_threads,
+    bool compact
+) {
+    if (context_length == 0) {
+        throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
+    }
+
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_leds_" + std::to_string(getpid()));
+    std::filesystem::create_directories(temp_dir);
+    TempDirGuard temp_guard{temp_dir};
+
+    // Copy input EDS stream to a temp file (required for METADATA_ONLY seeks).
+    std::filesystem::path temp_input = temp_dir / "input.eds";
+    {
+        std::ofstream temp_out(temp_input);
+        if (!temp_out)
+            throw std::runtime_error("Failed to create temp input file: " + temp_input.string());
+        temp_out << input.rdbuf();
+        if (!temp_out)
+            throw std::runtime_error("Failed to write EDS temp file (disk full?): " + temp_input.string());
+        temp_out.close();
+        if (!temp_out)
+            throw std::runtime_error("Failed to close EDS temp file: " + temp_input.string());
+    }
+
+    std::filesystem::path temp_sources_input;
+    bool has_sources = (phasing_input != nullptr);
+    if (has_sources) {
+        temp_sources_input = temp_dir / "input.seds";
+        std::ofstream temp_seds_out(temp_sources_input);
+        if (!temp_seds_out)
+            throw std::runtime_error("Failed to create temp sources file: " + temp_sources_input.string());
+        temp_seds_out << phasing_input->rdbuf();
+        if (!temp_seds_out)
+            throw std::runtime_error("Failed to write SEDS temp file (disk full?): " + temp_sources_input.string());
+        temp_seds_out.close();
+        if (!temp_seds_out)
+            throw std::runtime_error("Failed to close SEDS temp file: " + temp_sources_input.string());
+    }
+
+    EDS eds = has_sources
+        ? EDS::load(temp_input, temp_sources_input)
+        : EDS::load(temp_input);
+
+    leds_linear_transform(eds, has_sources, temp_input, temp_sources_input,
+                          temp_dir, output, phasing_output,
+                          context_length, num_threads, compact);
+    // temp_guard removes temp_dir on return or exception.
+}
+
+// ── Path-based overload (called from parse_vcf_to_leds_streaming_direct) ─────
+// Avoids the stream-copy step by symlinking the existing stage-1 files into
+// the iteration temp directory.  The symlinks are removed by the first
+// iteration (same remove() call as for real files), leaving the originals
+// intact — the caller owns and cleans up the stage-1 files.
+//
+// This is critical for the VCF→l-EDS pipeline: the intermediate SEDS for a
+// full chromosome with 2500 samples can reach 100–200 GB; copying it would
+// require twice that disk space and fail on constrained /tmp filesystems.
+void eds_to_leds_linear(
+    const std::filesystem::path& input_eds_path,
+    std::ostream& output,
+    Length context_length,
+    const std::filesystem::path* input_seds_path,
+    std::ostream* phasing_output,
+    size_t num_threads,
+    bool compact
+) {
+    if (context_length == 0) {
+        throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
+    }
+
+    // Iteration files go into a separate temp dir (input files stay in caller's dir).
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_leds_vcf_" + std::to_string(getpid()));
+    std::filesystem::create_directories(temp_dir);
+    TempDirGuard temp_guard{temp_dir};
+
+    bool has_sources = (input_seds_path != nullptr);
+
+    // Symlink the stage-1 files into temp_dir so the iteration loop can safely
+    // remove them (removing a symlink never touches the link target).
+    std::filesystem::path temp_input = temp_dir / "input.eds";
+    std::filesystem::create_symlink(std::filesystem::absolute(input_eds_path), temp_input);
+
+    std::filesystem::path temp_sources_input;
+    if (has_sources) {
+        temp_sources_input = temp_dir / "input.seds";
+        std::filesystem::create_symlink(std::filesystem::absolute(*input_seds_path), temp_sources_input);
+    }
+
+    EDS eds = has_sources
+        ? EDS::load(temp_input, temp_sources_input)
+        : EDS::load(temp_input);
+
+    leds_linear_transform(eds, has_sources, temp_input, temp_sources_input,
+                          temp_dir, output, phasing_output,
+                          context_length, num_threads, compact);
 }
 
 /**
@@ -1236,41 +1283,37 @@ void eds_to_leds_cartesian(
     std::filesystem::path current_eds_file = temp_input;
 
     while (iteration < MAX_ITERATIONS) {
-        // Select independent pairs to merge (metadata-only operation)
-        // This checks both l-EDS conditions:
-        // 1. Internal common blocks with length < context_length
-        // 2. Adjacent degenerate symbols (implicit empty common block)
-        auto pairs = select_independent_merge_pairs(eds, context_length);
+        auto groups = select_merge_groups(eds, context_length);
 
-        if (pairs.empty()) {
-            // No violations - EDS satisfies l-EDS property
+        if (groups.empty()) {
             std::cerr << "[l-EDS] Converged after " << iteration << " iterations\n";
             break;
         }
 
-        // Progress header for this iteration
         size_t total_symbols = eds.length();
-        size_t total_pairs = pairs.size();
+        size_t total_groups  = groups.size();
         {
-            size_t n_adj = 0, n_left = 0, n_right = 0, n_both = 0, n_common = 0;
-            for (const auto& p : pairs) {
-                switch (p.reason) {
+            size_t n_adj = 0, n_left = 0, n_right = 0, n_common = 0;
+            size_t positions_consumed = 0;
+            for (const auto& g : groups) {
+                positions_consumed += g.count;
+                switch (g.reason) {
                     case MergeReason::ADJACENT_DEGENERATE: ++n_adj;    break;
                     case MergeReason::SHORT_COMMON_LEFT:   ++n_left;   break;
                     case MergeReason::SHORT_COMMON_RIGHT:  ++n_right;  break;
-                    case MergeReason::SHORT_COMMON_BOTH:   ++n_both;   break;
+                    case MergeReason::SHORT_COMMON_BOTH:   break;
                     case MergeReason::ADJACENT_COMMON:     ++n_common; break;
                 }
             }
             std::cerr << "[l-EDS] Iter " << iteration
-                      << ": " << total_symbols << " symbols, merging " << total_pairs << " pairs";
+                      << ": " << total_symbols << " symbols, "
+                      << total_groups << " groups (" << positions_consumed << " positions consumed)";
             std::cerr << " (";
             bool first = true;
             auto sep = [&]() { if (!first) std::cerr << ", "; first = false; };
             if (n_adj)   { sep(); std::cerr << n_adj   << " adj-degen"; }
             if (n_left)  { sep(); std::cerr << n_left  << " short-ctx←left";  }
             if (n_right) { sep(); std::cerr << n_right << " short-ctx→right"; }
-            if (n_both)  { sep(); std::cerr << n_both  << " short-ctx-both";  }
             if (n_common){ sep(); std::cerr << n_common<< " adj-common";      }
             std::cerr << ")\n";
         }
@@ -1279,7 +1322,7 @@ void eds_to_leds_cartesian(
         auto print_bar = [&](size_t done) {
             if (!stderr_tty) return;
             const int BAR_WIDTH = 40;
-            float frac = total_pairs > 0 ? static_cast<float>(done) / total_pairs : 1.0f;
+            float frac = total_groups > 0 ? static_cast<float>(done) / total_groups : 1.0f;
             int filled = static_cast<int>(BAR_WIDTH * frac);
             std::cerr << "\r  [";
             for (int i = 0; i < BAR_WIDTH; i++) {
@@ -1288,57 +1331,41 @@ void eds_to_leds_cartesian(
                 else                  std::cerr << ' ';
             }
             std::cerr << "] " << std::setw(3) << static_cast<int>(frac * 100) << "%"
-                      << " (" << done << "/" << total_pairs << ")    ";
+                      << " (" << done << "/" << total_groups << ")    ";
             std::cerr.flush();
         };
 
-        // Create temp output file for this iteration
         std::filesystem::path temp_eds_out = temp_dir / ("iter_" + std::to_string(iteration) + ".eds");
         std::ofstream eds_out_stream(temp_eds_out);
 
-        if (!eds_out_stream) {
+        if (!eds_out_stream)
             throw std::runtime_error("Failed to create temp output file: " + temp_eds_out.string());
-        }
 
-        // Compute all merge metadata first (batched for parallel memory control),
-        // then stream the full result once. stream_merged_symbols_to_file iterates
-        // over ALL positions, so calling it once per batch would write every
-        // unmodified symbol N-times (once per batch).
         std::vector<MergeMetadata> all_metadata;
-        all_metadata.reserve(pairs.size());
+        all_metadata.reserve(groups.size());
 
-        for (size_t batch_start = 0; batch_start < pairs.size(); batch_start += BATCH_SIZE) {
+        for (size_t batch_start = 0; batch_start < groups.size(); batch_start += BATCH_SIZE) {
             print_bar(batch_start);
 
-            size_t batch_end = std::min(batch_start + BATCH_SIZE, pairs.size());
-            std::vector<MergePair> batch_pairs(
-                pairs.begin() + batch_start,
-                pairs.begin() + batch_end
+            size_t batch_end = std::min(batch_start + BATCH_SIZE, groups.size());
+            std::vector<MergeGroup> batch_groups(
+                groups.begin() + batch_start,
+                groups.begin() + batch_end
             );
 
-            // Compute merge metadata (NO string data, minimal memory)
-            auto batch_metadata = compute_merge_metadata(eds, batch_pairs, num_threads);
-
-            // Accumulate metadata across batches
+            auto batch_metadata = compute_merge_metadata(eds, batch_groups, num_threads);
             all_metadata.insert(all_metadata.end(),
                                  std::make_move_iterator(batch_metadata.begin()),
                                  std::make_move_iterator(batch_metadata.end()));
         }
-        print_bar(total_pairs);
+        print_bar(total_groups);
         if (stderr_tty) std::cerr << "\n";
 
-        // Stream full result to file once (each position written exactly once).
-        // Also captures output metadata inline — avoids re-reading the file next iteration.
         auto stream_result = stream_merged_symbols_to_file(
-            eds,
-            all_metadata,
-            eds_out_stream,
-            nullptr  // No sources in cartesian mode
-        );
+            eds, all_metadata, eds_out_stream, nullptr);
 
         eds_out_stream.close();
 
-        // Log merge outcome and new metadata state
         {
             const auto& m = stream_result.metadata;
             std::cerr << "[l-EDS]   Merged:   " << total_symbols << " → " << stream_result.n
@@ -1354,23 +1381,18 @@ void eds_to_leds_cartesian(
                       << " (built inline, no re-parse)\n";
         }
 
-        // Replace EDS with temp file using pre-built metadata (no re-parse needed).
         eds = EDS::from_metadata(std::move(stream_result.metadata),
                                  stream_result.n, stream_result.m, stream_result.N,
                                  temp_eds_out);
 
-        // Delete previous iteration file immediately (Linux: fd valid after unlink)
         std::filesystem::remove(current_eds_file);
-
-        // Update file pointer
         current_eds_file = temp_eds_out;
 
         iteration++;
     }
 
-    if (iteration >= MAX_ITERATIONS) {
+    if (iteration >= MAX_ITERATIONS)
         throw std::runtime_error("Maximum iterations reached without convergence");
-    }
 
     // Serialise final result to the output stream.
     // Intermediate temp files always use full-bracket format (required for METADATA_ONLY

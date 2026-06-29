@@ -1156,18 +1156,14 @@ void parse_vcf_to_leds_streaming_direct(
                                    stats, block_size);
     }  // ofstreams flushed and closed here before stage 2 reopens them
 
-    // ── Stage 2: EDS → l-EDS (reads temp files, writes the final output) ─────
-    std::ifstream eds_in(temp_eds);
-    if (!eds_in) {
-        throw std::runtime_error("Failed to reopen temp EDS file: " + temp_eds.string());
-    }
-    std::ifstream seds_in(temp_seds);
-    if (!seds_in) {
-        throw std::runtime_error("Failed to reopen temp SEDS file: " + temp_seds.string());
-    }
-
-    eds_to_leds_linear(eds_in, leds_output, context_length,
-                       &seds_in, &seds_output);
+    // ── Stage 2: EDS → l-EDS ─────────────────────────────────────────────────
+    // Use the path-based overload so eds_to_leds_linear() syms the stage-1
+    // files instead of copying them.  For a chr1 run with 2504 samples, the
+    // intermediate SEDS can reach ~180 GB; the stream-based overload would copy
+    // it again (requiring 2× disk) and silently truncate if /tmp is full, leading
+    // to "Unmatched '{' in EDS stream" failures.
+    eds_to_leds_linear(temp_eds, leds_output, context_length,
+                       &temp_seds, &seds_output);
 }
 
 /**

@@ -5,6 +5,7 @@
 #include "../formats/eds.hpp"
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 namespace edsparser {
 
@@ -57,6 +58,25 @@ void eds_to_leds_linear(
     std::ostream& output,
     Length context_length,
     std::istream* phasing_input = nullptr,
+    std::ostream* phasing_output = nullptr,
+    size_t num_threads = 1,
+    bool compact = true
+);
+
+/**
+ * Path-based overload: avoids copying input to a temp file by symlinking
+ * the provided paths into the iteration temp directory.  Critical for the
+ * VCF→EDS→l-EDS two-stage pipeline where the intermediate SEDS can reach
+ * 100+ GB (one {path,...} entry per EDS alternative per sample); a full
+ * stream copy would require the same disk space a second time.
+ *
+ * Behaviour is otherwise identical to the stream-based overload.
+ */
+void eds_to_leds_linear(
+    const std::filesystem::path& input_eds_path,
+    std::ostream& output,
+    Length context_length,
+    const std::filesystem::path* input_seds_path = nullptr,
     std::ostream* phasing_output = nullptr,
     size_t num_threads = 1,
     bool compact = true
