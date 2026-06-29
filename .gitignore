@@ -63,6 +63,7 @@ tests/bench/results/*
 # Documentation
 docs/_build/
 *.pdf.bak
+tex/
 
 # Logs
 *.log
@@ -91,8 +92,7 @@ Thumbs.db
 !tests/bench/docs/*.png
 
 # Experiment outputs - exclude all dataset content
-experiments/datasets/**
-experiments/parse_transformation_logs.py
+experiments/
 data/site/
 site/
 

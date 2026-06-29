@@ -102,6 +102,7 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 - **EDS → l-EDS** ([src/cpp/lib/transforms/eds_transforms.hpp](src/cpp/lib/transforms/eds_transforms.hpp), [src/cpp/lib/transforms/eds_transforms.cpp](src/cpp/lib/transforms/eds_transforms.cpp)): Length-constrained merging to ensure minimum context length. Two strategies:
   - LINEAR: Phasing-aware merging using source information (preserves valid combinations)
   - CARTESIAN: All combinations (no source info required)
+  - **Chain-Merging Selection** (2026-06-28): `select_merge_groups()` replaces the old pairwise selection. Detects maximal contiguous chains where every adjacent pair needs merging and emits each chain as one `MergeGroup(start, count, reason)`. A chain of L positions is resolved in one full-file pass instead of L−1 passes. Typical convergence: **1 iteration** for real genomic data (was 3-4 with old pairwise approach; 2.1-2.4× throughput improvement measured).
   - **Memory-Stable Architecture** for 100GB+ files:
     - Uses METADATA_ONLY mode (only metadata in RAM, ~100MB for 100GB file)
     - Iterative temp file chaining (iteration N → temp file → iteration N+1)
@@ -109,7 +110,7 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
     - Batch metadata accumulation: all `MergeMetadata` is collected across batches before `stream_merged_symbols_to_file` is called once — avoids writing every unmodified symbol once per batch
     - Streaming output with immediate flushing (no ostringstream accumulation)
     - Memory footprint: O(metadata + batch) instead of O(file_size × iterations × threads)
-    - Typical reduction: 2TB → 500MB peak memory for 100GB EDS with 1000 pairs and 16 threads
+    - Typical reduction: 2TB → 500MB peak memory for 100GB EDS with 1000 groups and 16 threads
 
 **Command-Line Tools** ([src/cpp/tools/](src/cpp/tools/))
 
@@ -117,7 +118,7 @@ Transformation tools (each focused on a specific conversion):
 - `eds2leds`: Transform EDS to l-EDS with linear or cartesian merging
   - **`--full` flag**: Force full bracket format output (default: compact)
   - Runs complexity estimation before transformation and warns on exponential-growth risk
-  - **Linear vs cartesian throughput**: after I/O optimizations (2026-05-26) the gap is 1.26× (linear ~4.3 MB/s vs cartesian ~5.4 MB/s on 10% variability, 4-path, --min-context 5 data). Remaining difference is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data.
+  - **Linear vs cartesian throughput**: 1.26× gap on compliant input (no merge work); on real violation data (`--min-context 0`, 1% var, l=5) cartesian runs at ~22 MB/s vs linear ~19 MB/s (~1.15× gap) and both converge in 1 iteration after the chain-merging fix (2026-06-28). At 5% variability: cartesian ~8 MB/s, linear ~5 MB/s. Remaining gap is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data.
 - `msa2eds`: Transform MSA to EDS/l-EDS with source tracking
 - `vcf2eds`: Transform VCF to EDS/l-EDS with sample-level source tracking (requires reference FASTA)
   - **`--block-size` parameter**: Control memory usage for large VCF files (default: 10M bases)
@@ -306,18 +307,19 @@ vcf2eds -i large.vcf -r reference.fa --block-size 100000000  # 100M bases
    - Memory independent of file size
 
 2. **Metadata-Only Merge Calculation** ([eds_transforms.cpp:133-249](src/cpp/lib/transforms/eds_transforms.cpp#L133-L249)): `compute_merge_metadata()`
-   - Calculates merge results using ONLY metadata (no string data)
-   - Computes string lengths via addition: `len1 + len2` (no actual concatenation)
-   - Computes source intersections via set operations
-   - Returns `MergeMetadata` structs with sizes, lengths, sources (NO strings)
-   - Memory: O(pairs × metadata_per_pair) ≈ 10MB for 1000 pairs
+   - Accepts `vector<MergeGroup>` (each group spans `count` consecutive positions)
+   - For each group: iterative fold from position p₀ through p_{k-1} computing all valid output strings
+   - String lengths computed via addition only (`len0 + len1 + ...`, no actual concatenation)
+   - Source intersections via bitset fast-path (path IDs ≤ 63) or PathSet fallback
+   - Returns `MergeMetadata` with `valid_indices_flat[m * group_count + k]` = which alternative from position `group_start+k` contributes to output string `m`
+   - Memory: O(groups × metadata_per_group)
 
 3. **Streaming Output** ([eds_transforms.cpp:452-603](src/cpp/lib/transforms/eds_transforms.cpp#L452-L603)): `stream_merged_symbols_to_file()`
-   - Reads symbols on-demand via `read_symbol()` (METADATA_ONLY compatible)
-   - Merges strings on-the-fly: `set1[i] + set2[j]` (immediate concatenation, no storage)
-   - Writes directly to file stream (no ostringstream accumulation)
-   - Flushes after each symbol to prevent buffering
-   - Memory: O(single_symbol) ≈ 1-10KB per symbol
+   - Reads all `group_count` symbols for each group on-demand via `read_symbol()`
+   - Builds each output string by concatenating `syms[k][valid_indices_flat[m*gc+k]]` for k=0..gc-1
+   - Positions inside a group (non-start) are marked as `skip[pos]=true` and emitted as nothing
+   - Writes directly to file stream (no ostringstream accumulation); flushes after each symbol
+   - Memory: O(group_count × single_symbol) ≈ 1-10KB per group
 
 4. **Temp File Iteration Chain** ([eds_transforms.cpp:620-779](src/cpp/lib/transforms/eds_transforms.cpp#L620-L779)):
    ```
@@ -332,10 +334,10 @@ vcf2eds -i large.vcf -r reference.fa --block-size 100000000  # 100M bases
    - Old temp files cleaned up automatically
 
 5. **Batch Processing** ([eds_transforms.cpp:712-731](src/cpp/lib/transforms/eds_transforms.cpp#L712-L731)):
-   - Default: 1000 pairs per batch
+   - Default: 1000 groups per batch
    - Controls parallel memory usage
    - Each batch: compute metadata → stream output → free memory → next batch
-   - Prevents memory spikes from processing all pairs at once
+   - Prevents memory spikes from processing all groups at once
 
 **Memory Footprint Comparison**:
 
@@ -347,7 +349,7 @@ vcf2eds -i large.vcf -r reference.fa --block-size 100000000  # 100M bases
 
 **Memory Estimate**:
 ```
-Total Memory = metadata + (batch_size × metadata_per_pair) + streaming_buffer
+Total Memory = metadata + (batch_size × metadata_per_group) + streaming_buffer
              ≈ 100MB + (1000 × 10KB) + 100MB
              ≈ 210MB baseline for 100GB file
              + parallel overhead (threads × single_symbol_size)
@@ -360,9 +362,10 @@ Total Memory = metadata + (batch_size × metadata_per_pair) + streaming_buffer
 - Acceptable trade-off for files that wouldn't fit in RAM otherwise
 
 **Implementation Details**:
-- **Metadata-only merge** ([eds_transforms.cpp:140-225](src/cpp/lib/transforms/eds_transforms.cpp#L140-L225)): Computes all merge logic without touching string data
-- **Streaming reconstruction** (`stream_merged_symbols_to_file()`): Reads merged positions on-the-fly, concatenates, writes immediately. **SEDS batching**: consecutive unmodified symbols accumulate into one `copy_range_to_stream()` call per run (one call per merge boundary instead of one per symbol — ~2727 calls vs ~200K for 10% variability).
-- **Sequential seek elimination** (`read_symbol_from_stream()` in `eds.cpp`): skips `seekg()` when stream is already at the target position. Since symbols are processed in order, almost all seeks are eliminated (down to ~5K per iteration from ~400K).
+- **Chain selection** (`select_merge_groups()`): walks positions left-to-right; when `needs_merge(i, context_length)` is true, extends the chain while `needs_merge(i+1, ...)` is also true; emits one `MergeGroup`. Result: adjacent degenerate runs and short-context clusters collapse to a single group per chain.
+- **Metadata-only merge** (`compute_merge_metadata()`): per-group iterative fold — initialize from p₀, fold in p₁..p_{k-1}; `valid_indices_flat` grows as outer-product of valid index tuples filtered by source intersection.
+- **Streaming reconstruction** (`stream_merged_symbols_to_file()`): reads all group symbols, assembles each output string via `valid_indices_flat`, writes directly. **SEDS batching**: consecutive unmodified symbols accumulate into one `copy_range_to_stream()` call per run.
+- **Sequential seek elimination** (`read_symbol_from_stream()` in `eds.cpp`): skips `seekg()` when stream is already at the target position. Since symbols are processed in order, almost all seeks are eliminated.
 - **Temp directory**: `std::filesystem::temp_directory_path() / "edsparser_leds_<pid>"`
 - **Automatic cleanup**: Temp files removed on completion or error
 
@@ -462,6 +465,15 @@ See `biofmi/experiments/README.md` for the full pipeline documentation.
 - METADATA_ONLY (file loader via `EDS::load`): covered by most existing tests via `create_temp_eds()`
 - FULL (in-memory via stream/string ctors): covered by `test_stream_constructor`, `test_from_string_factory`, `test_mode_equivalence`, `test_full_mode_edge_cases` (Tests A1–A4)
 - Mode equivalence: `test_mode_equivalence` constructs the same EDS via string ctor and file loader and asserts all observable outputs match (`length`, `cardinality`, `size`, all `read_symbol(i)`, all metadata fields)
+
+### Benchmark Scenarios ([tests/bench/](tests/bench/))
+
+`bench.sh --size standard --scenario <name>` runs named scenarios; `all` runs everything.
+
+Key scenarios relevant to recent changes:
+- **`chain_merging`**: tests `eds2leds` on inputs generated with `--min-context 0` (Bernoulli mode), which produces adjacent degenerates and short contexts that actually trigger merging. Sweeps variability (0.01, 0.05). Logs iteration count alongside throughput — confirms 1 iteration with the chain-merging fix. **Important**: all other eds2leds scenarios use `--min-context 5` with l=5, so 0 merge work is done; only `chain_merging` and `context_length_sweep` exercise the actual merge path.
+- **`context_length_sweep`**: varies l (3, 5, 10, 20) on input generated without `--min-context`, revealing how merge cost scales with the required context length.
+- **`variability_sweep`**: varies variant density (0.01–0.40); uses `--min-context 5`, so runtime reflects I/O and metadata overhead rather than merge work.
 
 ### Running Memory Tests Manually
 ```bash

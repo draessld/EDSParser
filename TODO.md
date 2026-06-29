@@ -7,31 +7,27 @@
 These miss their intended targets on real population-scale workloads — the fast path exists in code
 but never fires, so the hot case always takes the slow path.
 
-### [ARCH] eds2leds rewrites the entire file + re-indexes the entire SEDS every merge iteration
+### ~~[ARCH] eds2leds rewrites the entire file + re-indexes the entire SEDS every merge iteration~~ FIXED (2026-06-28)
 
-- **Location:** `eds_to_leds_linear()` / `eds_to_leds_cartesian()` in
-  `src/cpp/lib/transforms/eds_transforms.cpp`
-- **Problem:** `select_independent_merge_pairs()` only picks non-overlapping adjacent pairs, so a run
-  of L symbols that must collapse needs multiple iterations. Each iteration streams ALL positions to a
-  fresh temp file (even the ~99% unmodified passthroughs), and linear mode re-parses the WHOLE new
-  SEDS via `Sources::load()` to rebuild `base_positions_` from scratch. Total cost is
-  `O(num_iterations × total_file_size)`, not `O(actual_merge_work)`. This is the dominant
-  algorithmic ceiling at scale and the reason throughput sits at single-digit MB/s.
-- **Idea:** resolve transitive merge chains in one pass (union-find over adjacent merge candidates)
-  so the number of full-file passes is ~constant rather than proportional to chain length. Constrained
-  by the constant-memory design goal — do not hold multiple blocks in RAM.
+`select_independent_merge_pairs()` replaced by `select_merge_groups()`:
+detects maximal contiguous chains where every adjacent pair needs merging and
+emits each chain as one `MergeGroup` (k positions → one output symbol in one
+pass).  `compute_merge_metadata()` folds k positions iteratively (length sums;
+bitset source intersections).  `stream_merged_symbols_to_file()` reads all k
+symbols sequentially and concatenates via `valid_indices_flat[m*k+j]`.
+Result: a chain of L degenerate positions that previously required L−1 full-file
+passes now completes in **1 iteration**.
+
+Bench validation (`tests/bench/scenarios/scenario_chain_merging.sh`, `--min-context 0`
+inputs, `--size standard`): 1 iteration (was 3-4 with old pairwise code); cartesian
+**2.1×** faster (22 MB/s vs 10 MB/s at 1% var), **2.4×** at 5% var.  All 7 ctest
+tests pass.
 
 ---
 
 ## Medium-Priority Optimizations
 
 Real improvements, but not blockers on real-world use.
-
-### ~~[I/O] `read_fasta_region()` reads the reference one base at a time~~ FIXED (2026-06-27)
-
-Replaced the `while (fasta_stream.get(c))` loop with bulk `read()` per FASTA
-line segment (O(length/line_width) reads instead of O(length) get() calls).
-Handles '\r\n' CRLF line endings too. Location: `vcf_transforms.cpp:~120`.
 
 ### [MEM] `all_metadata` accumulates a whole iteration's merge results in RAM
 
@@ -53,21 +49,6 @@ Handles '\r\n' CRLF line endings too. Location: `vcf_transforms.cpp:~120`.
   every symbol's strings on each access.
 - **Idea:** add a `const StringSet&` overload for in-memory mode; keep the by-value path only for
   METADATA_ONLY where the set is freshly constructed.
-
-### ~~[DISK] ~2× temp footprint plus a full up-front input copy~~ DOCUMENTED (2026-06-27)
-
-Peak temp usage is ~3× input size (input copy + previous iter file + current iter file being
-written simultaneously — the last two cannot be overlapped without the [ARCH] fix).
-Documented in `eds2leds --help` (DISK SPACE section) and `$TMPDIR` hint. A stderr warning
-is printed at runtime for inputs > 500 MB. The predecessor is already deleted immediately after
-each iteration's write completes — no further improvement is possible without path-based API
-overloads (future work, linked to [ARCH] fix).
-
-### ~~[CLEANUP] Dead/duplicated code in `eds.cpp`~~ FIXED (2026-06-27)
-
-Removed `EDS::calculate_statistics()` (~100 lines) — `parse()` has computed all the same
-fields inline since the bulk-buffered index build refactor. Declaration removed from `eds.hpp`,
-implementation removed from `eds.cpp`. No callers existed.
 
 ---
 
@@ -167,90 +148,3 @@ wall-clock measurements exist for different `--block-size` values.
 Benchmark `vcf2eds` on a real or large synthetic VCF with block sizes 1M, 5M, 10M (default), 50M,
 100M — measure peak RSS and runtime. Produce a plot of memory vs block-size and time vs block-size.
 
----
-
-## Fixed (2026-06-27)
-
-### [BUG] Multi-chromosome VCF silently applied wrong-chromosome variants
-
-`accept_chrom` lambda was defined in `parse_vcf_to_eds_streaming` but never
-called — chr2 variants were applied to a chr1 FASTA reference without any error.
-Fix: wired the lambda into both variant-reading loops (main block loop and the
-overlap-extension loop). Wrong-chromosome variants now increment `skipped_wrong_chrom`
-and are excluded from `processed_variants`. Warning printed on first occurrence.
-Regression test: Test 15 in `tests/unit/test_vcf.cpp`.
-
-### [BUG] SEDS cardinality mismatch for no-genotype VCF
-
-`generate_eds_from_variants` emitted N EDS strings but only 1 `{0}` SEDS entry
-in the no-genotype path (`haplotype_to_samples.empty()`). `EDS::load` validation
-(`Sources::cardinality() == EDS::m_`) then threw `std::invalid_argument`.
-Fix: emit one `{0}` per haplotype in the no-genotype branch.
-Regression test: Test 16 in `tests/unit/test_vcf.cpp`.
-
-### [MEM] VCFVariant genotype memory — ~75% overhead from nested vectors
-
-`VCFVariant.genotypes` was `vector<vector<int>>` (24-byte overhead per inner
-vector for just 2 ints in the diploid case). Fix: flattened to `vector<int>`
-with stride 2 (`[s0_a0, s0_a1, s1_a0, s1_a1, ...]`, -1 = missing). Also removed
-the dead `VariantGroup.variants` field (full copy written but never read after
-`merge_variant_group` returned). Combined reduction: 1.6 GB → 650 MB peak for
-100 samples × 1 M-base block (2.5×); runtime 69 s → 35 s on the same workload.
-
-### [UX] No progress feedback during vcf2eds / msa2eds / eds2leds
-
-Long transforms ran silently with no indication of progress. Fix: added
-`progress_bar.hpp` (`CountingStreambuf` + `ProgressBar`) — a background-threaded
-animated bar (speed + ETA) shown on stderr when stderr is a TTY; fully suppressed
-when piped to a file. vcf2eds and msa2eds wrap their primary input stream with
-`CountingStreambuf`. eds2leds existing `\r` bar is now guarded by `isatty()` so
-it doesn't corrupt log files.
-
----
-
-## Fixed (2026-06-14)
-
-### [UB] Data race on `first_exception` in the OpenMP merge loop
-
-Introduced `std::atomic<bool> exception_occurred` as the lockless early-out guard. `first_exception`
-(the `exception_ptr`) is now only written/read inside `#pragma omp critical`.
-
-### [UB] `std::isspace(ch)` on a raw `char` in bracket parsing
-
-Full-bracket path (`read_symbol_from_stream()`) now casts to `unsigned char`, matching the compact
-path. Same fix applied to the `remove_if` call in the string constructor.
-
-### [VERIFY] VCF block-boundary variants duplicate/overlap reference
-
-A variant whose REF span crossed the block boundary caused the next block to re-emit
-`ref[block_end : variant_end)`. `generate_eds_from_variants` now returns `{num_groups,
-actual_cursor}`. `parse_vcf_to_eds_streaming` threads `actual_write_pos` separately from
-`current_block_start` and passes it as `start_pos` for each subsequent block. Regression test: Test
-13 in `tests/unit/test_vcf.cpp`.
-
-**Follow-up (also fixed 2026-06-14):** overlapping variants split across the block boundary were
-never grouped together — V1 in block N with REF reaching past block_end, and V2 in carryover
-starting inside V1's REF, produced two separate degenerate symbols and duplicated the overlapping
-region. Fixed by an overlap-extension loop after the main VCF reading loop: computes `max_reach`
-from block N's variants and pulls any carryover variant whose start falls before it into the current
-block (reading further from the VCF stream as `max_reach` grows). Regression test: Test 14 in
-`tests/unit/test_vcf.cpp`.
-
-### [MEM] [MISSES TARGET] `std::set<int>` as the universal source representation
-
-Replaced `std::set<int>` with `PathSet` (`using PathSet = std::vector<int>`) throughout `Sources`,
-`EDS`, and `eds_transforms`. The `PathSet` invariant (sorted, deduplicated) is maintained at
-construction in `read_from_seds` / `read_from_edz` (sort+unique after parse). This eliminates
-red-black tree node allocation per path ID: the LRU cache, `intersect_sources`, and
-`merge_adjacent_sources` all use contiguous-memory vectors. `intersect_sources` now uses
-`std::set_intersection` on sorted vectors (linear instead of O(n log n) tree insertion).
-The bitset fast-path check drops from O(n)-per-set to O(1) — sorted vector exposes `.back()`
-for the max-element test. The bitset fast path itself still caps at 63 IDs; beyond that the
-sorted-merge fallback is used (competitive with bitset for real sparse source sets).
-
-### [CONCURRENCY] [MISSES TARGET] LINEAR-mode `--threads` was effectively serial
-
-Every `read_source()` call inside `#pragma omp parallel for` acquired `Sources::io_mutex_`,
-serialising all workers. Fix: a single-threaded pass before the parallel region now preloads all
-needed source sets into `std::unordered_map<size_t, PathSet> preloaded`. Workers call
-`preloaded.at(idx)` (read-only, lock-free) instead. Sequential path is unchanged.

@@ -21,6 +21,7 @@ VALID_SCENARIOS=(
     context_length_sweep
     path_count_sweep
     memory_stability
+    chain_merging
     all
 )
 
@@ -47,6 +48,7 @@ Usage: bench.sh [--size PRESET] [--scenario NAME]
                       context_length_sweep eds2leds runtime vs context length l
                       path_count_sweep     eds2leds runtime vs number of paths
                       memory_stability     peak RSS check on large files (limit=500 MB)
+                      chain_merging        eds2leds chain-merging throughput vs variant density
                       all                  run everything (default)
 
 All tools (eds2leds cartesian/linear, edsparser-genpatterns) are run across
@@ -92,6 +94,8 @@ case "$PRESET" in
         CTX_SWEEP_MB=0
         PATH_SWEEP_MB=0
         MEM_STAB_SIZES=()       # skip — files too small to stress memory
+        CHAIN_MERGING_MB=0      # skip in quick — merge path exercised by standard+
+        CHAIN_MERGING_VAR_VALS=()
         ;;
     standard)
         N_REPS=30
@@ -103,6 +107,8 @@ case "$PRESET" in
         CTX_SWEEP_VALS=(3 5 10 20)
         PATH_SWEEP_CFGS=(2:2 2:4 2:8)
         MEM_STAB_SIZES=(20 50)  # larger than SIZES_MB to stress METADATA_ONLY path
+        CHAIN_MERGING_MB=5
+        CHAIN_MERGING_VAR_VALS=(0.01 0.05)
         ;;
     large)
         N_REPS=30
@@ -114,6 +120,8 @@ case "$PRESET" in
         CTX_SWEEP_VALS=(3 5 10 20)
         PATH_SWEEP_CFGS=(2:2 2:4 2:8 4:8)
         MEM_STAB_SIZES=(50 100 200)
+        CHAIN_MERGING_MB=10
+        CHAIN_MERGING_VAR_VALS=(0.01 0.05 0.10)
         ;;
     scaling)
         # Purpose: measure how runtime and memory grow with variability, context l, and
@@ -128,6 +136,8 @@ case "$PRESET" in
         CTX_SWEEP_VALS=(3 5 10 15 20)
         PATH_SWEEP_CFGS=(2:2 4:4 8:8 16:16)
         MEM_STAB_SIZES=(50 100)
+        CHAIN_MERGING_MB=10
+        CHAIN_MERGING_VAR_VALS=(0.01 0.05 0.10)
         ;;
     *)
         bench_err "Unknown preset: $PRESET (use quick|standard|large|scaling)"
@@ -160,6 +170,7 @@ _check_mem_stab_available() {
 _check_sweep_available variability_sweep    "$VAR_SWEEP_MB"
 _check_sweep_available context_length_sweep "$CTX_SWEEP_MB"
 _check_sweep_available path_count_sweep     "$PATH_SWEEP_MB"
+_check_sweep_available chain_merging        "${CHAIN_MERGING_MB:-0}"
 _check_mem_stab_available
 
 TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
@@ -223,6 +234,13 @@ if _should_run memory_stability && [ "${#MEM_STAB_SIZES[@]}" -gt 0 ]; then
     bench_log "=== Memory stability: large-file peak RSS check (limit=500 MB) ==="
     run_scenario_memory_stability "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" \
         "${MEM_STAB_SIZES[@]}"
+    echo ""
+fi
+
+if _should_run chain_merging && [ "$CHAIN_MERGING_MB" -gt 0 ]; then
+    bench_log "=== Chain-merging throughput vs variant density (--min-context 0) ==="
+    run_scenario_chain_merging "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" \
+        "$CHAIN_MERGING_MB" "${CHAIN_MERGING_VAR_VALS[@]}"
     echo ""
 fi
 
