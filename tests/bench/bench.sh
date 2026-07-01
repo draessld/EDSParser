@@ -22,6 +22,7 @@ VALID_SCENARIOS=(
     path_count_sweep
     memory_stability
     chain_merging
+    edz_format
     all
 )
 
@@ -49,6 +50,7 @@ Usage: bench.sh [--size PRESET] [--scenario NAME]
                       path_count_sweep     eds2leds runtime vs number of paths
                       memory_stability     peak RSS check on large files (limit=500 MB)
                       chain_merging        eds2leds chain-merging throughput vs variant density
+                      edz_format           SEDS vs EDZ write speed and file-size ratio
                       all                  run everything (default)
 
 All tools (eds2leds cartesian/linear, edsparser-genpatterns) are run across
@@ -96,6 +98,7 @@ case "$PRESET" in
         MEM_STAB_SIZES=()       # skip — files too small to stress memory
         CHAIN_MERGING_MB=0      # skip in quick — merge path exercised by standard+
         CHAIN_MERGING_VAR_VALS=()
+        EDZ_FORMAT_SIZES=(1)    # quick single-size check
         ;;
     standard)
         N_REPS=30
@@ -109,6 +112,7 @@ case "$PRESET" in
         MEM_STAB_SIZES=(20 50)  # larger than SIZES_MB to stress METADATA_ONLY path
         CHAIN_MERGING_MB=5
         CHAIN_MERGING_VAR_VALS=(0.01 0.05)
+        EDZ_FORMAT_SIZES=(1 5)
         ;;
     large)
         N_REPS=30
@@ -122,6 +126,7 @@ case "$PRESET" in
         MEM_STAB_SIZES=(50 100 200)
         CHAIN_MERGING_MB=10
         CHAIN_MERGING_VAR_VALS=(0.01 0.05 0.10)
+        EDZ_FORMAT_SIZES=(5 10)
         ;;
     scaling)
         # Purpose: measure how runtime and memory grow with variability, context l, and
@@ -138,6 +143,7 @@ case "$PRESET" in
         MEM_STAB_SIZES=(50 100)
         CHAIN_MERGING_MB=10
         CHAIN_MERGING_VAR_VALS=(0.01 0.05 0.10)
+        EDZ_FORMAT_SIZES=(10)
         ;;
     *)
         bench_err "Unknown preset: $PRESET (use quick|standard|large|scaling)"
@@ -241,6 +247,13 @@ if _should_run chain_merging && [ "$CHAIN_MERGING_MB" -gt 0 ]; then
     bench_log "=== Chain-merging throughput vs variant density (--min-context 0) ==="
     run_scenario_chain_merging "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" \
         "$CHAIN_MERGING_MB" "${CHAIN_MERGING_VAR_VALS[@]}"
+    echo ""
+fi
+
+if _should_run edz_format && [ "${#EDZ_FORMAT_SIZES[@]}" -gt 0 ]; then
+    bench_log "=== EDZ format: SEDS vs EDZ write speed + file-size ratio ==="
+    run_scenario_edz_format "$TMPDIR_BENCH" "$CSV_FILE" "$TIMESTAMP" "$PRESET" "$N_REPS" \
+        "${EDZ_FORMAT_SIZES[@]}"
     echo ""
 fi
 
