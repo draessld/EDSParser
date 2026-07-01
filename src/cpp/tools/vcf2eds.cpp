@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
             ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds or .edz)")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
             ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
-            ("source-format", po::value<std::string>(&source_format_str)->default_value("seds"), "Source file format: seds (text, default) or edz (binary bitset, ~8× smaller)");
+            ("source-format", po::value<std::string>(&source_format_str)->default_value("seds"), "Source file format: seds (text, default), seds-sparse (text, universal {0} omitted), edz (binary bitset), edz-sparse (binary bitset, universal entries omitted)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -122,8 +122,13 @@ int main(int argc, char** argv) {
         Sources::Format seds_format = Sources::Format::SEDS;
         if (source_format_str == "edz") {
             seds_format = Sources::Format::EDZ;
+        } else if (source_format_str == "edz-sparse") {
+            seds_format = Sources::Format::EDZ_SPARSE;
+        } else if (source_format_str == "seds-sparse") {
+            seds_format = Sources::Format::SEDS_SPARSE;
         } else if (source_format_str != "seds") {
-            std::cerr << "Error: --source-format must be 'seds' or 'edz', got: " << source_format_str << "\n";
+            std::cerr << "Error: --source-format must be 'seds', 'seds-sparse', 'edz', or 'edz-sparse', got: "
+                      << source_format_str << "\n";
             return 1;
         }
 
@@ -175,7 +180,11 @@ int main(int argc, char** argv) {
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
 
-        const std::string src_ext = (seds_format == Sources::Format::EDZ) ? ".edz" : ".seds";
+        const bool is_edz_fmt    = (seds_format == Sources::Format::EDZ ||
+                                     seds_format == Sources::Format::EDZ_SPARSE);
+        const bool needs_binary  = (is_edz_fmt ||
+                                    seds_format == Sources::Format::SEDS_SPARSE);
+        const std::string src_ext = is_edz_fmt ? ".edz" : ".seds";
 
         if (create_leds) {
             std::string base_name = input_file.stem().string();
@@ -205,7 +214,7 @@ int main(int argc, char** argv) {
         }
 
         auto seds_open_flags = std::ios::out | std::ios::trunc
-                             | (seds_format == Sources::Format::EDZ ? std::ios::binary : std::ios::openmode{});
+                             | (needs_binary ? std::ios::binary : std::ios::openmode{});
         std::ofstream seds_out(seds_path, seds_open_flags);
         if (!seds_out) {
             throw std::runtime_error("Failed to open sources file: " + seds_path.string());

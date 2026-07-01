@@ -34,6 +34,10 @@ Sources::Sources(Sources&& other) noexcept
     , format_(other.format_)
     , num_paths_(other.num_paths_)
     , is_bitset_(other.is_bitset_)
+    , is_sparse_(other.is_sparse_)
+    , m_degenerate_(other.m_degenerate_)
+    , presence_bitvec_(std::move(other.presence_bitvec_))
+    , bitvec_prefix_(std::move(other.bitvec_prefix_))
     , file_path_(std::move(other.file_path_))
     , stream_(std::move(other.stream_))
     , base_positions_(std::move(other.base_positions_))
@@ -46,16 +50,20 @@ Sources::Sources(Sources&& other) noexcept
 
 Sources& Sources::operator=(Sources&& other) noexcept {
     if (this != &other) {
-        cardinality_  = other.cardinality_;
-        format_       = other.format_;
-        num_paths_    = other.num_paths_;
-        is_bitset_    = other.is_bitset_;
-        file_path_    = std::move(other.file_path_);
-        stream_       = std::move(other.stream_);
+        cardinality_    = other.cardinality_;
+        format_         = other.format_;
+        num_paths_      = other.num_paths_;
+        is_bitset_      = other.is_bitset_;
+        is_sparse_      = other.is_sparse_;
+        m_degenerate_   = other.m_degenerate_;
+        presence_bitvec_ = std::move(other.presence_bitvec_);
+        bitvec_prefix_  = std::move(other.bitvec_prefix_);
+        file_path_      = std::move(other.file_path_);
+        stream_         = std::move(other.stream_);
         base_positions_ = std::move(other.base_positions_);
-        binary_index_ = std::move(other.binary_index_);
-        cache_        = std::move(other.cache_);
-        cache_map_    = std::move(other.cache_map_);
+        binary_index_   = std::move(other.binary_index_);
+        cache_          = std::move(other.cache_);
+        cache_map_      = std::move(other.cache_map_);
         cache_capacity_ = other.cache_capacity_;
     }
     return *this;
@@ -79,28 +87,30 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
     auto sources = std::make_shared<Sources>(0, format);
     sources->file_path_ = path;
 
-    if (format == Format::SEDS) {
-        // Open file once — parse_seds() builds index and sets cardinality_ in one pass
-        std::ifstream stream(path);
-        if (!stream.is_open()) {
-            throw std::runtime_error("Failed to open sources file: " + path.string());
-        }
-        sources->parse_seds(stream);
-        if (sources->cardinality_ == 0) {
-            throw std::runtime_error("Sources file contains no source sets");
-        }
-        sources->stream_ = std::move(stream);
-    } else {
-        // EDZ: must open in binary mode; parse_edz() reads the header + index
+    if (format == Format::SEDS || format == Format::SEDS_SPARSE) {
+        // Open in binary mode — parse_seds() does seekg for sparse trailer detection
         std::ifstream stream(path, std::ios::binary);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open sources file: " + path.string());
         }
-        sources->parse_edz(stream);
+        sources->parse_seds(stream);  // auto-detects sparse trailer
+        if (sources->cardinality_ == 0) {
+            throw std::runtime_error("Sources file contains no source sets");
+        }
+        sources->stream_ = std::move(stream);
+    } else if (format == Format::EDZ || format == Format::EDZ_SPARSE) {
+        // EDZ: binary mode; parse_edz() reads header + optional bitvec for sparse
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.is_open()) {
+            throw std::runtime_error("Failed to open sources file: " + path.string());
+        }
+        sources->parse_edz(stream);  // auto-detects sparse via flags & 0x0004
         if (sources->cardinality_ == 0) {
             throw std::runtime_error("EDZ file contains no source sets");
         }
         sources->stream_ = std::move(stream);
+    } else {
+        throw std::runtime_error("Unsupported or unimplemented sources format");
     }
 
     return sources;
@@ -120,9 +130,23 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
     std::string ext = path.extension().string();
 
     if (ext == ".seds") {
+        // Check for sparse trailer: last 20 bytes = "SEDS"(4) + card(8) + m_degen(8)
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (f.is_open()) {
+            auto sz = static_cast<std::streamoff>(f.tellg());
+            if (sz >= 20) {
+                f.seekg(sz - 20);
+                char trailer[4];
+                f.read(trailer, 4);
+                if (f.gcount() == 4 && trailer[0] == 'S' && trailer[1] == 'E' &&
+                    trailer[2] == 'D' && trailer[3] == 'S') {
+                    return Format::SEDS_SPARSE;
+                }
+            }
+        }
         return Format::SEDS;
     } else if (ext == ".edz") {
-        // Check magic bytes to determine if compressed
+        // Check magic bytes and flags
         std::ifstream stream(path, std::ios::binary);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open file for format detection: " + path.string());
@@ -135,23 +159,19 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
         }
 
         if (magic[0] == 'E' && magic[1] == 'D' && magic[2] == 'Z' && magic[3] == '\0') {
-            // Read flags to check compression
             uint16_t flags;
             stream.read(reinterpret_cast<char*>(&flags), sizeof(flags));
             if (stream.gcount() < static_cast<std::streamsize>(sizeof(flags))) {
                 throw std::runtime_error("Failed to read format flags");
             }
 
-            if (flags & 0x0001) {
-                return Format::EDZ_COMPRESSED;
-            } else {
-                return Format::EDZ;
-            }
+            if (flags & 0x0001) return Format::EDZ_COMPRESSED;
+            if (flags & 0x0004) return Format::EDZ_SPARSE;
+            return Format::EDZ;
         } else {
             throw std::runtime_error("Invalid .edz file (bad magic bytes): " + path.string());
         }
     } else {
-        // Default to SEDS for unknown extensions
         return Format::SEDS;
     }
 }
@@ -245,87 +265,128 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
 // ─────────────────────────────────────────────────────────────────────────────
 void Sources::parse_seds(std::istream& is) {
     base_positions_.clear();
-    // Reserve capacity upfront if cardinality is already known (e.g. when
-    // loading a file whose EDS has already told us its string count).
-    // Avoids repeated reallocation as base_positions_ grows.
-    if (cardinality_ > 0) {
-        base_positions_.reserve(cardinality_);
+
+    // ── Sparse trailer detection ────────────────────────────────────────────
+    // SEDS_SPARSE files end with: bitvec | "SEDS"(4) | cardinality(8) | m_degen(8)
+    // Last 20 bytes are always: "SEDS" + cardinality + m_degenerate
+    is.seekg(0, std::ios::end);
+    auto file_size = static_cast<std::streamoff>(is.tellg());
+
+    // Local helper: read 8 bytes LE as uint64_t (read_le is defined later in the file)
+    auto read_u64le = [](std::istream& s) -> uint64_t {
+        uint8_t buf[8];
+        s.read(reinterpret_cast<char*>(buf), 8);
+        uint64_t v = 0;
+        for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(buf[i]) << (i * 8);
+        return v;
+    };
+
+    if (file_size >= 20) {
+        is.seekg(file_size - 20);
+        char trailer_magic[4];
+        is.read(trailer_magic, 4);
+        if (is.gcount() == 4 && trailer_magic[0] == 'S' && trailer_magic[1] == 'E' &&
+            trailer_magic[2] == 'D' && trailer_magic[3] == 'S') {
+            // Sparse format: read cardinality and m_degenerate from trailer
+            uint64_t card    = read_u64le(is);
+            uint64_t m_degen = read_u64le(is);
+
+            if (cardinality_ == 0) cardinality_ = static_cast<size_t>(card);
+            else if (cardinality_ != static_cast<size_t>(card))
+                throw std::runtime_error("SEDS_SPARSE: cardinality mismatch");
+
+            m_degenerate_ = static_cast<size_t>(m_degen);
+            is_sparse_    = true;
+            format_       = Format::SEDS_SPARSE;
+
+            // Read bitvec: ceil(cardinality/8) bytes ending at file_size-20
+            size_t bitvec_size = (cardinality_ + 7) / 8;
+            auto bitvec_pos = file_size - 20 - static_cast<std::streamoff>(bitvec_size);
+            if (bitvec_pos < 0) throw std::runtime_error("SEDS_SPARSE: file too small for bitvec");
+            is.seekg(bitvec_pos);
+            presence_bitvec_.resize(bitvec_size);
+            is.read(reinterpret_cast<char*>(presence_bitvec_.data()),
+                    static_cast<std::streamsize>(bitvec_size));
+            if (static_cast<size_t>(is.gcount()) != bitvec_size)
+                throw std::runtime_error("SEDS_SPARSE: failed to read presence bitvec");
+
+            // Build prefix popcount: prefix_[i] = #set bits in bitvec[0..i-1]
+            bitvec_prefix_.resize(bitvec_size + 1);
+            bitvec_prefix_[0] = 0;
+            for (size_t i = 0; i < bitvec_size; ++i)
+                bitvec_prefix_[i + 1] = bitvec_prefix_[i] +
+                                        static_cast<uint32_t>(__builtin_popcount(presence_bitvec_[i]));
+        }
     }
 
-    constexpr std::streamsize CHUNK = 64 * 1024;   // 64 KB per I/O call
-    std::vector<char> buf(CHUNK);
-    std::streamoff file_offset = 0;  // byte offset of buf[0] in the file
-    int depth = 0;                   // brace nesting depth (0 = between sets)
+    // Seek back to start for text-entry parsing
+    is.seekg(0);
+    is.clear();
 
-    while (is) {
-        // Pull the next chunk from the file into buf[0..n-1].
-        // gcount() tells us how many bytes were actually delivered, which may
-        // be less than CHUNK at the end of the file or on a short read.
+    if (is_sparse_ && m_degenerate_ == 0) {
+        // All strings are universal — no text entries to parse
+        return;
+    }
+
+    if (is_sparse_) base_positions_.reserve(m_degenerate_);
+    else if (cardinality_ > 0) base_positions_.reserve(cardinality_);
+
+    // Count limit: for sparse, stop after exactly m_degenerate_ text entries
+    const size_t max_entries = is_sparse_ ? m_degenerate_ : SIZE_MAX;
+    size_t entries_found = 0;
+
+    constexpr std::streamsize CHUNK = 64 * 1024;
+    std::vector<char> buf(CHUNK);
+    std::streamoff file_offset = 0;
+    int depth = 0;
+    bool done = false;
+
+    while (!done && is) {
         is.read(buf.data(), CHUNK);
         std::streamsize n = is.gcount();
         if (n <= 0) break;
 
-        // Scan every byte in the chunk.  This is the hot loop: for a 2 MB file
-        // we visit ~2 million bytes total, but spread over ~32 iterations of
-        // the outer while loop.  The inner loop body is a handful of cheap
-        // comparisons; the branch predictor quickly learns the dominant path
-        // (most bytes are digits or commas, not braces).
-        for (std::streamsize i = 0; i < n; ++i) {
+        for (std::streamsize i = 0; i < n && !done; ++i) {
             const char ch = buf[i];
 
             if (ch == SET_OPEN) {
-                // Opening brace '{':
-                //   If we are at depth 0 this is the start of a new source set.
-                //   Record the file byte offset of this '{' — that is exactly
-                //   the position we will need to seekg() to later when a caller
-                //   wants to read this particular source set.
                 if (depth == 0) {
                     base_positions_.push_back(
                         static_cast<std::streampos>(file_offset + i));
+                    ++entries_found;
                 }
-                ++depth;   // Enter one level of nesting.
-
+                ++depth;
             } else if (ch == SET_CLOSE) {
-                // Closing brace '}': exit one level of nesting.
-                // When depth returns to 0 we have finished one complete source
-                // set.  We do not need to act here; the next '{' at depth 0 will
-                // begin the next set.
                 --depth;
-
+                if (depth == 0 && entries_found >= max_entries) {
+                    done = true;  // Consumed all expected entries; stop before bitvec
+                }
             } else if (depth == 0 && !std::isspace(static_cast<unsigned char>(ch))) {
-                // Any non-whitespace character outside a brace pair is malformed.
-                // Whitespace between sets (e.g. a trailing newline at end of file)
-                // is tolerated silently; anything else is a format violation.
-                throw std::runtime_error(
-                    "Unexpected character in sEDS file: " + std::string(1, ch));
+                if (is_sparse_) {
+                    // Binary bitvec/trailer bytes can appear after text entries;
+                    // count-limit should have stopped us, but bail safely.
+                    done = true;
+                } else {
+                    throw std::runtime_error(
+                        "Unexpected character in sEDS file: " + std::string(1, ch));
+                }
             }
-            // Characters inside a set (digits, commas) are deliberately ignored
-            // here — we are only building an index of where each set *starts*,
-            // not parsing the set contents.  Parsing happens lazily in
-            // read_from_seds() when a caller actually needs the path IDs.
         }
 
-        // Advance the running file offset by the number of bytes we processed.
         file_offset += n;
     }
 
-    // ── Validate / set cardinality ───────────────────────────────────────────
-    // base_positions_.size() is now the total number of source sets found.
-    // This must match cardinality_ (the expected number of strings) if it was
-    // known in advance; otherwise we use the parsed count to initialise it.
-    const size_t string_count = base_positions_.size();
-
-    if (cardinality_ == 0) {
-        // Auto-detect mode: cardinality was left as 0 when the Sources object
-        // was constructed (typically during Sources::load()).  Set it now.
-        cardinality_ = string_count;
-    } else if (string_count != cardinality_) {
-        // Mismatch: the caller told us to expect N sets but we found M.
-        // This usually means a stale .seds file was paired with the wrong .eds.
-        throw std::runtime_error("sEDS: Source count (" +
-            std::to_string(string_count) + ") does not match cardinality (" +
-            std::to_string(cardinality_) + ")");
+    if (!is_sparse_) {
+        const size_t string_count = base_positions_.size();
+        if (cardinality_ == 0) {
+            cardinality_ = string_count;
+        } else if (string_count != cardinality_) {
+            throw std::runtime_error("sEDS: Source count (" +
+                std::to_string(string_count) + ") does not match cardinality (" +
+                std::to_string(cardinality_) + ")");
+        }
     }
+    // For sparse, cardinality_ and m_degenerate_ are already set from the trailer.
 }
 
 // ================================================================================
@@ -428,37 +489,72 @@ void Sources::parse_edz(std::istream& is) {
     uint64_t card = read_le<uint64_t>(is);
 
     if (flags & 0x0002) {
-        // ── Bitset EDZ format ────────────────────────────────────────────────
-        // Header layout (24 bytes):
-        //   [0..3]   'E','D','Z','\0'
-        //   [4..5]   flags = 0x0002
-        //   [6..7]   reserved
-        //   [8..15]  cardinality (may be 0 if written by a streaming writer that
-        //            could not seek back; compute from file size in that case)
-        //   [16..23] num_paths
+        // ── Bitset EDZ format (dense or sparse) ─────────────────────────────
+        // Dense header (24 bytes):   magic+flags+reserved | card(8) | num_paths(8)
+        // Sparse header (32 bytes):  same + m_degenerate(8)
+        // flags 0x0002 = bitset; flags 0x0004 = sparse; 0x0006 = both
         uint64_t np = read_le<uint64_t>(is);
         if (np == 0) throw std::runtime_error("EDZ bitset: num_paths is 0 in header");
         num_paths_ = static_cast<size_t>(np);
         is_bitset_ = true;
 
-        // If cardinality was not written (placeholder 0), compute from file size.
+        const bool sparse = (flags & 0x0004) != 0;
+        if (sparse) {
+            // Read m_degenerate from [24..31]
+            uint64_t m_degen = read_le<uint64_t>(is);
+            m_degenerate_ = static_cast<size_t>(m_degen);
+            is_sparse_    = true;
+            format_       = Format::EDZ_SPARSE;
+        }
+
+        // If cardinality was not written (placeholder 0), compute from data section size.
         if (card == 0) {
             auto cur = is.tellg();
             is.seekg(0, std::ios::end);
             auto sz = is.tellg();
             is.seekg(cur);
-            if (sz <= 24) throw std::runtime_error("EDZ bitset: file too small");
-            card = static_cast<uint64_t>((static_cast<size_t>(sz) - 24) / edz_bpe(num_paths_));
+            size_t header_size = sparse ? 32 : 24;
+            if (static_cast<size_t>(sz) <= header_size)
+                throw std::runtime_error("EDZ bitset: file too small");
+            size_t data_bytes = static_cast<size_t>(sz) - header_size;
+            if (!sparse) {
+                card = static_cast<uint64_t>(data_bytes / edz_bpe(num_paths_));
+            } else {
+                // For sparse, data section = m_degenerate * bpe; bitvec follows.
+                // Derive cardinality from bitvec size; bitvec is remaining bytes after data.
+                size_t bpe = edz_bpe(num_paths_);
+                size_t degen_bytes = m_degenerate_ * bpe;
+                size_t bitvec_bytes = data_bytes - degen_bytes;
+                card = static_cast<uint64_t>(bitvec_bytes * 8);
+            }
         }
 
-        // Validate or set cardinality_
         if (cardinality_ == 0) {
             cardinality_ = static_cast<size_t>(card);
         } else if (cardinality_ != static_cast<size_t>(card)) {
             throw std::runtime_error("EDZ bitset: cardinality mismatch (expected " +
                 std::to_string(cardinality_) + ", got " + std::to_string(card) + ")");
         }
-        // No index section; entries start immediately at byte 24.
+
+        if (sparse) {
+            // Read bitvec from position 32 + m_degenerate * bpe
+            size_t bpe = edz_bpe(num_paths_);
+            size_t bitvec_offset = 32 + m_degenerate_ * bpe;
+            size_t bitvec_size   = (cardinality_ + 7) / 8;
+
+            is.seekg(static_cast<std::streampos>(bitvec_offset));
+            presence_bitvec_.resize(bitvec_size);
+            is.read(reinterpret_cast<char*>(presence_bitvec_.data()),
+                    static_cast<std::streamsize>(bitvec_size));
+            if (static_cast<size_t>(is.gcount()) != bitvec_size)
+                throw std::runtime_error("EDZ_SPARSE: failed to read presence bitvec");
+
+            bitvec_prefix_.resize(bitvec_size + 1);
+            bitvec_prefix_[0] = 0;
+            for (size_t i = 0; i < bitvec_size; ++i)
+                bitvec_prefix_[i + 1] = bitvec_prefix_[i] +
+                                        static_cast<uint32_t>(__builtin_popcount(presence_bitvec_[i]));
+        }
         return;
     }
 
@@ -493,9 +589,24 @@ PathSet Sources::read_from_seds(size_t string_id) const {
         throw std::runtime_error("Sources file stream not available");
     }
 
-    // Seek to position
-    stream_.clear();  // Clear error flags
-    stream_.seekg(base_positions_[string_id]);
+    // Sparse: check bitvec; universal entries return {0} immediately
+    if (is_sparse_) {
+        size_t byte_idx  = string_id / 8;
+        uint8_t bit_mask = uint8_t{1} << (string_id % 8);
+        if (byte_idx >= presence_bitvec_.size() ||
+            !(presence_bitvec_[byte_idx] & bit_mask)) {
+            return {0};
+        }
+        // Compute rank: count of set bits in bitvec before bit string_id
+        uint8_t partial = presence_bitvec_[byte_idx] & (bit_mask - 1u);
+        size_t rank = bitvec_prefix_[byte_idx] +
+                      static_cast<size_t>(__builtin_popcount(partial));
+        stream_.clear();
+        stream_.seekg(base_positions_[rank]);
+    } else {
+        stream_.clear();
+        stream_.seekg(base_positions_[string_id]);
+    }
 
     if (!stream_) {
         throw std::runtime_error("Failed to seek to source position " +
@@ -615,8 +726,35 @@ PathSet Sources::read_from_edz(size_t string_id) const {
     }
 
     if (is_bitset_) {
-        // Bitset format: fixed-size entry at a known byte offset (no index lookup)
-        size_t bpe    = edz_bpe(num_paths_);
+        size_t bpe = edz_bpe(num_paths_);
+
+        if (is_sparse_) {
+            // Sparse bitset: check bitvec; universal → return {0}
+            size_t byte_idx  = string_id / 8;
+            uint8_t bit_mask = uint8_t{1} << (string_id % 8);
+            if (byte_idx >= presence_bitvec_.size() ||
+                !(presence_bitvec_[byte_idx] & bit_mask)) {
+                return {0};
+            }
+            uint8_t partial = presence_bitvec_[byte_idx] & (bit_mask - 1u);
+            size_t rank = bitvec_prefix_[byte_idx] +
+                          static_cast<size_t>(__builtin_popcount(partial));
+            // Data section starts at byte 32 (sparse header is 32 bytes)
+            size_t offset = 32 + rank * bpe;
+            auto target = static_cast<std::streampos>(offset);
+            if (!stream_.good() || stream_.tellg() != target) {
+                stream_.clear();
+                stream_.seekg(target);
+            }
+            std::vector<uint8_t> buf(bpe);
+            stream_.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(bpe));
+            if (static_cast<size_t>(stream_.gcount()) != bpe)
+                throw std::runtime_error("EDZ_SPARSE: short read for source set " +
+                                         std::to_string(string_id));
+            return bitset_to_pathset(buf.data(), bpe, num_paths_);
+        }
+
+        // Dense bitset: fixed-size entry at known offset (header is 24 bytes)
         size_t offset = 24 + string_id * bpe;
         auto target   = static_cast<std::streampos>(offset);
         if (!stream_.good() || stream_.tellg() != target) {
@@ -984,9 +1122,11 @@ PathSet Sources::read_source(size_t string_id) const {
     PathSet paths;
     switch (format_) {
         case Format::SEDS:
+        case Format::SEDS_SPARSE:
             paths = read_from_seds(string_id);
             break;
         case Format::EDZ:
+        case Format::EDZ_SPARSE:
             paths = read_from_edz(string_id);
             break;
         case Format::EDZ_COMPRESSED:
@@ -1019,9 +1159,11 @@ const PathSet& Sources::read_source_ref(size_t string_id) const {
     PathSet paths;
     switch (format_) {
         case Format::SEDS:
+        case Format::SEDS_SPARSE:
             paths = read_from_seds(string_id);
             break;
         case Format::EDZ:
+        case Format::EDZ_SPARSE:
             paths = read_from_edz(string_id);
             break;
         case Format::EDZ_COMPRESSED:
@@ -1168,10 +1310,12 @@ std::vector<PathSet> Sources::merge_adjacent_sources(
 void Sources::save(const std::filesystem::path& path) const {
     switch (format_) {
         case Format::SEDS:
-            save_seds(path);
+        case Format::SEDS_SPARSE:
+            save_seds(path);  // saves as dense SEDS (reads via read_source_ref)
             break;
         case Format::EDZ:
-            save_edz(path);
+        case Format::EDZ_SPARSE:
+            save_edz(path);   // saves as dense EDZ
             break;
         case Format::EDZ_COMPRESSED:
             save_edz_compressed(path);
@@ -1272,6 +1416,63 @@ void Sources::write_edz_finalize(std::ostream& os, size_t cardinality) {
     os.seekp(8);
     write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
     os.seekp(0, std::ios::end);
+}
+
+// ── EDZ_SPARSE static streaming write API ─────────────────────────────────────
+// Header layout (32 bytes):
+//   [0..3]   'E','D','Z','\0'
+//   [4..5]   flags = 0x0006 (bitset | sparse)
+//   [6..7]   reserved
+//   [8..15]  cardinality placeholder (patched by finalize)
+//   [16..23] num_paths
+//   [24..31] m_degenerate placeholder (patched by finalize)
+// Data:  m_degenerate * bpe bytes (non-universal entries only)
+// Bitvec: ceil(cardinality/8) bytes appended by finalize
+
+void Sources::write_edz_sparse_header(std::ostream& os, size_t num_paths) {
+    os.write("EDZ\0", 4);
+    write_le<uint16_t>(os, uint16_t{0x0006});    // flags: bitset + sparse
+    write_le<uint16_t>(os, uint16_t{0});          // reserved
+    write_le<uint64_t>(os, uint64_t{0});          // cardinality placeholder
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_paths));
+    write_le<uint64_t>(os, uint64_t{0});          // m_degenerate placeholder
+}
+
+void Sources::write_edz_sparse_finalize(std::ostream& os, size_t cardinality,
+                                         size_t num_paths,
+                                         size_t m_degenerate,
+                                         const std::vector<uint8_t>& presence_bitvec) {
+    // Append bitvec at end of data section
+    os.seekp(0, std::ios::end);
+    os.write(reinterpret_cast<const char*>(presence_bitvec.data()),
+             static_cast<std::streamsize>(presence_bitvec.size()));
+    // Patch cardinality at [8..15]
+    os.seekp(8);
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
+    // Patch num_paths at [16..23]
+    os.seekp(16);
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_paths));
+    // Patch m_degenerate at [24..31]
+    os.seekp(24);
+    write_le<uint64_t>(os, static_cast<uint64_t>(m_degenerate));
+    os.seekp(0, std::ios::end);
+}
+
+// ── SEDS_SPARSE static streaming write API ────────────────────────────────────
+// After writing all non-universal text entries via standard SEDS write calls,
+// call this to append bitvec + "SEDS" + cardinality + m_degenerate trailer.
+
+void Sources::write_seds_sparse_finalize(std::ostream& os, size_t cardinality,
+                                          size_t m_degenerate,
+                                          const std::vector<uint8_t>& presence_bitvec) {
+    // Bitvec
+    os.write(reinterpret_cast<const char*>(presence_bitvec.data()),
+             static_cast<std::streamsize>(presence_bitvec.size()));
+    // Magic
+    os.write("SEDS", 4);
+    // cardinality + m_degenerate (little-endian 64-bit each)
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
+    write_le<uint64_t>(os, static_cast<uint64_t>(m_degenerate));
 }
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {

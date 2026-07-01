@@ -35,20 +35,41 @@ class Sources {
 public:
     // Format enum
     enum class Format {
-        SEDS,             // Text format with range+complement encoding
-        EDZ,              // Binary bitset format (implemented)
+        SEDS,             // Text format with range+complement encoding (dense)
+        SEDS_SPARSE,      // Text format, sparse: {0} omitted; bitvec+trailer appended
+        EDZ,              // Binary bitset format (dense)
+        EDZ_SPARSE,       // Binary bitset, sparse: non-degen entries only; bitvec at end
         EDZ_COMPRESSED    // Binary format with zstd block compression (planned)
     };
 
-    // ── Streaming EDZ write API ───────────────────────────────────────────────
-    // Used by vcf2eds/msa2eds to write EDZ directly during streaming output
-    // without constructing a Sources object.  Call in order:
+    // ── Streaming EDZ write API (dense) ──────────────────────────────────────
+    // Call in order:
     //   1. write_edz_header(os, num_paths)  — writes 24-byte placeholder header
     //   2. write_edz_entry(os, paths, num_paths)  — one call per EDS string
     //   3. write_edz_finalize(os, cardinality)  — seeks back, fills cardinality
     static void write_edz_header  (std::ostream& os, size_t num_paths);
     static void write_edz_entry   (std::ostream& os, const PathSet& paths, size_t num_paths);
     static void write_edz_finalize(std::ostream& os, size_t cardinality);
+
+    // ── Streaming EDZ_SPARSE write API ────────────────────────────────────────
+    // Skip write_edz_entry calls for universal ({0}) entries; track them in bitvec.
+    // Header is 32 bytes; finalize patches cardinality + m_degenerate + appends bitvec.
+    //   1. write_edz_sparse_header(os, num_paths)           — 32-byte placeholder
+    //   2. write_edz_entry(os, paths, num_paths)            — only for non-universal
+    //   3. write_edz_sparse_finalize(os, cardinality,
+    //                                m_degenerate, bitvec)  — patches + appends bitvec
+    static void write_edz_sparse_header  (std::ostream& os, size_t num_paths);
+    static void write_edz_sparse_finalize(std::ostream& os, size_t cardinality,
+                                          size_t num_paths,
+                                          size_t m_degenerate,
+                                          const std::vector<uint8_t>& presence_bitvec);
+
+    // ── Streaming SEDS_SPARSE write API ───────────────────────────────────────
+    // Write text entries for non-universal strings only, then call finalize to
+    // append the bitvec + trailer.
+    static void write_seds_sparse_finalize(std::ostream& os, size_t cardinality,
+                                           size_t m_degenerate,
+                                           const std::vector<uint8_t>& presence_bitvec);
 
     // Construction
     explicit Sources(size_t cardinality, Format format = Format::SEDS);
@@ -123,6 +144,8 @@ public:
     size_t cardinality() const { return cardinality_; }
     Format get_format() const { return format_; }
     size_t num_paths() const { return num_paths_; }
+    bool   is_sparse()  const { return is_sparse_; }
+    size_t m_degenerate() const { return m_degenerate_; }
 
     // Set num_paths — required before save_edz() when building Sources in-memory
     void set_num_paths(size_t n) { num_paths_ = n; }
@@ -140,6 +163,13 @@ private:
     Format   format_;
     size_t   num_paths_ = 0;               // Total path count (required for EDZ bitset)
     bool     is_bitset_ = false;           // true → EDZ bitset format (flags & 0x0002)
+    bool     is_sparse_ = false;           // true → sparse format (universal entries omitted)
+    size_t   m_degenerate_ = 0;            // Number of non-universal entries stored
+
+    // Sparse support: bitvec[i/8] bit (i%8) = 1 iff string i is non-universal
+    std::vector<uint8_t>   presence_bitvec_;
+    // Prefix popcount: prefix_[i] = #set bits in bitvec[0..i-1]; size = bitvec_.size()+1
+    std::vector<uint32_t>  bitvec_prefix_;
 
     // Streaming support
     std::filesystem::path file_path_;

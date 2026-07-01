@@ -769,8 +769,11 @@ std::vector<VariantGroup> group_overlapping_variants(
  *         true position in the reference after this call.  It may exceed end_pos
  *         when a variant's REF span crosses the block boundary.
  */
-// Returns {num_groups, new_write_pos, seds_entry_count}
-std::tuple<size_t, size_t, size_t> generate_eds_from_variants(
+// Returns {num_groups, new_write_pos, total_seds_entries, m_degen_entries}
+// total_seds_entries = all EDS strings (including universal)
+// m_degen_entries    = non-universal entries written to seds_out (for sparse formats)
+// presence_bitvec / bitvec_bit_count: accumulated across calls for sparse; nullptr for dense
+std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     const std::vector<VCFVariant>& variants,
@@ -779,33 +782,57 @@ std::tuple<size_t, size_t, size_t> generate_eds_from_variants(
     std::ostream& seds_out,
     size_t start_pos,
     size_t end_pos,
-    Sources::Format seds_format = Sources::Format::SEDS)
+    Sources::Format seds_format = Sources::Format::SEDS,
+    std::vector<uint8_t>* presence_bitvec = nullptr,
+    size_t* bitvec_bit_count = nullptr)
 {
 
     // Group overlapping variants
     std::vector<VariantGroup> groups = group_overlapping_variants(variants, fasta_stream, fasta_meta);
     size_t num_groups = groups.size();
 
-    size_t current_pos = start_pos;  // Start from provided position
+    size_t current_pos = start_pos;
 
-    // Helper: write one source entry in the chosen format, counting all writes.
+    const bool is_edz = (seds_format == Sources::Format::EDZ ||
+                         seds_format == Sources::Format::EDZ_SPARSE);
+    const bool is_sparse = (seds_format == Sources::Format::SEDS_SPARSE ||
+                            seds_format == Sources::Format::EDZ_SPARSE);
+
+    // Helper: record one bit in the presence bitvec (1 = non-universal)
+    size_t m_degen_entries = 0;
+    auto push_bit = [&](bool present) {
+        if (!is_sparse || !presence_bitvec || !bitvec_bit_count) return;
+        size_t bit_idx  = *bitvec_bit_count;
+        size_t byte_idx = bit_idx / 8;
+        if (presence_bitvec->size() <= byte_idx) presence_bitvec->resize(byte_idx + 1, 0);
+        if (present) (*presence_bitvec)[byte_idx] |= uint8_t{1} << (bit_idx % 8);
+        ++(*bitvec_bit_count);
+    };
+
     const PathSet universal_ps{0};
     size_t seds_entries = 0;
+
     auto write_source = [&](const PathSet& ps) {
-        if (seds_format == Sources::Format::EDZ) {
+        bool is_univ = (ps.size() == 1 && ps[0] == 0);
+        ++seds_entries;
+        push_bit(!is_univ);
+        if (is_sparse && is_univ) return;  // skip universal in sparse mode
+        if (is_edz) {
             Sources::write_edz_entry(seds_out, ps, n_samples);
         } else {
             write_seds_entry(seds_out, std::set<int>(ps.begin(), ps.end()), n_samples);
         }
-        ++seds_entries;
+        ++m_degen_entries;
     };
     auto write_source_set = [&](const std::set<int>& s) {
-        if (seds_format == Sources::Format::EDZ) {
+        ++seds_entries;
+        push_bit(true);  // explicit path sets are always non-universal
+        if (is_edz) {
             Sources::write_edz_entry(seds_out, PathSet(s.begin(), s.end()), n_samples);
         } else {
             write_seds_entry(seds_out, s, n_samples);
         }
-        ++seds_entries;
+        ++m_degen_entries;
     };
 
     for (const auto& group : groups) {
@@ -895,11 +922,9 @@ std::tuple<size_t, size_t, size_t> generate_eds_from_variants(
         current_pos = flush_end;
     }
 
-    // Return both the group count (for statistics) and the true write cursor.
-    // current_pos may exceed end_pos when a variant's REF spans past the block
-    // boundary; the caller must use it as start_pos for the next block so the
-    // reference region is not emitted a second time.
-    return {num_groups, current_pos, seds_entries};
+    // Return: num_groups, true write cursor, total EDS strings, non-universal written.
+    // current_pos may exceed end_pos when a variant's REF spans a block boundary.
+    return {num_groups, current_pos, seds_entries, m_degen_entries};
 }
 
 // ============================================================================
@@ -921,10 +946,11 @@ void parse_vcf_to_eds_streaming(
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
 
-    // For EDZ format: write placeholder header (num_paths unknown until VCF is parsed;
-    // will be patched at the end via seekp).
+    // Write placeholder header for binary formats (patched at end via seekp).
     if (seds_format == Sources::Format::EDZ) {
         Sources::write_edz_header(seds_output, /*num_paths_placeholder=*/0);
+    } else if (seds_format == Sources::Format::EDZ_SPARSE) {
+        Sources::write_edz_sparse_header(seds_output, /*num_paths_placeholder=*/0);
     }
 
     size_t n_samples = 0;
@@ -965,6 +991,13 @@ void parse_vcf_to_eds_streaming(
     // (not at current_block_start) to avoid re-emitting that reference region.
     size_t actual_write_pos = 0;
     size_t total_seds_entries = 0;
+    size_t total_m_degen_entries = 0;
+
+    // Sparse bitvec: accumulated across all blocks; bit i = 1 means string i is non-universal
+    std::vector<uint8_t> presence_bitvec;
+    size_t bitvec_bit_count = 0;
+    const bool is_sparse_fmt = (seds_format == Sources::Format::SEDS_SPARSE ||
+                                 seds_format == Sources::Format::EDZ_SPARSE);
 
     bool vcf_finished = false;
 
@@ -1098,12 +1131,16 @@ void parse_vcf_to_eds_streaming(
         // Generate EDS for this block and count groups.
         // Pass actual_write_pos (not current_block_start) so that a variant whose
         // REF extended past the previous block boundary is not re-emitted here.
-        auto [block_groups, new_write_pos, block_seds_entries] = generate_eds_from_variants(
-            fasta_stream, fasta_meta, block_variants, n_samples,
-            eds_output, seds_output,
-            actual_write_pos, current_block_end, seds_format);
+        auto [block_groups, new_write_pos, block_seds_entries, block_m_degen] =
+            generate_eds_from_variants(
+                fasta_stream, fasta_meta, block_variants, n_samples,
+                eds_output, seds_output,
+                actual_write_pos, current_block_end, seds_format,
+                is_sparse_fmt ? &presence_bitvec  : nullptr,
+                is_sparse_fmt ? &bitvec_bit_count : nullptr);
         actual_write_pos = new_write_pos;
-        total_seds_entries += block_seds_entries;
+        total_seds_entries    += block_seds_entries;
+        total_m_degen_entries += block_m_degen;
 
         // Flush output to disk after each block (prevent memory accumulation)
         eds_output.flush();
@@ -1132,9 +1169,9 @@ void parse_vcf_to_eds_streaming(
         stats->variant_groups = total_variant_groups;
     }
 
-    // EDZ: patch the 24-byte header with the now-known cardinality and num_paths.
+    // Finalize header / trailer for binary or sparse formats.
+    seds_output.flush();
     if (seds_format == Sources::Format::EDZ) {
-        seds_output.flush();
         auto write_u64le = [&](std::streamoff off, uint64_t v) {
             uint8_t buf[8];
             for (int i = 0; i < 8; ++i) buf[i] = static_cast<uint8_t>(v >> (8 * i));
@@ -1144,6 +1181,18 @@ void parse_vcf_to_eds_streaming(
         write_u64le(8,  static_cast<uint64_t>(total_seds_entries));  // cardinality
         write_u64le(16, static_cast<uint64_t>(n_samples));            // num_paths
         seds_output.seekp(0, std::ios::end);
+    } else if (seds_format == Sources::Format::EDZ_SPARSE) {
+        // Ensure bitvec is padded to cover all bits
+        size_t bitvec_size = (total_seds_entries + 7) / 8;
+        if (presence_bitvec.size() < bitvec_size) presence_bitvec.resize(bitvec_size, 0);
+        Sources::write_edz_sparse_finalize(seds_output, total_seds_entries,
+                                            n_samples, total_m_degen_entries,
+                                            presence_bitvec);
+    } else if (seds_format == Sources::Format::SEDS_SPARSE) {
+        size_t bitvec_size = (total_seds_entries + 7) / 8;
+        if (presence_bitvec.size() < bitvec_size) presence_bitvec.resize(bitvec_size, 0);
+        Sources::write_seds_sparse_finalize(seds_output, total_seds_entries,
+                                             total_m_degen_entries, presence_bitvec);
     }
 
     // Final flush

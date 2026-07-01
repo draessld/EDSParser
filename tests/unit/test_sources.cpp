@@ -549,6 +549,158 @@ void test_edz_bitset_copy_range() {
     std::cout << "\n    PASSED\n";
 }
 
+// ── Helper: build presence bitvec for a given set of "present" (non-universal) indices ──
+static std::vector<uint8_t> make_bitvec(size_t total, const std::vector<size_t>& present) {
+    size_t sz = (total + 7) / 8;
+    std::vector<uint8_t> bv(sz, 0);
+    for (size_t idx : present) bv[idx / 8] |= uint8_t{1} << (idx % 8);
+    return bv;
+}
+
+void test_edz_sparse_roundtrip() {
+    std::cout << "EDZ Sparse Test 1: write + read EDZ_SPARSE; universal entries return {0}... ";
+
+    // 8 strings, num_paths=4. Strings 0,2,4,6 are universal; 1,3,5,7 are non-universal.
+    const size_t np = 4;
+    const size_t total = 8;
+    std::vector<PathSet> non_univ = {{1,2}, {3,4}, {1,3}, {2,4}};  // indices 1,3,5,7
+    std::vector<size_t> present_idx = {1, 3, 5, 7};
+
+    auto bv = make_bitvec(total, present_idx);
+    auto path = std::filesystem::temp_directory_path() / "test_edz_sparse.edz";
+
+    {
+        std::ofstream edz(path, std::ios::binary);
+        Sources::write_edz_sparse_header(edz, np);
+        for (const auto& ps : non_univ)
+            Sources::write_edz_entry(edz, ps, np);
+        Sources::write_edz_sparse_finalize(edz, total, np, non_univ.size(), bv);
+    }
+
+    auto src = Sources::load(path);
+    assert(src->cardinality() == total);
+    assert(src->is_sparse());
+    assert(src->m_degenerate() == non_univ.size());
+
+    for (size_t i = 0; i < total; ++i) {
+        PathSet got = src->read_source(i);
+        bool should_univ = (i % 2 == 0);
+        if (should_univ) {
+            assert(got == PathSet{0} && "expected universal {0}");
+        } else {
+            assert(got == non_univ[i / 2]);
+        }
+    }
+
+    std::filesystem::remove(path);
+    std::cout << "PASSED\n";
+}
+
+void test_seds_sparse_roundtrip() {
+    std::cout << "EDZ Sparse Test 2: write + read SEDS_SPARSE; universal entries return {0}... ";
+
+    // 6 strings, strings 1 and 4 are non-universal.
+    const size_t total = 6;
+    std::vector<PathSet> non_univ = {{1,3}, {2,4}};
+    std::vector<size_t> present_idx = {1, 4};
+
+    auto bv = make_bitvec(total, present_idx);
+    auto path = std::filesystem::temp_directory_path() / "test_seds_sparse.seds";
+
+    {
+        std::ofstream seds(path, std::ios::binary);
+        // Write text entries for non-universal strings only
+        seds << "{1,3}{2,4}";
+        Sources::write_seds_sparse_finalize(seds, total, non_univ.size(), bv);
+    }
+
+    auto src = Sources::load(path);
+    assert(src->cardinality() == total);
+    assert(src->is_sparse());
+    assert(src->m_degenerate() == non_univ.size());
+
+    for (size_t i = 0; i < total; ++i) {
+        PathSet got = src->read_source(i);
+        if (i == 1) {
+            assert(got == non_univ[0]);
+        } else if (i == 4) {
+            assert(got == non_univ[1]);
+        } else {
+            assert(got == PathSet{0} && "expected universal {0}");
+        }
+    }
+
+    std::filesystem::remove(path);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_vs_dense_agreement() {
+    std::cout << "EDZ Sparse Test 3: sparse and dense EDZ agree on all reads... ";
+
+    // Build an identical set of sources in both dense EDZ and sparse EDZ, then compare.
+    const size_t np = 5;
+    // 10 strings: even indices are universal, odd have explicit paths
+    std::vector<PathSet> all_sets;
+    std::vector<PathSet> non_univ_sets;
+    std::vector<size_t> present_idx;
+    for (size_t i = 0; i < 10; ++i) {
+        if (i % 2 == 0) {
+            all_sets.push_back({0});
+        } else {
+            PathSet ps = {static_cast<int>(i % np + 1)};
+            all_sets.push_back(ps);
+            non_univ_sets.push_back(ps);
+            present_idx.push_back(i);
+        }
+    }
+
+    auto dense_path  = std::filesystem::temp_directory_path() / "test_dense_agree.edz";
+    auto sparse_path = std::filesystem::temp_directory_path() / "test_sparse_agree.edz";
+    auto bv = make_bitvec(all_sets.size(), present_idx);
+
+    // Write dense
+    {
+        std::ofstream f(dense_path, std::ios::binary);
+        Sources::write_edz_header(f, np);
+        for (const auto& ps : all_sets)
+            Sources::write_edz_entry(f, ps, np);
+        Sources::write_edz_finalize(f, all_sets.size());
+    }
+    // Write sparse
+    {
+        std::ofstream f(sparse_path, std::ios::binary);
+        Sources::write_edz_sparse_header(f, np);
+        for (const auto& ps : non_univ_sets)
+            Sources::write_edz_entry(f, ps, np);
+        Sources::write_edz_sparse_finalize(f, all_sets.size(), np, non_univ_sets.size(), bv);
+    }
+
+    auto dense  = Sources::load(dense_path);
+    auto sparse = Sources::load(sparse_path);
+
+    assert(dense->cardinality()  == all_sets.size());
+    assert(sparse->cardinality() == all_sets.size());
+    assert(sparse->is_sparse());
+
+    // EDZ returns explicit form; universal {0} maps to all bits set → bitset_to_pathset
+    // returns {0} for dense, and sparse also returns {0} from the bitvec check.
+    for (size_t i = 0; i < all_sets.size(); ++i) {
+        PathSet d = dense->read_source(i);
+        PathSet s = sparse->read_source(i);
+        assert(d == s && "dense and sparse EDZ disagree");
+    }
+
+    // copy_range_to_stream should produce identical SEDS text
+    std::ostringstream oss_d, oss_s;
+    dense->copy_range_to_stream(0, all_sets.size(), oss_d);
+    sparse->copy_range_to_stream(0, all_sets.size(), oss_s);
+    assert(oss_d.str() == oss_s.str() && "copy_range_to_stream dense vs sparse mismatch");
+
+    std::filesystem::remove(dense_path);
+    std::filesystem::remove(sparse_path);
+    std::cout << "PASSED\n";
+}
+
 int main() {
     std::cout << "Running sEDS (source) parsing tests...\n\n";
     std::cout << "NOTE: Most original tests disabled - they require in-memory source\n";
@@ -573,6 +725,11 @@ int main() {
         test_edz_bitset_complement_encoding();
         test_edz_bitset_intersection();
         test_edz_bitset_copy_range();
+
+        std::cout << "\n--- Sparse format tests (EDZ_SPARSE flags=0x0006, SEDS_SPARSE) ---\n";
+        test_edz_sparse_roundtrip();
+        test_seds_sparse_roundtrip();
+        test_sparse_vs_dense_agreement();
 
         std::cout << "\nAll source tests passed!\n";
         return 0;
