@@ -153,7 +153,6 @@ int main(int argc, char** argv) {
         }
 
         // Handle sources if provided
-        std::ifstream* sources_in = nullptr;
         std::ofstream* sources_out = nullptr;
 
         // Intended final path for the output sources file (used for rename below).
@@ -163,10 +162,8 @@ int main(int argc, char** argv) {
         bool rename_sources_after = false;
 
         if (!sources_file.empty()) {
-            // Input sources file
-            sources_in = new std::ifstream(sources_file);
-            if (!*sources_in) {
-                delete sources_in;
+            // Verify sources file is readable before starting the transform.
+            if (!std::filesystem::exists(sources_file)) {
                 throw std::runtime_error("Cannot open sources file: " + sources_file.string());
             }
 
@@ -193,7 +190,6 @@ int main(int argc, char** argv) {
 
             sources_out = new std::ofstream(actual_sources_out_path);
             if (!*sources_out) {
-                delete sources_in;
                 delete sources_out;
                 throw std::runtime_error("Cannot create output sources file: " +
                                          actual_sources_out_path.string());
@@ -205,12 +201,14 @@ int main(int argc, char** argv) {
         try {
             // Call library function based on auto-detected method
             if (!sources_file.empty()) {
-                // LINEAR merging: phasing-aware using source information
+                // LINEAR merging: phasing-aware using source information.
+                // Use the path-based overload so detect_format() sees the real extension
+                // (.edz or .seds) and picks the correct parser.
                 edsparser::eds_to_leds_linear(
-                    input,
+                    input_file,
                     output,
                     context_length,
-                    sources_in,
+                    &sources_file,
                     sources_out,
                     static_cast<size_t>(num_threads),
                     compact_mode
@@ -227,8 +225,6 @@ int main(int argc, char** argv) {
             }
 
             // Cleanup streams before rename (file must be closed on some platforms).
-            delete sources_in;
-            sources_in = nullptr;
             delete sources_out;
             sources_out = nullptr;
 
@@ -243,7 +239,6 @@ int main(int argc, char** argv) {
 
         } catch (...) {
             // Cleanup on exception
-            delete sources_in;
             delete sources_out;
             // Remove temp file if rename did not happen
             if (rename_sources_after &&

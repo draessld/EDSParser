@@ -1205,7 +1205,9 @@ void eds_to_leds_linear(
 
     std::filesystem::path temp_sources_input;
     if (has_sources) {
-        temp_sources_input = temp_dir / "input.seds";
+        // Preserve the original extension so detect_format() picks the right parser
+        // (e.g., "input.edz" for EDZ/EDZ_SPARSE, "input.seds" for SEDS/SEDS_SPARSE).
+        temp_sources_input = temp_dir / ("input" + input_seds_path->extension().string());
         std::filesystem::create_symlink(std::filesystem::absolute(*input_seds_path), temp_sources_input);
     }
 

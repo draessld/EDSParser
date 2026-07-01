@@ -701,6 +701,377 @@ void test_sparse_vs_dense_agreement() {
     std::cout << "PASSED\n";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: write a dense EDZ bitset file and return the loaded Sources.
+static std::shared_ptr<Sources> write_dense_edz(const std::filesystem::path& p,
+                                                  const std::vector<PathSet>& sets,
+                                                  size_t np) {
+    std::ofstream f(p, std::ios::binary);
+    Sources::write_edz_header(f, np);
+    for (const auto& ps : sets) Sources::write_edz_entry(f, ps, np);
+    Sources::write_edz_finalize(f, sets.size());
+    f.close();
+    return Sources::load(p);
+}
+
+// Helper: write a sparse EDZ file from a set list (universal = PathSet{0}).
+static std::shared_ptr<Sources> write_sparse_edz(const std::filesystem::path& p,
+                                                   const std::vector<PathSet>& sets,
+                                                   size_t np) {
+    std::vector<PathSet> non_univ;
+    std::vector<size_t>  present;
+    for (size_t i = 0; i < sets.size(); ++i) {
+        if (sets[i].size() == 1 && sets[i][0] == 0) continue;
+        present.push_back(i);
+        non_univ.push_back(sets[i]);
+    }
+    auto bv = make_bitvec(sets.size(), present);
+    std::ofstream f(p, std::ios::binary);
+    Sources::write_edz_sparse_header(f, np);
+    for (const auto& ps : non_univ) Sources::write_edz_entry(f, ps, np);
+    Sources::write_edz_sparse_finalize(f, sets.size(), np, non_univ.size(), bv);
+    f.close();
+    return Sources::load(p);
+}
+
+// Helper: write a sparse SEDS file from a set list.
+static std::shared_ptr<Sources> write_sparse_seds(const std::filesystem::path& p,
+                                                    const std::vector<PathSet>& sets) {
+    std::vector<PathSet> non_univ;
+    std::vector<size_t>  present;
+    for (size_t i = 0; i < sets.size(); ++i) {
+        if (sets[i].size() == 1 && sets[i][0] == 0) continue;
+        present.push_back(i);
+        non_univ.push_back(sets[i]);
+    }
+    auto bv = make_bitvec(sets.size(), present);
+    std::ofstream f(p, std::ios::binary);
+    // Write text entries for non-universal sets
+    for (const auto& ps : non_univ) {
+        f << '{';
+        for (size_t j = 0; j < ps.size(); ++j) {
+            if (j) f << ',';
+            f << ps[j];
+        }
+        f << '}';
+    }
+    Sources::write_seds_sparse_finalize(f, sets.size(), non_univ.size(), bv);
+    f.close();
+    return Sources::load(p);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sparse edge-case tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+void test_sparse_all_universal() {
+    std::cout << "Sparse EC-1: all entries universal — no text entries, bitvec all zero... ";
+
+    const size_t np = 3, total = 12;
+    // All sets are {0} → m_degenerate = 0
+    std::vector<PathSet> sets(total, PathSet{0});
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto edz_p  = tmp / "sparse_alluniv.edz";
+    auto seds_p = tmp / "sparse_alluniv.seds";
+
+    auto edz_src  = write_sparse_edz(edz_p, sets, np);
+    auto seds_src = write_sparse_seds(seds_p, sets);
+
+    assert(edz_src->cardinality()  == total);
+    assert(seds_src->cardinality() == total);
+    assert(edz_src->is_sparse());
+    assert(seds_src->is_sparse());
+    assert(edz_src->m_degenerate()  == 0);
+    assert(seds_src->m_degenerate() == 0);
+
+    for (size_t i = 0; i < total; ++i) {
+        assert(edz_src->read_source(i)  == PathSet{0});
+        assert(seds_src->read_source(i) == PathSet{0});
+    }
+
+    std::filesystem::remove(edz_p);
+    std::filesystem::remove(seds_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_all_nonuniv() {
+    std::cout << "Sparse EC-2: all entries non-universal — identical to dense... ";
+
+    const size_t np = 4, total = 6;
+    std::vector<PathSet> sets = {{1,2},{3,4},{1,3},{2,4},{1,2,3},{4}};
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto dense_p  = tmp / "sparse_allnon_dense.edz";
+    auto sparse_p = tmp / "sparse_allnon_sparse.edz";
+
+    auto dense  = write_dense_edz(dense_p, sets, np);
+    auto sparse = write_sparse_edz(sparse_p, sets, np);
+
+    assert(sparse->m_degenerate() == total);
+
+    for (size_t i = 0; i < total; ++i)
+        assert(dense->read_source(i) == sparse->read_source(i));
+
+    std::filesystem::remove(dense_p);
+    std::filesystem::remove(sparse_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_first_and_last_nonuniv() {
+    std::cout << "Sparse EC-3: first and last entries non-universal, rest universal... ";
+
+    const size_t np = 2, total = 7;
+    // index 0 and 6 are non-universal; 1-5 are universal
+    std::vector<PathSet> sets = {{1}, {0}, {0}, {0}, {0}, {0}, {2}};
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto edz_p  = tmp / "sparse_firstlast.edz";
+    auto seds_p = tmp / "sparse_firstlast.seds";
+
+    auto edz  = write_sparse_edz(edz_p, sets, np);
+    auto seds = write_sparse_seds(seds_p, sets);
+
+    assert(edz->m_degenerate() == 2);
+    assert(edz->read_source(0) == PathSet{1});
+    assert(edz->read_source(6) == PathSet{2});
+    for (size_t i = 1; i <= 5; ++i) {
+        assert(edz->read_source(i)  == PathSet{0});
+        assert(seds->read_source(i) == PathSet{0});
+    }
+    assert(seds->read_source(0) == PathSet{1});
+    assert(seds->read_source(6) == PathSet{2});
+
+    // copy_range_to_stream on the full range should match the dense version
+    auto dense_p = tmp / "sparse_firstlast_dense.edz";
+    auto dense = write_dense_edz(dense_p, sets, np);
+
+    std::ostringstream oss_d, oss_e, oss_s;
+    dense->copy_range_to_stream(0, total, oss_d);
+    edz->copy_range_to_stream(0, total, oss_e);
+    seds->copy_range_to_stream(0, total, oss_s);
+    assert(oss_d.str() == oss_e.str());
+    assert(oss_d.str() == oss_s.str());
+
+    std::filesystem::remove(edz_p);
+    std::filesystem::remove(seds_p);
+    std::filesystem::remove(dense_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_single_entry() {
+    std::cout << "Sparse EC-4: cardinality=1, single non-universal entry... ";
+
+    const size_t np = 5;
+    std::vector<PathSet> sets = {{2,4}};
+    auto tmp = std::filesystem::temp_directory_path();
+    auto p = tmp / "sparse_single.edz";
+    auto src = write_sparse_edz(p, sets, np);
+    assert(src->cardinality() == 1);
+    assert(src->m_degenerate() == 1);
+    assert((src->read_source(0) == PathSet{2,4}));
+    std::filesystem::remove(p);
+    std::cout << "PASSED\n";
+}
+
+void test_edz_sparse_multibyte() {
+    std::cout << "Sparse EC-5: EDZ_SPARSE with num_paths > 8 (multi-byte bitset)... ";
+
+    // 12 paths → bpe=2; 10 strings; strings 0,3,7 non-universal
+    const size_t np = 12, total = 10;
+    std::vector<PathSet> sets;
+    for (size_t i = 0; i < total; ++i) {
+        if (i == 0) sets.push_back({1, 9, 12});
+        else if (i == 3) sets.push_back({2, 5, 11});
+        else if (i == 7) sets.push_back({3, 8});
+        else sets.push_back({0});
+    }
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto p   = tmp / "sparse_multibyte.edz";
+    auto src = write_sparse_edz(p, sets, np);
+
+    assert(src->m_degenerate() == 3);
+    for (size_t i = 0; i < total; ++i) {
+        PathSet got  = src->read_source(i);
+        PathSet want = sets[i];
+        assert(got == want && "multibyte sparse mismatch");
+    }
+
+    std::filesystem::remove(p);
+    std::cout << "PASSED\n";
+}
+
+void test_seds_sparse_complement_form() {
+    std::cout << "Sparse EC-6: SEDS_SPARSE with complement form {0,x} survives roundtrip... ";
+
+    // 6 strings, 2 non-universal at indices 1 and 4 using complement form
+    const size_t total = 6;
+    std::vector<size_t> present = {1, 4};
+    auto bv = make_bitvec(total, present);
+
+    auto tmp  = std::filesystem::temp_directory_path();
+    auto seds_p = tmp / "sparse_compl.seds";
+    {
+        std::ofstream f(seds_p, std::ios::binary);
+        f << "{0,3}{2,4}";  // {0,3} = complement-of-{3}; {2,4} = explicit
+        Sources::write_seds_sparse_finalize(f, total, present.size(), bv);
+    }
+    auto src = Sources::load(seds_p);
+    assert(src->cardinality() == total);
+    assert(src->m_degenerate() == 2);
+
+    assert(src->read_source(0) == PathSet{0});
+    assert(src->read_source(1) == (PathSet{0, 3}));  // complement stored as-is
+    assert(src->read_source(2) == PathSet{0});
+    assert(src->read_source(3) == PathSet{0});
+    assert(src->read_source(4) == (PathSet{2, 4}));
+    assert(src->read_source(5) == PathSet{0});
+
+    std::filesystem::remove(seds_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_detect_format() {
+    std::cout << "Sparse EC-7: detect_format returns SEDS_SPARSE / EDZ_SPARSE correctly... ";
+
+    const size_t np = 3;
+    std::vector<PathSet> sets = {{1}, {0}, {2}, {0}};
+
+    auto tmp   = std::filesystem::temp_directory_path();
+    auto edz_p = tmp / "sparse_detect.edz";
+    auto seds_p = tmp / "sparse_detect.seds";
+
+    write_sparse_edz(edz_p, sets, np);
+    write_sparse_seds(seds_p, sets);
+
+    assert(Sources::detect_format(edz_p)  == Sources::Format::EDZ_SPARSE);
+    assert(Sources::detect_format(seds_p) == Sources::Format::SEDS_SPARSE);
+
+    // Dense files should still detect as non-sparse
+    auto dense_p = tmp / "dense_detect.edz";
+    write_dense_edz(dense_p, sets, np);
+    assert(Sources::detect_format(dense_p) == Sources::Format::EDZ);
+
+    auto dense_seds_p = tmp / "dense_detect.seds";
+    { std::ofstream f(dense_seds_p); f << "{1}{0}{2}{0}"; }
+    assert(Sources::detect_format(dense_seds_p) == Sources::Format::SEDS);
+
+    std::filesystem::remove(edz_p);
+    std::filesystem::remove(seds_p);
+    std::filesystem::remove(dense_p);
+    std::filesystem::remove(dense_seds_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_copy_range_partial() {
+    std::cout << "Sparse EC-8: copy_range_to_stream on subrange matches dense... ";
+
+    // No complement-encoded entries: copy_range_to_stream text must be identical
+    // across dense EDZ and both sparse formats.
+    const size_t np = 4, total = 9;
+    std::vector<PathSet> sets = {{0},{1,2},{0},{3,4},{0},{1,3},{0},{2,4},{1,3,4}};
+
+    auto tmp     = std::filesystem::temp_directory_path();
+    auto dense_p = tmp / "sparse_crange_dense.edz";
+    auto edz_p   = tmp / "sparse_crange.edz";
+    auto seds_p  = tmp / "sparse_crange.seds";
+
+    auto dense = write_dense_edz(dense_p, sets, np);
+    auto edz   = write_sparse_edz(edz_p, sets, np);
+    auto seds  = write_sparse_seds(seds_p, sets);
+
+    // Test various subranges
+    for (size_t start = 0; start < total; ++start) {
+        for (size_t len = 1; len <= total - start; ++len) {
+            std::ostringstream od, oe, os;
+            dense->copy_range_to_stream(start, len, od);
+            edz->copy_range_to_stream(start, len, oe);
+            seds->copy_range_to_stream(start, len, os);
+            if (od.str() != oe.str() || od.str() != os.str()) {
+                throw std::runtime_error(
+                    "copy_range mismatch at start=" + std::to_string(start) +
+                    " len=" + std::to_string(len) +
+                    "\ndense: " + od.str() +
+                    "\nedz:   " + oe.str() +
+                    "\nseds:  " + os.str());
+            }
+        }
+    }
+
+    std::filesystem::remove(dense_p);
+    std::filesystem::remove(edz_p);
+    std::filesystem::remove(seds_p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_lru_cache() {
+    std::cout << "Sparse EC-9: LRU cache works correctly for sparse formats... ";
+
+    const size_t np = 3, total = 20;
+    // Alternating universal / non-universal
+    std::vector<PathSet> sets;
+    for (size_t i = 0; i < total; ++i)
+        sets.push_back(i % 2 == 0 ? PathSet{0} : PathSet{static_cast<int>(i % np + 1)});
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto p   = tmp / "sparse_lru.edz";
+    auto src = write_sparse_edz(p, sets, np);
+    src->set_cache_capacity(3);  // tiny cache to force evictions
+
+    // Read in reverse order to stress cache
+    for (size_t i = total; i-- > 0; ) {
+        PathSet got = src->read_source(i);
+        assert(got == sets[i]);
+    }
+    // Read forward again
+    for (size_t i = 0; i < total; ++i) {
+        PathSet got = src->read_source(i);
+        assert(got == sets[i]);
+    }
+
+    std::filesystem::remove(p);
+    std::cout << "PASSED\n";
+}
+
+void test_sparse_size_invariant() {
+    std::cout << "Sparse EC-10: sparse file ≤ dense file when >50% entries are universal... ";
+
+    // 100 strings, only 10 non-universal (10% density) — sparse should be smaller
+    const size_t np = 8, total = 100, n_nonuniv = 10;
+    std::vector<PathSet> sets(total, PathSet{0});
+    for (size_t i = 0; i < n_nonuniv; ++i) {
+        size_t idx = i * (total / n_nonuniv);
+        sets[idx] = {static_cast<int>(i % np + 1)};
+    }
+
+    auto tmp     = std::filesystem::temp_directory_path();
+    auto dense_p = tmp / "sparse_sizeinv_dense.edz";
+    auto sparse_p = tmp / "sparse_sizeinv.edz";
+
+    write_dense_edz(dense_p, sets, np);
+    write_sparse_edz(sparse_p, sets, np);
+
+    size_t dense_bytes  = std::filesystem::file_size(dense_p);
+    size_t sparse_bytes = std::filesystem::file_size(sparse_p);
+
+    if (sparse_bytes >= dense_bytes) {
+        std::cerr << "\nSparse=" << sparse_bytes << "B  Dense=" << dense_bytes
+                  << "B  — sparse should be smaller!\n";
+        assert(false);
+    }
+
+    // Verify all entries still match
+    auto src_d = Sources::load(dense_p);
+    auto src_s = Sources::load(sparse_p);
+    for (size_t i = 0; i < total; ++i)
+        assert(src_d->read_source(i) == src_s->read_source(i));
+
+    std::filesystem::remove(dense_p);
+    std::filesystem::remove(sparse_p);
+    std::cout << "PASSED\n";
+}
+
 int main() {
     std::cout << "Running sEDS (source) parsing tests...\n\n";
     std::cout << "NOTE: Most original tests disabled - they require in-memory source\n";
@@ -730,6 +1101,18 @@ int main() {
         test_edz_sparse_roundtrip();
         test_seds_sparse_roundtrip();
         test_sparse_vs_dense_agreement();
+
+        std::cout << "\n--- Sparse edge-case tests ---\n";
+        test_sparse_all_universal();
+        test_sparse_all_nonuniv();
+        test_sparse_first_and_last_nonuniv();
+        test_sparse_single_entry();
+        test_edz_sparse_multibyte();
+        test_seds_sparse_complement_form();
+        test_sparse_detect_format();
+        test_sparse_copy_range_partial();
+        test_sparse_lru_cache();
+        test_sparse_size_invariant();
 
         std::cout << "\nAll source tests passed!\n";
         return 0;
