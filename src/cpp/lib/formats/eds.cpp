@@ -303,8 +303,8 @@ EDS EDS::load(const std::filesystem::path& eds_path, const std::filesystem::path
     }
     eds.parse(eds_ifs);
 
-    // Load sources using Sources class (always streaming)
-    auto sources = Sources::load(seds_path, Sources::Format::SEDS);
+    // Load sources using Sources class — auto-detect format from file content
+    auto sources = Sources::load(seds_path);
 
     // Validate cardinality matches
     if (!eds.is_empty_ && sources->cardinality() != eds.m_) {

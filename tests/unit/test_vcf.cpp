@@ -1,11 +1,13 @@
 #include "transforms/vcf_transforms.hpp"
 #include "formats/eds.hpp"
+#include "formats/sources.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <cassert>
 #include <algorithm>
 #include <filesystem>
+#include <set>
 
 using namespace edsparser;
 
@@ -475,6 +477,109 @@ void test_multi_chromosome_filtering() {
     std::cout << "  PASS" << std::endl;
 }
 
+// ── Count the number of {…} sets in a SEDS string ───────────────────────────
+static size_t count_seds_sets(const std::string& s) {
+    size_t n = 0;
+    for (char c : s) if (c == '{') ++n;
+    return n;
+}
+
+void test_edz_vs_seds_agreement() {
+    std::cout << "Test 17: EDZ and SEDS source files agree entry-by-entry..." << std::endl;
+
+    // Use SMALL_VCF (5 samples, several variants) so there are non-trivial source sets.
+    const std::string vcf_text = SMALL_VCF;
+    const std::string fa_text  = SMALL_FA;
+
+    // ── Produce SEDS output (in-memory string) ────────────────────────────────
+    std::ostringstream eds_ss_seds, seds_ss;
+    {
+        std::istringstream vcf(vcf_text), fa(fa_text);
+        parse_vcf_to_eds_streaming(vcf, fa, eds_ss_seds, seds_ss,
+                                   nullptr, 10000000,
+                                   Sources::Format::SEDS);
+    }
+    const std::string seds_str = seds_ss.str();
+
+    // ── Produce EDZ output (temp binary file, since seekp is required) ────────
+    auto tmp = std::filesystem::temp_directory_path();
+    auto eds_path  = tmp / "test_vcf_edz_agree.eds";
+    auto edz_path  = tmp / "test_vcf_edz_agree.edz";
+    auto seds_path = tmp / "test_vcf_edz_agree.seds";
+
+    {
+        std::ofstream eds_out(eds_path);
+        std::ofstream edz_out(edz_path, std::ios::binary);
+        std::istringstream vcf(vcf_text), fa(fa_text);
+        parse_vcf_to_eds_streaming(vcf, fa, eds_out, edz_out,
+                                   nullptr, 10000000,
+                                   Sources::Format::EDZ);
+    }
+
+    // Write SEDS to file so Sources::load can read it
+    { std::ofstream f(seds_path); f << seds_str; }
+
+    auto seds_src = Sources::load(seds_path);
+    auto edz_src  = Sources::load(edz_path);
+
+    // ── Compare cardinalities ─────────────────────────────────────────────────
+    size_t seds_card = count_seds_sets(seds_str);
+    std::cout << "  SEDS cardinality: " << seds_card  << std::endl;
+    std::cout << "  EDZ  cardinality: " << edz_src->cardinality() << std::endl;
+
+    if (seds_card != edz_src->cardinality())
+        throw std::runtime_error(
+            "Cardinality mismatch: SEDS=" + std::to_string(seds_card) +
+            " EDZ=" + std::to_string(edz_src->cardinality()));
+
+    assert(seds_src->cardinality() == edz_src->cardinality());
+
+    // ── Compare every source entry (expand complement form to explicit first) ──
+    // SEDS may return {0,e} complement form; EDZ returns explicit bit list.
+    // Both are semantically equivalent; compare after normalisation.
+    size_t n  = seds_src->cardinality();
+    size_t np = edz_src->num_paths();
+    auto expand_ps = [&](const PathSet& ps) -> PathSet {
+        if (ps.empty() || ps[0] != 0) return ps;
+        std::set<int> excl(ps.begin() + 1, ps.end());
+        PathSet r;
+        for (int id = 1; id <= static_cast<int>(np); ++id)
+            if (!excl.count(id)) r.push_back(id);
+        return r;
+    };
+    size_t mismatches = 0;
+    for (size_t i = 0; i < n; ++i) {
+        auto got_seds = expand_ps(seds_src->read_source(i));
+        auto got_edz  = expand_ps(edz_src->read_source(i));
+        if (got_seds != got_edz) {
+            std::cerr << "  Mismatch at entry " << i << ":\n"
+                      << "    SEDS: {";
+            for (int p : got_seds) std::cerr << p << ",";
+            std::cerr << "}\n    EDZ:  {";
+            for (int p : got_edz)  std::cerr << p << ",";
+            std::cerr << "}\n";
+            ++mismatches;
+            if (mismatches >= 5) { std::cerr << "  (further mismatches suppressed)\n"; break; }
+        }
+    }
+    if (mismatches > 0)
+        throw std::runtime_error("EDZ and SEDS source files disagree on " +
+                                 std::to_string(mismatches) + " entries");
+
+    std::cout << "  All " << n << " source entries match between SEDS and EDZ." << std::endl;
+
+    // ── Load the EDZ-paired EDS and verify EDS::load accepts the pair ─────────
+    {
+        EDS eds_edz = EDS::load(eds_path, edz_path);
+        std::cout << "  EDS::load with EDZ sources: OK (m=" << eds_edz.cardinality() << ")" << std::endl;
+    }
+
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(edz_path);
+    std::filesystem::remove(seds_path);
+    std::cout << "  PASS" << std::endl;
+}
+
 void test_no_genotype_seds_cardinality() {
     std::cout << "Test 16: No-genotype VCF — EDS/SEDS cardinality must match..." << std::endl;
 
@@ -557,6 +662,7 @@ int main() {
         test_block_boundary_no_reference_duplication();
         test_block_boundary_overlapping_grouping();
         test_multi_chromosome_filtering();
+        test_edz_vs_seds_agreement();
         test_no_genotype_seds_cardinality();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;

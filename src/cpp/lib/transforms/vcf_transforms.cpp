@@ -402,6 +402,16 @@ std::unique_ptr<VCFVariant> parse_vcf_line(const std::string& line, size_t& n_sa
                 // = 8 tabs for 9 fixed columns, then 1 tab per sample
                 if (tab_count >= 9) {
                     n_samples = tab_count - 8;
+                } else {
+                    // Fallback: space-delimited header (non-standard but accepted by some tools)
+                    size_t token_count = 0;
+                    bool in_tok = false;
+                    for (char c : line) {
+                        bool ws = (c == ' ' || c == '\t');
+                        if (!ws && !in_tok) { in_tok = true; ++token_count; }
+                        else if (ws)          in_tok = false;
+                    }
+                    if (token_count > 9) n_samples = token_count - 9;
                 }
             }
         }
