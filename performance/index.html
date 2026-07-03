@@ -1599,13 +1599,22 @@ do not change the overall memory model.</p>
 loading). The key optimisations:</p>
 <ol>
 <li>
-<p><strong>Sequential seek elimination</strong>: <code>read_symbol_from_stream()</code> checks if
-   the stream is already at position before calling <code>seekg()</code>.
-   Result: ~5K seeks per iteration instead of ~400K for forward-order access.</p>
+<p><strong>Sequential seek elimination + bulk read</strong>: <code>read_symbol_from_stream()</code>
+   checks if the stream is already at position before calling <code>seekg()</code>
+   (~5K seeks per iteration instead of ~400K for forward-order access), and
+   reads each symbol's exact byte span in one <code>stream_.read()</code> rather than one
+   <code>get()</code>/<code>peek()</code> per byte, splitting the buffer on <code>,</code> in memory (2026-07-03).</p>
 </li>
 <li>
 <p><strong>SEDS batching</strong>: consecutive unmodified symbols are bulk-copied with
    <code>copy_range_to_stream()</code> — ~2 727 calls vs ~200K for 10% variability data.</p>
+</li>
+<li>
+<p><strong>EDS raw-copy pass-through</strong> (2026-07-03): the symmetric optimisation for the
+   EDS file — unmodified full-bracket symbols are byte-copied verbatim via
+   <code>EDS::copy_symbol_range_to_stream()</code> (batched like the SEDS side) instead of
+   parsed into a <code>StringSet</code> and re-serialised. Measured <strong>cartesian 1.9–2.2×,
+   linear 1.16–1.63×</strong> faster on 20 MB inputs; output byte-identical.</p>
 </li>
 <li>
 <p><strong>No ostringstream accumulation</strong>: output written directly via <code>&lt;&lt;</code> to the

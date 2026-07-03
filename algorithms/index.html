@@ -761,10 +761,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#seds-batching" class="md-nav__link">
+  <a href="#eds-seds-batching" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SEDS Batching
+        EDS + SEDS Batching
       
     </span>
   </a>
@@ -1109,10 +1109,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#seds-batching" class="md-nav__link">
+  <a href="#eds-seds-batching" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SEDS Batching
+        EDS + SEDS Batching
       
     </span>
   </a>
@@ -1364,14 +1364,23 @@ merge pair:
 2. Read symbol j's strings via <code>read_symbol(j)</code>.
 3. Concatenate <code>strings_i[a] + strings_j[b]</code> directly into the output stream.
 4. Flush after each symbol.</p>
-<p>For unmodified symbol ranges (not involved in any merge), the raw SEDS
-bytes are bulk-copied with <code>copy_range_to_stream()</code> — one seek + sequential
-read for the entire run.</p>
-<h3 id="seds-batching">SEDS Batching<a class="headerlink" href="#seds-batching" title="Permanent link">&para;</a></h3>
-<p>When copying unmodified source ranges, consecutive unmodified symbols are
-accumulated into a single <code>copy_range_to_stream()</code> call per run, rather than
-one call per symbol. This reduces SEDS write calls from ~N to ~(number of
-merge boundaries), typically 2–5× fewer per iteration.</p>
+<p>For unmodified symbol ranges (not involved in any merge), both the raw EDS
+bytes and the raw SEDS bytes are bulk-copied — one seek + sequential read for
+the entire run — via <code>EDS::copy_symbol_range_to_stream()</code> and
+<code>Sources::copy_range_to_stream()</code> respectively.</p>
+<h3 id="eds-seds-batching">EDS + SEDS Batching<a class="headerlink" href="#eds-seds-batching" title="Permanent link">&para;</a></h3>
+<p>When copying unmodified ranges, consecutive unmodified symbols are accumulated
+into a single copy call per run (one for the EDS file, one for the SEDS file),
+rather than one call per symbol. This reduces write calls from ~N to ~(number
+of merge boundaries), typically 2–5× fewer per iteration.</p>
+<p>The EDS raw-copy (2026-07-03) skips the parse-into-<code>StringSet</code> +
+re-serialise-char-by-char that unmodified symbols previously incurred: an
+unmodified full-bracket symbol's output bytes are byte-identical to its input
+bytes, so they are copied verbatim. A symbol qualifies when its input span
+equals its full-bracket byte length (<code>Σ string_lengths + sym_size + 1</code>);
+compact-format input, inter-symbol whitespace, or the final symbol fall back to
+the (bulk-read) parse-and-reserialise path. Measured cartesian 1.9–2.2×, linear
+1.16–1.63× faster on 20 MB inputs.</p>
 <hr />
 <h2 id="vcf-eds-block-based-variant-processing">VCF → EDS: Block-Based Variant Processing<a class="headerlink" href="#vcf-eds-block-based-variant-processing" title="Permanent link">&para;</a></h2>
 <p><strong>File:</strong> <code>src/cpp/lib/transforms/vcf_transforms.cpp</code></p>

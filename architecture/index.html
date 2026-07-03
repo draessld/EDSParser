@@ -1263,6 +1263,13 @@ between the return and the dereference.</p>
 via <code>base_positions_[start+count] − base_positions_[start]</code> and copies
 those bytes directly without parsing. This makes sequential calls skip
 <code>seekg()</code> entirely.</p>
+<p><code>EDS::copy_symbol_range_to_stream(start, count, out)</code> (2026-07-03) is the
+symmetric method on the EDS side: it copies the raw on-disk bytes of a run of
+unmodified full-bracket symbols verbatim, so the l-EDS merge pass-through no
+longer parses each unmodified symbol into a <code>StringSet</code> and re-serialises it.
+The end of a range that reaches the final symbol is bounded by
+<code>stream_file_size()</code> (queried from the open stream, valid on unlinked temp
+files) rather than a <code>base_positions</code> sentinel.</p>
 <hr />
 <h2 id="l-eds-iteration-chain">l-EDS Iteration Chain<a class="headerlink" href="#l-eds-iteration-chain" title="Permanent link">&para;</a></h2>
 <p><code>eds_to_leds_linear</code> / <code>eds_to_leds_cartesian</code> uses an iterative

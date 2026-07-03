@@ -1681,7 +1681,7 @@
 <td>Output EDS / l-EDS file</td>
 </tr>
 <tr>
-<td><code>-s, --sources</code></td>
+<td><code>-s, --seds</code></td>
 <td>path</td>
 <td><code>&lt;stem&gt;.seds</code></td>
 <td>Output source-tracking file</td>
@@ -1769,10 +1769,16 @@
 <td>Output EDS / l-EDS file</td>
 </tr>
 <tr>
-<td><code>-s, --sources</code></td>
+<td><code>-s, --seds</code></td>
 <td>path</td>
 <td><code>&lt;stem&gt;.seds</code></td>
-<td>Output source-tracking file</td>
+<td>Output source-tracking file (text SEDS, sparse)</td>
+</tr>
+<tr>
+<td><code>-z, --edz</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Write the source file in binary EDZ format instead of text SEDS (both sparse)</td>
 </tr>
 <tr>
 <td><code>-l, --context-length</code></td>
@@ -1853,6 +1859,9 @@ population VCFs. Adjust based on available RAM:</p>
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Explicit output paths</span>
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-o<span class="w"> </span>out.eds<span class="w"> </span>-s<span class="w"> </span>out.seds
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># Binary EDZ sources instead of text SEDS</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-z
 </code></pre></div>
 <hr />
 <h2 id="eds2leds">eds2leds<a class="headerlink" href="#eds2leds" title="Permanent link">&para;</a></h2>
@@ -1891,10 +1900,16 @@ whether a source file is provided.</p>
 <td>Output l-EDS file</td>
 </tr>
 <tr>
-<td><code>-s, --sources</code></td>
+<td><code>-s, --seds</code></td>
 <td>path</td>
 <td>—</td>
-<td>Input <code>.seds</code> file (enables LINEAR merging)</td>
+<td>Input <code>.seds</code>/<code>.edz</code> source file (enables LINEAR merging); format auto-detected from extension/content</td>
+</tr>
+<tr>
+<td><code>-z, --edz</code></td>
+<td>path</td>
+<td>—</td>
+<td>Input source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with <code>-s</code>)</td>
 </tr>
 <tr>
 <td><code>--full</code></td>
@@ -1920,7 +1935,7 @@ whether a source file is provided.</p>
 </thead>
 <tbody>
 <tr>
-<td style="text-align: center;">Yes (<code>-s</code>)</td>
+<td style="text-align: center;">Yes (<code>-s</code> or <code>-z</code>)</td>
 <td><strong>LINEAR</strong> — phasing-aware; only valid haplotype combinations kept</td>
 </tr>
 <tr>
@@ -1970,6 +1985,9 @@ pairs, a warning is printed:</p>
 <a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
 <a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Explicit output path</span>
 <a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">20</span><span class="w"> </span>-o<span class="w"> </span>custom_output.leds
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="c1"># LINEAR merging with an EDZ source file that lacks a .edz extension</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-z<span class="w"> </span>data.sources<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
 </code></pre></div>
 <h3 id="self-overwrite-protection">Self-Overwrite Protection<a class="headerlink" href="#self-overwrite-protection" title="Permanent link">&para;</a></h3>
 <p>If the output <code>.seds</code> path is the same file as the input <code>-s</code> path,
@@ -2000,10 +2018,16 @@ checking.</p>
 <td>Input EDS / l-EDS file</td>
 </tr>
 <tr>
-<td><code>-s, --sources</code></td>
+<td><code>-s, --seds</code></td>
 <td>path</td>
 <td>—</td>
-<td>Companion <code>.seds</code> file</td>
+<td>Companion <code>.seds</code>/<code>.edz</code> source file; format auto-detected from extension/content</td>
+</tr>
+<tr>
+<td><code>-z, --edz</code></td>
+<td>path</td>
+<td>—</td>
+<td>Companion source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with <code>-s</code>)</td>
 </tr>
 <tr>
 <td><code>-j, --json</code></td>

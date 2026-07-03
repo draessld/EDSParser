@@ -1180,9 +1180,11 @@ lived:</p>
   EDS. Every subsequent decision — the LRU cache, the <code>copy_range_to_stream()</code>
   optimisation, the distinction between <code>read_source()</code> (value, thread-safe) and
   <code>read_source_ref()</code> (reference, single-threaded only) — was driven by that one
-  observation. The text-based <code>.seds</code> format is also inherently verbose; a compact
-  binary format (<code>.edz</code>) is planned as future work to reduce file size and parsing
-  overhead for large cohorts.</p>
+  observation. The text-based <code>.seds</code> format is also inherently verbose, even with
+  range+complement encoding and sparse mode (universal entries omitted); a compact
+  binary bitset format (<code>.edz</code>) was added to reduce file size and parsing overhead
+  for large cohorts — select it with <code>-z</code>/<code>--edz</code> on <code>vcf2eds</code>, <code>eds2leds</code>, and
+  <code>edsparser-stats</code>.</p>
 </li>
 <li>
 <p><strong>The sequential-seek elimination</strong> was a profiling surprise. <code>seekg()</code> on a
