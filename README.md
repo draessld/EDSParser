@@ -110,7 +110,12 @@ vcf2eds -i variants.vcf --reference genome.fasta -o output.eds
 # Large VCF files: adjust block size for memory optimization
 vcf2eds -i large.vcf --reference genome.fasta --block-size 1000000  # 1M bases (lower memory)
 vcf2eds -i large.vcf --reference genome.fasta --block-size 100000000  # 100M bases (higher memory, faster)
+
+# Binary EDZ sources instead of text SEDS (both written sparse — universal {0} entries omitted)
+vcf2eds -i variants.vcf --reference genome.fasta -z
 ```
+
+**Source format**: `-s`/`--seds` (default) writes sparse text SEDS; `-z`/`--edz` writes sparse binary EDZ instead. In l-EDS mode (`-l`), sources are always dense text SEDS regardless of `-z` — the EDS→l-EDS merge pipeline doesn't support sparse/EDZ output yet.
 
 ### eds2leds - EDS to l-EDS Transformation
 
@@ -119,6 +124,10 @@ Transform EDS to length-constrained EDS with auto-detected merging method:
 ```bash
 # Linear merging (auto-detected with sources, compact output by default)
 eds2leds -i data.eds -s data.seds -l 10
+
+# Linear merging with an EDZ source file (-z forces EDZ interpretation
+# even if the file isn't named .edz)
+eds2leds -i data.eds -z data.edz -l 10
 
 # Cartesian merging (auto-detected without sources)
 eds2leds -i data.eds -l 10
@@ -131,7 +140,7 @@ eds2leds -i data.eds -l 10 --threads 4
 ```
 
 **Merging Methods (auto-detected):**
-- **LINEAR**: Phasing-aware merging using source information (preserves valid haplotypes) - automatically used when sources provided
+- **LINEAR**: Phasing-aware merging using source information (preserves valid haplotypes) - automatically used when `-s`/`--seds` or `-z`/`--edz` sources are provided (mutually exclusive)
 - **CARTESIAN**: All-combinations merging (cross-product of alternatives) - automatically used when no sources provided
 
 **Output Format:**
@@ -148,6 +157,9 @@ edsparser-stats -i data.eds
 
 # With source tracking
 edsparser-stats -i data.eds -s data.seds
+
+# With EDZ source tracking
+edsparser-stats -i data.eds -z data.edz
 
 # JSON output
 edsparser-stats -i data.eds --json
@@ -280,6 +292,12 @@ Source tracking file mapping each string to its originating sequences/samples:
 - Example: For EDS `{A}{B,C}{D}` the .seds has 4 sets: one for A, two for B and C, one for D
 
 **Special marker**: `{0}` represents "all paths" (universal marker)
+
+**Complement encoding**: `{0,e1,e2,...}` (leading `0` followed by other IDs) means "all paths except e1, e2, ..." — used automatically whenever a variant is present in more than half of all paths, to keep near-universal entries compact.
+
+**Sparse mode**: `vcf2eds` writes sources sparse by default — universal (`{0}`) entries are omitted entirely from the text body, with a trailing bitvector + trailer recording which positions were universal. Detected automatically on load via a `"SEDS"` magic trailer.
+
+**Binary variant (`.edz`)**: A binary bitset encoding of the same data (`-z`/`--edz` on `vcf2eds`, `eds2leds`, `edsparser-stats`), self-describing via a magic-byte header (`"EDZ\0"` + flags) and auto-detected by the `.edz` extension.
 
 ### MSA Format (`.msa`)
 

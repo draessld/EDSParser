@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         std::filesystem::path sources_file;
         Length context_length;
         size_t block_size;
-        std::string source_format_str;
+        bool edz_flag = false;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -43,10 +43,10 @@ int main(int argc, char** argv) {
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input VCF file (.vcf)")
             ("reference,r", po::value<std::filesystem::path>(&reference_file)->required(), "Reference FASTA file")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds or .edz)")
+            ("seds,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds or .edz); sparse (universal {0} entries omitted) in EDS mode, dense text SEDS in l-EDS (-l) mode")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
             ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
-            ("source-format", po::value<std::string>(&source_format_str)->default_value("seds"), "Source file format: seds (text, default), seds-sparse (text, universal {0} omitted), edz (binary bitset), edz-sparse (binary bitset, universal entries omitted)");
+            ("edz,z", po::bool_switch(&edz_flag), "Write sources in binary EDZ format instead of text SEDS (EDS mode only; ignored with -l, see WHY TWO-STAGE FOR l-EDS)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -85,6 +85,8 @@ int main(int argc, char** argv) {
             std::cout << "  # Creates: variants_l5.leds and variants_l5.seds\n\n";
             std::cout << "  # Custom output paths:\n";
             std::cout << "  vcf2eds -i variants.vcf -r reference.fa -o output.eds -s output.seds\n\n";
+            std::cout << "  # Write sources in binary EDZ format instead of text SEDS:\n";
+            std::cout << "  vcf2eds -i variants.vcf -r reference.fa -z\n\n";
             std::cout << "OUTPUT:\n";
             std::cout << "  Regular EDS:\n";
             std::cout << "    <input_base>.eds   - EDS file\n";
@@ -99,6 +101,9 @@ int main(int argc, char** argv) {
             std::cout << "    1. VCF→EDS: Handle VCF-specific complexity (overlaps, multi-allelic)\n";
             std::cout << "    2. EDS→l-EDS: Apply context-length constraint\n";
             std::cout << "  This provides better code reuse, testability, and performance.\n\n";
+            std::cout << "  NOTE: the EDS→l-EDS merge step does not yet support sparse or EDZ\n";
+            std::cout << "  output, so with -l the sources file is always dense text SEDS,\n";
+            std::cout << "  regardless of -z.\n\n";
             std::cout << "IMPLEMENTATION:\n";
             std::cout << "  Uses streaming approach for FASTA reference.\n";
             std::cout << "  Only active regions loaded into memory.\n";
@@ -118,19 +123,10 @@ int main(int argc, char** argv) {
 
         po::notify(vm);
 
-        // Parse source format
-        Sources::Format seds_format = Sources::Format::SEDS;
-        if (source_format_str == "edz") {
-            seds_format = Sources::Format::EDZ;
-        } else if (source_format_str == "edz-sparse") {
-            seds_format = Sources::Format::EDZ_SPARSE;
-        } else if (source_format_str == "seds-sparse") {
-            seds_format = Sources::Format::SEDS_SPARSE;
-        } else if (source_format_str != "seds") {
-            std::cerr << "Error: --source-format must be 'seds', 'seds-sparse', 'edz', or 'edz-sparse', got: "
-                      << source_format_str << "\n";
-            return 1;
-        }
+        // Sources are always written in sparse form; -z selects binary EDZ
+        // instead of text SEDS as the container.
+        Sources::Format seds_format = edz_flag ? Sources::Format::EDZ_SPARSE
+                                                : Sources::Format::SEDS_SPARSE;
 
         // Validate input file extension
         if (input_file.extension() != ".vcf") {
@@ -180,9 +176,20 @@ int main(int argc, char** argv) {
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
 
-        const bool is_edz_fmt    = (seds_format == Sources::Format::EDZ ||
+        // The l-EDS (-l) pipeline's merge step (eds_to_leds_linear() in
+        // eds_transforms.cpp) only knows how to write dense text SEDS for its
+        // output sources file — it has no sparse or EDZ writer yet. Honoring
+        // seds_format here for create_leds would either mislabel a text file
+        // as ".edz" (unreadable downstream) or claim a false sparse trailer,
+        // so l-EDS mode always writes dense text SEDS regardless of -z.
+        if (create_leds && edz_flag) {
+            std::cerr << "Warning: -z/--edz is not supported in l-EDS (-l) mode yet; "
+                         "sources will be written as dense text SEDS instead.\n";
+        }
+
+        const bool is_edz_fmt    = !create_leds && (seds_format == Sources::Format::EDZ ||
                                      seds_format == Sources::Format::EDZ_SPARSE);
-        const bool needs_binary  = (is_edz_fmt ||
+        const bool needs_binary  = !create_leds && (is_edz_fmt ||
                                     seds_format == Sources::Format::SEDS_SPARSE);
         const std::string src_ext = is_edz_fmt ? ".edz" : ".seds";
 

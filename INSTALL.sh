@@ -227,7 +227,7 @@ echo "  eds2leds -i data.eds -s data.seds -l 5 -o data.leds    # linear (sources
 echo "  msa2eds -i alignment.msa"
 echo "  vcf2eds -i variants.vcf -r reference.fa"
 echo "  # Utility examples:"
-echo "  edsparser-stats -i data.eds --sources=auto"
+echo "  edsparser-stats -i data.eds -s data.seds"
 echo "  edsparser-genpatterns -i data.eds -o patterns.txt -n 100"
 echo "  genrandomeds -o random.eds --ref-size-mb 10 --variability 0.1"
 echo ""

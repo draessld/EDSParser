@@ -341,6 +341,24 @@ void Sources::parse_seds(std::istream& is) {
     int depth = 0;
     bool done = false;
 
+    // Text SEDS carries no explicit path-universe-size header (unlike EDZ's
+    // 24-byte header field), yet complement-encoded entries ({0,e1,e2,...} =
+    // all paths except e1,e2,...) need that size to expand correctly. Infer
+    // it as the largest path ID token seen anywhere in the file (explicit
+    // members or complement exceptions) during this same pass, at no extra
+    // I/O cost. This slightly undercounts only in the degenerate case where
+    // the true maximum path ID is universally present and never appears
+    // explicitly anywhere (never listed as a member or an exception) in the
+    // whole file.
+    size_t max_path_id_seen = 0;
+    size_t cur_num = 0;
+    bool in_num = false;
+    auto flush_num = [&]() {
+        if (in_num && cur_num > max_path_id_seen) max_path_id_seen = cur_num;
+        in_num = false;
+        cur_num = 0;
+    };
+
     while (!done && is) {
         is.read(buf.data(), CHUNK);
         std::streamsize n = is.gcount();
@@ -357,10 +375,16 @@ void Sources::parse_seds(std::istream& is) {
                 }
                 ++depth;
             } else if (ch == SET_CLOSE) {
+                flush_num();
                 --depth;
                 if (depth == 0 && entries_found >= max_entries) {
                     done = true;  // Consumed all expected entries; stop before bitvec
                 }
+            } else if (depth >= 1 && std::isdigit(static_cast<unsigned char>(ch))) {
+                cur_num = (in_num ? cur_num * 10 : 0) + static_cast<size_t>(ch - '0');
+                in_num = true;
+            } else if (depth >= 1) {
+                flush_num();  // ',' or '-' — token boundary
             } else if (depth == 0 && !std::isspace(static_cast<unsigned char>(ch))) {
                 if (is_sparse_) {
                     // Binary bitvec/trailer bytes can appear after text entries;
@@ -375,6 +399,8 @@ void Sources::parse_seds(std::istream& is) {
 
         file_offset += n;
     }
+
+    num_paths_ = max_path_id_seen;
 
     if (!is_sparse_) {
         const size_t string_count = base_positions_.size();

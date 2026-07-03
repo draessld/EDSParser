@@ -719,6 +719,20 @@ std::string EDS::normalize_eds_format(const std::string& input) const {
 //     whitespace, or by EOF.
 //
 // ─────────────────────────────────────────────────────────────────────────────
+// Size (in bytes) of the backing file, derived from the open stream rather than
+// the path.  Temp files are frequently unlinked while the stream stays open
+// (valid on POSIX), so std::filesystem::file_size(file_path_) would throw; the
+// stream's own end position is always available.  Cached after first use; leaves
+// the get pointer at end-of-file (callers re-seek as needed).
+std::streamoff EDS::stream_file_size() const {
+    if (file_size_ < 0) {
+        stream_.clear();
+        stream_.seekg(0, std::ios::end);
+        file_size_ = static_cast<std::streamoff>(stream_.tellg());
+    }
+    return file_size_;
+}
+
 StringSet EDS::read_symbol_from_stream(Position pos) const {
     if (!stream_.is_open()) {
         throw std::runtime_error("File stream not available for reading symbol");
@@ -741,59 +755,87 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
         }
     }
 
-    // ── Parse the symbol ─────────────────────────────────────────────────────
-    // We build a StringSet (a std::vector<std::string>) in-place.
-    // current_str accumulates characters belonging to one alternative string
-    // until we hit a separator ',' or the closing '}'.
-    StringSet result;
-    char ch;
-    std::string current_str;
-
-    // Read the very first character to decide which format we are in.
-    if (!stream_.get(ch)) {
+    // ── Bulk-read the symbol's byte span ─────────────────────────────────────
+    // The metadata already knows the exact byte layout, so instead of pulling
+    // the symbol one get()/peek() at a time (the compact path evaluated
+    // stream_.peek() three times per byte in its loop condition), read the whole
+    // span in a single stream_.read() and scan it in memory.  The span is
+    // [base_positions[pos], base_positions[pos+1]) for every symbol but the last,
+    // and [base_positions[pos], file_size) for the final symbol.  Any trailing
+    // inter-symbol whitespace captured inside the span is ignored by the scan.
+    std::streamoff span_end;
+    if (pos + 1 < n_) {
+        span_end = static_cast<std::streamoff>(metadata_.base_positions[pos + 1]);
+    } else {
+        span_end = stream_file_size();   // last symbol: span runs to EOF
+        // Re-seek: querying the size moved the get pointer to end-of-file.
+        stream_.clear();
+        stream_.seekg(target);
+    }
+    std::streamoff span = span_end - static_cast<std::streamoff>(target);
+    if (span <= 0) {
         throw std::runtime_error("Unexpected EOF reading symbol at position " + std::to_string(pos));
     }
 
-    if (ch == SET_OPEN) {
-        // ── Full-bracket path: {str1,str2,...,strK} ──────────────────────────
-        // Consume characters until the matching '}'.  A ',' signals the end of
-        // one alternative and the start of the next.  Whitespace is ignored
-        // (defensive; well-formed EDS files contain none inside symbols).
-        // Note: this handles nested brackets correctly because inner brackets
-        // would be DNA characters — the EDS format does not use nesting — but
-        // the simple character scan is sufficient for the flat structure.
-        while (stream_.get(ch) && ch != SET_CLOSE) {
-            if (ch == SET_SEPARATOR) {
-                // Finished one alternative; save it and reset the accumulator.
-                result.push_back(current_str);
-                current_str.clear();
-            } else if (!std::isspace(static_cast<unsigned char>(ch))) {
-                // Normal DNA character; append to the current alternative.
-                current_str += ch;
-            }
-            // Whitespace inside a bracket group is silently dropped.
-        }
-        // The last alternative does not end with ','; push it now.
-        // If the symbol was "{}" (empty set with one empty string), this pushes
-        // an empty string, which is a valid EDS construct (epsilon / deletion).
-        result.push_back(current_str);
+    std::string buf(static_cast<size_t>(span), '\0');
+    stream_.read(&buf[0], span);
+    buf.resize(static_cast<size_t>(stream_.gcount()));
+    if (buf.empty()) {
+        throw std::runtime_error("Unexpected EOF reading symbol at position " + std::to_string(pos));
+    }
 
-    } else {
-        // ── Compact path: bare DNA string until delimiter ─────────────────────
-        // The first character (ch) was already consumed above; seed the
-        // accumulator with it.  Keep reading until we hit the opening brace of
-        // the next degenerate symbol, a whitespace character (newline between
-        // symbols in pretty-printed files), or EOF.
-        // We use peek() so the delimiter is *not* consumed; it belongs either
-        // to the next symbol or to whitespace the caller should not care about.
-        current_str += ch;
-        while (stream_.peek() != SET_OPEN && stream_.peek() != EOF &&
-               !std::isspace(static_cast<unsigned char>(stream_.peek()))) {
-            stream_.get(ch);
-            current_str += ch;
+    // is_ws: inline whitespace test (matches std::isspace under the "C" locale)
+    // without a libc call per byte.
+    auto is_ws = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' ||
+               c == '\v' || c == '\f' || c == '\r';
+    };
+
+    // ── Parse the buffer into a StringSet ────────────────────────────────────
+    // emit_token appends buf[s, e) as one alternative.  The fast path (no
+    // interior whitespace, the only case well-formed EDS files produce) is a
+    // single bulk substring construction; the slow path strips whitespace
+    // defensively to preserve the old char-scan's behaviour.
+    StringSet result;
+    auto emit_token = [&](size_t s, size_t e) {
+        size_t k = s;
+        while (k < e && !is_ws(buf[k])) ++k;
+        if (k == e) {
+            result.emplace_back(buf.data() + s, e - s);
+            return;
         }
-        // A compact non-degenerate symbol always has exactly one alternative.
-        result.push_back(current_str);
+        std::string t;
+        t.reserve(e - s);
+        for (size_t j = s; j < e; ++j)
+            if (!is_ws(buf[j])) t += buf[j];
+        result.push_back(std::move(t));
+    };
+
+    if (buf[0] == SET_OPEN) {
+        // ── Full-bracket path: {str1,str2,...,strK} ──────────────────────────
+        // Split the body on ',' up to the matching '}'.  A "{}" symbol yields a
+        // single empty string (epsilon / deletion), a valid EDS construct.
+        size_t tok_start = 1;
+        bool closed = false;
+        for (size_t i = 1; i < buf.size(); ++i) {
+            const char c = buf[i];
+            if (c == SET_SEPARATOR) {
+                emit_token(tok_start, i);
+                tok_start = i + 1;
+            } else if (c == SET_CLOSE) {
+                emit_token(tok_start, i);
+                closed = true;
+                break;
+            }
+        }
+        // Truncated symbol (EOF before '}'): emit the trailing token, matching
+        // the old loop which pushed whatever it had accumulated.
+        if (!closed) emit_token(tok_start, buf.size());
+    } else {
+        // ── Compact path: bare DNA string until the next symbol/whitespace ────
+        size_t i = 0;
+        while (i < buf.size() && buf[i] != SET_OPEN && !is_ws(buf[i])) ++i;
+        result.emplace_back(buf.data(), i);
     }
 
     return result;
@@ -808,6 +850,55 @@ StringSet EDS::read_symbol(Position pos) const {
     if (!sets_.empty()) return sets_[pos];
     // File-backed mode: EDS was loaded from a file via EDS::load()
     return read_symbol_from_stream(pos);
+}
+
+// ── Raw byte-copy of a run of symbols ────────────────────────────────────────
+// Mirrors Sources::copy_range_to_stream for the EDS side.  When a run of
+// symbols is stored in full-bracket format with no inter-symbol padding, their
+// output bytes are byte-identical to their input bytes, so we can copy the whole
+// contiguous span [base_positions[start], base_positions[start+count]) directly
+// — no read_symbol()/StringSet allocation and no char-by-char re-serialisation.
+// The caller (stream_merged_symbols_to_file BRANCH B) verifies the
+// full-bracket-contiguity precondition per symbol before batching, so this
+// method assumes it holds for the whole range.  Copies in 64 KB chunks so a
+// large unmodified run never pulls the entire span into RAM.
+void EDS::copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const {
+    if (count == 0) return;
+    if (!stream_.is_open())
+        throw std::runtime_error("copy_symbol_range_to_stream: file stream not available");
+    if (start + count > n_)
+        throw std::out_of_range("copy_symbol_range_to_stream: range out of bounds");
+
+    auto a = static_cast<std::streamoff>(metadata_.base_positions[start]);
+    std::streamoff b;
+    if (start + count < n_) {
+        b = static_cast<std::streamoff>(metadata_.base_positions[start + count]);
+    } else {
+        b = stream_file_size();   // range reaches EOF
+    }
+    std::streamoff byte_count = b - a;
+    if (byte_count <= 0) return;
+
+    // Seek guard: sequential calls land the stream exactly at `a`, so the seek
+    // (and its buffer refill) is skipped in the common in-order pattern.
+    auto target = static_cast<std::streampos>(a);
+    if (!stream_.good() || stream_.tellg() != target) {
+        stream_.clear();
+        stream_.seekg(target);
+    }
+
+    constexpr std::streamsize CHUNK = 64 * 1024;
+    char chunk[CHUNK];
+    std::streamoff remaining = byte_count;
+    while (remaining > 0 && stream_.good()) {
+        std::streamsize to_read = static_cast<std::streamsize>(
+            std::min(remaining, static_cast<std::streamoff>(CHUNK)));
+        stream_.read(chunk, to_read);
+        std::streamsize got = stream_.gcount();
+        if (got <= 0) break;
+        out.write(chunk, got);
+        remaining -= got;
+    }
 }
 
 // ================================================================================

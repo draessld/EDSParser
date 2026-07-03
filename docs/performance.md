@@ -134,14 +134,22 @@ Ratio: **~1.26× cartesian/linear** — the remaining gap is inherent I/O.
 Throughput is I/O-bound (disk seeks + sequential reads for on-demand symbol
 loading). The key optimisations:
 
-1. **Sequential seek elimination**: `read_symbol_from_stream()` checks if
-   the stream is already at position before calling `seekg()`.
-   Result: ~5K seeks per iteration instead of ~400K for forward-order access.
+1. **Sequential seek elimination + bulk read**: `read_symbol_from_stream()`
+   checks if the stream is already at position before calling `seekg()`
+   (~5K seeks per iteration instead of ~400K for forward-order access), and
+   reads each symbol's exact byte span in one `stream_.read()` rather than one
+   `get()`/`peek()` per byte, splitting the buffer on `,` in memory (2026-07-03).
 
 2. **SEDS batching**: consecutive unmodified symbols are bulk-copied with
    `copy_range_to_stream()` — ~2 727 calls vs ~200K for 10% variability data.
 
-3. **No ostringstream accumulation**: output written directly via `<<` to the
+3. **EDS raw-copy pass-through** (2026-07-03): the symmetric optimisation for the
+   EDS file — unmodified full-bracket symbols are byte-copied verbatim via
+   `EDS::copy_symbol_range_to_stream()` (batched like the SEDS side) instead of
+   parsed into a `StringSet` and re-serialised. Measured **cartesian 1.9–2.2×,
+   linear 1.16–1.63×** faster on 20 MB inputs; output byte-identical.
+
+4. **No ostringstream accumulation**: output written directly via `<<` to the
    output file stream.
 
 ### Iterations to Convergence

@@ -1332,6 +1332,97 @@ void test_full_mode_edge_cases() {
     std::cout << "PASSED\n";
 }
 
+// ── Bulk-read (read_symbol_from_stream) edge cases ───────────────────────────
+// Exercises the single-stream_.read() span path added for the perf optimisation:
+// long context blocks, the final symbol (whose span runs to EOF via
+// stream_file_size()), empty alternatives, and compact vs bracket layouts.
+void test_read_symbol_bulk_edge_cases() {
+    std::cout << "Test A5: read_symbol bulk-read edge cases... ";
+
+    // Long context block: the bulk read must reconstruct it exactly, and the
+    // LAST symbol must reconstruct too (it uses the EOF/file-size span path).
+    {
+        std::string longctx(5000, 'A');
+        edsparser::EDS eds = create_temp_eds("{" + longctx + "}{C,G}{" + longctx + "}");
+        assert(eds.length() == 3);
+        assert(eds.read_symbol(0)[0] == longctx);
+        auto mid = eds.read_symbol(1);
+        assert(mid.size() == 2 && mid[0] == "C" && mid[1] == "G");
+        assert(eds.read_symbol(2)[0] == longctx);   // last symbol via file-size span
+    }
+
+    // Last symbol degenerate with an empty (epsilon) alternative in the middle.
+    {
+        edsparser::EDS eds = create_temp_eds("{ACGT}{A,,GG}");
+        auto last = eds.read_symbol(1);
+        assert(last.size() == 3);
+        assert(last[0] == "A" && last[1] == "" && last[2] == "GG");
+    }
+
+    // Compact input: bare non-degenerate first + last symbols.
+    {
+        edsparser::EDS eds = create_temp_eds("ACGT{A,C}TTGG");
+        assert(eds.length() == 3);
+        assert(eds.read_symbol(0)[0] == "ACGT");
+        auto d = eds.read_symbol(1);
+        assert(d.size() == 2 && d[0] == "A" && d[1] == "C");
+        assert(eds.read_symbol(2)[0] == "TTGG");   // compact last symbol
+    }
+
+    // Out-of-order access (forces the seek path, not just sequential).
+    {
+        edsparser::EDS eds = create_temp_eds("{AA}{B,C}{DDD}{E,F}{GG}");
+        assert(eds.read_symbol(4)[0] == "GG");
+        assert(eds.read_symbol(0)[0] == "AA");
+        assert(eds.read_symbol(2)[0] == "DDD");
+    }
+
+    std::cout << "PASSED\n";
+}
+
+// ── copy_symbol_range_to_stream raw-copy ─────────────────────────────────────
+// The l-EDS merge pass-through uses this to copy runs of unmodified full-bracket
+// symbols verbatim.  Verify it reproduces the exact bytes for middle ranges,
+// ranges reaching the final symbol (file-size fallback), the whole file, and the
+// empty range.
+void test_copy_symbol_range_to_stream() {
+    std::cout << "Test A6: copy_symbol_range_to_stream raw-copy... ";
+
+    std::string content = "{ACGT}{A,ACA,}{CGT}{T,TG}{GGGG}";
+    auto temp_path = std::filesystem::temp_directory_path() / "test_eds_copyrange.eds";
+    { std::ofstream ofs(temp_path); ofs << content; }
+    edsparser::EDS eds = edsparser::EDS::load(temp_path);
+
+    {   // middle range [1,3)
+        std::ostringstream oss;
+        eds.copy_symbol_range_to_stream(1, 2, oss);
+        assert(oss.str() == "{A,ACA,}{CGT}");
+    }
+    {   // range reaching the last symbol [3,5) — uses stream_file_size()
+        std::ostringstream oss;
+        eds.copy_symbol_range_to_stream(3, 2, oss);
+        assert(oss.str() == "{T,TG}{GGGG}");
+    }
+    {   // whole file [0,5)
+        std::ostringstream oss;
+        eds.copy_symbol_range_to_stream(0, 5, oss);
+        assert(oss.str() == content);
+    }
+    {   // empty range → no output
+        std::ostringstream oss;
+        eds.copy_symbol_range_to_stream(2, 0, oss);
+        assert(oss.str().empty());
+    }
+    {   // single symbol
+        std::ostringstream oss;
+        eds.copy_symbol_range_to_stream(0, 1, oss);
+        assert(oss.str() == "{ACGT}");
+    }
+
+    std::filesystem::remove(temp_path);
+    std::cout << "PASSED\n";
+}
+
 int main() {
     std::cout << "Running EDS parsing tests...\n\n";
 
@@ -1357,6 +1448,8 @@ int main() {
         test_from_string_factory();
         test_mode_equivalence();
         test_full_mode_edge_cases();
+        test_read_symbol_bulk_edge_cases();
+        test_copy_symbol_range_to_stream();
         test_load_eds_with_sources_from_files();
         test_mixed_inputs();
         test_compact_format_parsing();

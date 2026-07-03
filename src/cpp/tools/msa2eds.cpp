@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
             ("help,h", "Show help message")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input MSA file (.msa) in FASTA format with gaps as '-'")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
+            ("seds,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)");
 
         po::variables_map vm;

@@ -27,7 +27,7 @@ msa2eds -i <alignment.msa> [OPTIONS]
 |------|------|---------|-------------|
 | `-i, --input` | path | required | Input MSA file in FASTA format (gaps as `-`) |
 | `-o, --output` | path | `<stem>.eds` | Output EDS / l-EDS file |
-| `-s, --sources` | path | `<stem>.seds` | Output source-tracking file |
+| `-s, --seds` | path | `<stem>.seds` | Output source-tracking file |
 | `-l, --context-length` | uint | — | If set, produces l-EDS instead of EDS |
 
 ### Behaviour
@@ -79,7 +79,8 @@ vcf2eds -i <variants.vcf> --reference <genome.fasta> [OPTIONS]
 | `-i, --input` | path | required | Input VCF file |
 | `-r, --reference` | path | required | Reference FASTA (random-access streaming) |
 | `-o, --output` | path | `<stem>.eds` | Output EDS / l-EDS file |
-| `-s, --sources` | path | `<stem>.seds` | Output source-tracking file |
+| `-s, --seds` | path | `<stem>.seds` | Output source-tracking file (text SEDS, sparse) |
+| `-z, --edz` | flag | off | Write the source file in binary EDZ format instead of text SEDS (both sparse) |
 | `-l, --context-length` | uint | — | If set, produces l-EDS |
 | `--block-size` | uint | `10000000` | Genomic window size in bases; `0` = load all (legacy, high memory) |
 
@@ -126,6 +127,9 @@ vcf2eds -i large.vcf -r hg38.fasta -l 5 --block-size 2000000
 
 # Explicit output paths
 vcf2eds -i variants.vcf -r ref.fasta -o out.eds -s out.seds
+
+# Binary EDZ sources instead of text SEDS
+vcf2eds -i variants.vcf -r ref.fasta -z
 ```
 
 ---
@@ -148,7 +152,8 @@ eds2leds -i <data.eds> -l <N> [OPTIONS]
 | `-i, --input` | path | required | Input EDS file (must have `.eds` extension) |
 | `-l, --context-length` | uint | required | Target minimum context length |
 | `-o, --output` | path | `<stem>_l<N>.leds` | Output l-EDS file |
-| `-s, --sources` | path | — | Input `.seds` file (enables LINEAR merging) |
+| `-s, --seds` | path | — | Input `.seds`/`.edz` source file (enables LINEAR merging); format auto-detected from extension/content |
+| `-z, --edz` | path | — | Input source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with `-s`) |
 | `--full` | flag | off | Force full bracket format (default: compact) |
 | `-t, --threads` | int | `1` | Parallel worker threads |
 
@@ -156,7 +161,7 @@ eds2leds -i <data.eds> -l <N> [OPTIONS]
 
 | Sources provided? | Strategy |
 |:-----------------:|----------|
-| Yes (`-s`) | **LINEAR** — phasing-aware; only valid haplotype combinations kept |
+| Yes (`-s` or `-z`) | **LINEAR** — phasing-aware; only valid haplotype combinations kept |
 | No | **CARTESIAN** — all combinations (cross-product of alternatives) |
 
 **Prefer LINEAR** for real genomic data (MSA- or VCF-derived). CARTESIAN is
@@ -195,6 +200,9 @@ eds2leds -i data.eds -s data.seds -l 10 --full --threads 4
 
 # Explicit output path
 eds2leds -i data.eds -l 20 -o custom_output.leds
+
+# LINEAR merging with an EDZ source file that lacks a .edz extension
+eds2leds -i data.eds -z data.sources -l 5
 ```
 
 ### Self-Overwrite Protection
@@ -221,7 +229,8 @@ edsparser-stats -i <data.eds> [OPTIONS]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-i, --input` | path | required | Input EDS / l-EDS file |
-| `-s, --sources` | path | — | Companion `.seds` file |
+| `-s, --seds` | path | — | Companion `.seds`/`.edz` source file; format auto-detected from extension/content |
+| `-z, --edz` | path | — | Companion source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with `-s`) |
 | `-j, --json` | flag | off | Output in JSON format |
 | `-c, --csv` | flag | off | Output in CSV format |
 | `-v, --verbose` | flag | off | Show detailed statistics |

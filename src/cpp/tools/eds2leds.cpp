@@ -5,9 +5,26 @@
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
+#include <unistd.h>
 
 namespace po = boost::program_options;
 using namespace edsparser;
+
+namespace {
+// Removes a temp symlink (and its containing directory) created to force
+// EDZ format detection on a sources file whose extension isn't ".edz".
+// detect_format() dispatches purely on path extension, so this is the
+// cheapest way to override it without touching the library's format logic.
+struct EdzSymlinkGuard {
+    std::filesystem::path link;
+    ~EdzSymlinkGuard() {
+        if (link.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove(link, ec);
+        std::filesystem::remove(link.parent_path(), ec);
+    }
+};
+}  // namespace
 
 int main(int argc, char** argv) {
     // Start performance tracking
@@ -30,6 +47,7 @@ int main(int argc, char** argv) {
         std::filesystem::path input_file;
         std::filesystem::path output_file;
         std::filesystem::path sources_file;
+        std::filesystem::path sources_edz_file;
         Length context_length;
         int num_threads;
         bool compact_mode = true;  // Default to compact format
@@ -41,7 +59,8 @@ int main(int argc, char** argv) {
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file (.eds)")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output l-EDS file (default: <input>_l<N>.leds)")
             ("context-length,l", po::value<Length>(&context_length)->required(), "Minimum context length")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Input source file (.seds) for linear (phasing-aware) merging")
+            ("seds,s", po::value<std::filesystem::path>(&sources_file), "Input source file (.seds/.edz) for linear (phasing-aware) merging; format auto-detected from extension/content")
+            ("edz,z", po::value<std::filesystem::path>(&sources_edz_file), "Input source file for linear merging, explicitly treated as binary EDZ format regardless of its extension (mutually exclusive with -s)")
             ("full", po::bool_switch(&full_mode), "Use full output format with brackets on all symbols (default: compact)")
             ("threads,t", po::value<int>(&num_threads)->default_value(1), "Number of threads for parallel processing");
 
@@ -58,7 +77,7 @@ int main(int argc, char** argv) {
             std::cout << "MERGING METHODS (auto-detected):\n";
             std::cout << "  WITH sources:\n";
             std::cout << "    - Phasing-aware merging using source information\n";
-            std::cout << "    - Automatically used when --sources/-s is provided\n";
+            std::cout << "    - Automatically used when --seds/-s or --edz/-z is provided\n";
             std::cout << "    - Preserves valid haplotype combinations\n";
             std::cout << "    - Use for: Genomic data with known phasing (MSA/VCF-derived)\n\n";
             std::cout << "  WITHOUT sources:\n";
@@ -79,6 +98,8 @@ int main(int argc, char** argv) {
             std::cout << "  eds2leds -i data.eds -l 5 --threads 4\n\n";
             std::cout << "  # Custom output path:\n";
             std::cout << "  eds2leds -i data.eds -s data.seds -l 10 -o output.leds\n\n";
+            std::cout << "  # Explicitly force EDZ (binary) source format regardless of extension:\n";
+            std::cout << "  eds2leds -i data.eds -z data.sources -l 5\n\n";
             std::cout << "OUTPUT FILES:\n";
             std::cout << "  Default output: <input_base>_l<N>.leds\n";
             std::cout << "  With sources:   <input_base>_l<N>.seds (source tracking preserved)\n";
@@ -99,6 +120,37 @@ int main(int argc, char** argv) {
         // Handle full mode flag
         if (full_mode) {
             compact_mode = false;
+        }
+
+        if (vm.count("seds") && vm.count("edz")) {
+            std::cerr << "Error: --seds/-s and --edz/-z are mutually exclusive\n";
+            print_performance();
+            return 1;
+        }
+
+        // -z forces EDZ interpretation of the sources file regardless of its
+        // on-disk extension. detect_format() (used deep in the merge pipeline)
+        // dispatches purely on path extension, so when the given file isn't
+        // already named ".edz" we point a temp ".edz" symlink at it instead of
+        // touching the file itself.
+        EdzSymlinkGuard edz_symlink_guard;
+        if (vm.count("edz")) {
+            if (!std::filesystem::exists(sources_edz_file)) {
+                std::cerr << "Error: Cannot open sources file: " << sources_edz_file << "\n";
+                print_performance();
+                return 1;
+            }
+            if (sources_edz_file.extension() == ".edz") {
+                sources_file = sources_edz_file;
+            } else {
+                std::filesystem::path link_dir = std::filesystem::temp_directory_path()
+                    / ("edsparser_eds2leds_z_" + std::to_string(getpid()));
+                std::filesystem::create_directories(link_dir);
+                edz_symlink_guard.link = link_dir / "sources.edz";
+                std::filesystem::create_symlink(std::filesystem::absolute(sources_edz_file),
+                                                 edz_symlink_guard.link);
+                sources_file = edz_symlink_guard.link;
+            }
         }
 
         // Validate input file extension

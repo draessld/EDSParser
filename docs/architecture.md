@@ -123,6 +123,14 @@ via `base_positions_[start+count] − base_positions_[start]` and copies
 those bytes directly without parsing. This makes sequential calls skip
 `seekg()` entirely.
 
+`EDS::copy_symbol_range_to_stream(start, count, out)` (2026-07-03) is the
+symmetric method on the EDS side: it copies the raw on-disk bytes of a run of
+unmodified full-bracket symbols verbatim, so the l-EDS merge pass-through no
+longer parses each unmodified symbol into a `StringSet` and re-serialises it.
+The end of a range that reaches the final symbol is bounded by
+`stream_file_size()` (queried from the open stream, valid on unlinked temp
+files) rather than a `base_positions` sentinel.
+
 ---
 
 ## l-EDS Iteration Chain

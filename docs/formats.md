@@ -123,13 +123,47 @@ Real path IDs are 1-indexed. When performing source intersections:
 {1,2} ∩ {3,4}  = ∅           → invalid combination, filtered out
 ```
 
-### Format Variants (Planned)
+### Range + Complement Encoding
+
+Beyond a plain explicit list, an entry may use:
+
+- **Ranges**: `{1-3,7}` expands to paths `1,2,3,7`.
+- **Complement**: a set whose *first* element is `0` followed by other IDs
+  means "all paths except the listed ones" — `{0,5-10,20}` = all paths
+  except 5,6,7,8,9,10,20. `write_seds_entry()` switches to this encoding
+  automatically whenever a variant is present in more than half of all
+  paths, keeping near-universal entries compact.
+- Correctly expanding a complement entry to its true path count requires
+  knowing the total number of paths, which plain text SEDS never stores in
+  a header (unlike EDZ — see below). `Sources::parse_seds()` infers it by
+  scanning for the largest path ID token seen anywhere in the file during
+  the same pass that builds its entry index.
+
+### Sparse Mode (`SEDS_SPARSE`)
+
+`vcf2eds` writes sources **sparse by default**: universal (`{0}`) entries
+are omitted from the text body entirely, and a trailing bitvector +
+20-byte trailer (`"SEDS"` magic + cardinality + degenerate-entry count)
+records which string indices were universal. `Sources::load()`
+auto-detects sparse files by checking for this trailer magic at load time
+— no separate flag is needed to *read* a sparse file, only to force EDZ
+interpretation of a misnamed one (`-z`/`--edz`).
+
+### Format Variants
 
 | Extension | Format | Status |
 |-----------|--------|--------|
-| `.seds` | Text, human-readable | ✅ Implemented |
-| `.edz` | Binary, varint encoding | 🔲 Planned |
+| `.seds` | Text, human-readable, range+complement encoding, sparse by default | ✅ Implemented |
+| `.edz` | Binary bitset, magic-byte header (`"EDZ\0"`+flags), sparse variant | ✅ Implemented |
 | `.edz` (compressed) | Binary + zstd blocks | 🔲 Planned |
+
+The `.edz` binary format stores one fixed-size bitset per string
+(`ceil(num_paths/8)` bytes; bit *k* = path ID *k+1*), with a 24-byte
+header (`EDZ_SPARSE` uses a 32-byte variant) carrying `num_paths`
+directly — unlike text SEDS, it never needs to infer the path universe
+size. Select it with `-z`/`--edz` on `vcf2eds`; `eds2leds` and
+`edsparser-stats` auto-detect it by extension via `-s`/`--seds`, or accept
+it explicitly regardless of extension via `-z`/`--edz`.
 
 ---
 

@@ -117,17 +117,23 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 Transformation tools (each focused on a specific conversion):
 - `eds2leds`: Transform EDS to l-EDS with linear or cartesian merging
   - **`--full` flag**: Force full bracket format output (default: compact)
+  - **Source flags**: `-s/--seds <path>` (SEDS or EDZ, auto-detected by extension/content) or `-z/--edz <path>` (forces EDZ interpretation regardless of extension — mutually exclusive with `-s`). Either enables LINEAR merging; omitting both uses CARTESIAN.
   - Runs complexity estimation before transformation and warns on exponential-growth risk
-  - **Linear vs cartesian throughput**: 1.26× gap on compliant input (no merge work); on real violation data (`--min-context 0`, 1% var, l=5) cartesian runs at ~22 MB/s vs linear ~19 MB/s (~1.15× gap) and both converge in 1 iteration after the chain-merging fix (2026-06-28). At 5% variability: cartesian ~8 MB/s, linear ~5 MB/s. Remaining gap is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data.
+  - **Linear vs cartesian throughput** (`--size standard`, 1-10 MB, post raw-copy fix 2026-07-03): on real violation data (`--min-context 0`, 1% var, l=5) cartesian runs at ~25 MB/s vs linear ~21 MB/s and both converge in 1 iteration after the chain-merging fix (2026-06-28). At 5% variability: cartesian ~8.7 MB/s, linear ~5.7 MB/s. Remaining gap is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data. The **EDS raw-copy pass-through** (2026-07-03) sped both up further on larger inputs — measured **cartesian 1.9–2.2×, linear 1.16–1.63×** on 20 MB inputs vs the pre-change serialiser (cartesian gains more because it has no SEDS I/O, so the EDS pass-through dominates its runtime).
+  - **Merged-output sources are always dense text SEDS** regardless of input format — the merge pipeline has no sparse/EDZ writer yet (see TODO.md).
 - `msa2eds`: Transform MSA to EDS/l-EDS with source tracking
+  - `-s/--seds <path>`: output source file (always dense text SEDS — no `-z`/EDZ support in this tool yet)
 - `vcf2eds`: Transform VCF to EDS/l-EDS with sample-level source tracking (requires reference FASTA)
   - **`--block-size` parameter**: Control memory usage for large VCF files (default: 10M bases)
   - Smaller block sizes (e.g., 1M) reduce memory at the cost of more I/O
   - Larger block sizes (e.g., 100M) increase performance but use more memory
   - Set to 0 for legacy mode (loads all variants, high memory)
+  - **Source format**: `-s/--seds <path>` (default) writes sparse text SEDS (universal `{0}` entries omitted); `-z/--edz` writes sparse binary EDZ instead. **Exception**: in l-EDS mode (`-l`), sources are always dense text SEDS regardless of `-z` — the two-stage EDS→l-EDS pipeline doesn't support sparse/EDZ output, and `-z` combined with `-l` prints a warning and falls back rather than corrupting output.
 
 Utility tools:
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
+  - `-s/--seds <path>` or `-z/--edz <path>` (mutually exclusive) for source-aware stats, same semantics as `eds2leds`
+  - Path-count stats (`num_paths`, "paths per string") correctly expand `PathSet` complement encoding (`{0,e1,e2,...}` = all paths except e1,e2,...) against the true path universe — fixed 2026-07-02; previously undercounted for complement-heavy SEDS files
 - `edsparser-genpatterns`: Generate random patterns for benchmarking
 - `genrandomeds`: Generate synthetic EDS files with controlled variability for testing/benchmarking
   - Requires `--ref-size-mb` (size) and `-o` (output); key options: `-v` (variability), `--min-context`, `--seed`
@@ -146,8 +152,8 @@ Utility tools:
 - `.msa`: Multiple Sequence Alignment in FASTA format (with gaps as `-`)
 - `.vcf`: Variant Call Format
 - `.eds`: Elastic-Degenerate String: `{str1,str2,...}{str3}{...}`
-- `.seds`: Sources file (text format mapping string IDs to path IDs)
-- `.edz`: Sources file (binary format, not yet fully implemented)
+- `.seds`: Sources file (text format mapping string IDs to path IDs; range+complement encoding, sparse by default from `vcf2eds`)
+- `.edz`: Sources file (binary bitset format; self-describing via magic bytes `"EDZ\0"` + flags; auto-detected by `.edz` extension or forced via `-z`/`--edz`)
 - `.leds`: Length-constrained EDS (minimum context length guaranteed)
 - `.peds`: Phased EDS (combined .eds + .seds, planned but not implemented)
 
@@ -166,7 +172,7 @@ Utility tools:
 - Using EDS without sources (simpler, faster)
 - Loading sources on-demand with LRU cache (default: 10K entries)
 - Different merging strategies (LINEAR requires sources, CARTESIAN doesn't)
-- Format extensibility: SEDS (text), EDZ (binary, planned), EDZ_COMPRESSED (planned)
+- Format extensibility: `SEDS`/`SEDS_SPARSE` (text, implemented), `EDZ`/`EDZ_SPARSE` (binary bitset, implemented), `EDZ_COMPRESSED` (planned)
 
 Key methods:
 - `Sources::load()` — factory method, returns `shared_ptr<Sources>`
@@ -364,8 +370,8 @@ Total Memory = metadata + (batch_size × metadata_per_group) + streaming_buffer
 **Implementation Details**:
 - **Chain selection** (`select_merge_groups()`): walks positions left-to-right; when `needs_merge(i, context_length)` is true, extends the chain while `needs_merge(i+1, ...)` is also true; emits one `MergeGroup`. Result: adjacent degenerate runs and short-context clusters collapse to a single group per chain.
 - **Metadata-only merge** (`compute_merge_metadata()`): per-group iterative fold — initialize from p₀, fold in p₁..p_{k-1}; `valid_indices_flat` grows as outer-product of valid index tuples filtered by source intersection.
-- **Streaming reconstruction** (`stream_merged_symbols_to_file()`): reads all group symbols, assembles each output string via `valid_indices_flat`, writes directly. **SEDS batching**: consecutive unmodified symbols accumulate into one `copy_range_to_stream()` call per run.
-- **Sequential seek elimination** (`read_symbol_from_stream()` in `eds.cpp`): skips `seekg()` when stream is already at the target position. Since symbols are processed in order, almost all seeks are eliminated.
+- **Streaming reconstruction** (`stream_merged_symbols_to_file()`): reads all group symbols, assembles each output string via `valid_indices_flat`, writes directly. **SEDS batching**: consecutive unmodified symbols accumulate into one `copy_range_to_stream()` call per run. **EDS raw-copy batching** (2026-07-03): unmodified full-bracket symbols are byte-copied verbatim via `EDS::copy_symbol_range_to_stream()` (the symmetric counterpart of the SEDS batch) instead of parsed into a `StringSet` and re-serialised — consecutive raw-copyable symbols flush in one call. A symbol is raw-copyable when its input span equals its full-bracket byte length (`Σ string_lengths + sym_size + 1`); compact input, inter-symbol whitespace, or the final symbol fall back to parse-and-reserialise. Output byte offsets are tracked via a manual `out_pos` counter (not `tellp()`) because raw copies defer physical writes. Measured: cartesian 1.9–2.2×, linear 1.16–1.63× faster on 20 MB inputs; output byte-identical to the pre-change serialiser.
+- **Sequential seek elimination + bulk read** (`read_symbol_from_stream()` in `eds.cpp`): skips `seekg()` when the stream is already at the target position (symbols processed in order → almost all seeks eliminated), and reads each symbol's exact byte span in a single `stream_.read()` (2026-07-03) rather than one `get()`/`peek()` per byte, splitting the in-memory buffer on `,`. The last symbol's span runs to `stream_file_size()` (derived from the open stream, so it works on unlinked temp files).
 - **Temp directory**: `std::filesystem::temp_directory_path() / "edsparser_leds_<pid>"`
 - **Automatic cleanup**: Temp files removed on completion or error
 

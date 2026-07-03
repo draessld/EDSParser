@@ -77,6 +77,62 @@ test_iterative_linear_merging() {
     assert_file_equal "$TMPDIR/iter_linear.seds" "$EXPECTED_DIR/test_iterative_linear.l3.seds" "multi-pass linear seds matches expected" || return 1
 }
 
+test_linear_with_edz_sources() {
+    "$TOOL" \
+        -i "$DATA_DIR/small.eds" \
+        --edz "$DATA_DIR/small.edz" \
+        -o "$TMPDIR/linear_edz.leds" \
+        -l 3
+    assert_exit_code 0 $? "exits 0 with --edz sources (linear merge)" || return 1
+    assert_file_exists "$TMPDIR/linear_edz.leds" ".leds output created for EDZ linear merge" || return 1
+    assert_not_empty "$TMPDIR/linear_edz.leds" ".leds output not empty for EDZ linear merge" || return 1
+}
+
+test_seds_and_edz_sources_agree() {
+    # Same underlying source data in two different containers must produce
+    # byte-identical l-EDS output.
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" -o "$TMPDIR/cmp_seds.leds" -l 3 >/dev/null 2>&1
+    "$TOOL" -i "$DATA_DIR/small.eds" -z "$DATA_DIR/small.edz"  -o "$TMPDIR/cmp_edz.leds"  -l 3 >/dev/null 2>&1
+    assert_file_equal "$TMPDIR/cmp_seds.leds" "$TMPDIR/cmp_edz.leds" \
+        "SEDS and EDZ sources produce identical l-EDS output"
+}
+
+test_long_flag_forms() {
+    "$TOOL" -i "$DATA_DIR/small.eds" --seds "$DATA_DIR/small.seds" -o "$TMPDIR/longflag_seds.leds" -l 3
+    assert_exit_code 0 $? "exits 0 with --seds long flag" || return 1
+    "$TOOL" -i "$DATA_DIR/small.eds" --edz "$DATA_DIR/small.edz" -o "$TMPDIR/longflag_edz.leds" -l 3
+    assert_exit_code 0 $? "exits 0 with --edz long flag" || return 1
+}
+
+test_seds_and_edz_mutually_exclusive() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" -z "$DATA_DIR/small.edz" \
+        -o "$TMPDIR/mutex.leds" -l 3 2>/dev/null
+    local code=$?
+    [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: -s and -z together — expected non-zero exit, got 0"; return 1; }
+}
+
+test_edz_without_extension() {
+    # -z must force EDZ interpretation even when the file isn't named .edz
+    # (detect_format() dispatches purely on extension otherwise).
+    cp "$DATA_DIR/small.edz" "$TMPDIR/small_noext.dat"
+    "$TOOL" -i "$DATA_DIR/small.eds" -z "$TMPDIR/small_noext.dat" -o "$TMPDIR/noext.leds" -l 3
+    assert_exit_code 0 $? "exits 0 with -z on EDZ file lacking .edz extension" || return 1
+    "$TOOL" -i "$DATA_DIR/small.eds" -z "$DATA_DIR/small.edz" -o "$TMPDIR/withext.leds" -l 3 >/dev/null 2>&1
+    assert_file_equal "$TMPDIR/noext.leds" "$TMPDIR/withext.leds" \
+        "-z on misnamed EDZ file matches .edz-named EDZ output" || return 1
+}
+
+test_seds_autodetect_fails_on_misnamed_edz() {
+    # Documents a known limitation: -s auto-detects format purely from
+    # extension/content sniffing, which only recognizes .edz explicitly.
+    # A binary EDZ file misnamed .seds is misread as text and must fail
+    # rather than silently corrupt.
+    cp "$DATA_DIR/small.edz" "$TMPDIR/small_wrong.seds"
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$TMPDIR/small_wrong.seds" -o "$TMPDIR/wrong.leds" -l 3 2>/dev/null
+    local code=$?
+    [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: -s on EDZ file misnamed .seds — expected non-zero exit, got 0"; return 1; }
+}
+
 test_missing_context_length_fails() {
     "$TOOL" -i "$DATA_DIR/simple.eds" -o "$TMPDIR/x.leds" 2>/dev/null
     local code=$?
@@ -89,6 +145,38 @@ test_missing_input_fails() {
     [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: missing input — expected non-zero exit, got 0"; return 1; }
 }
 
+test_raw_copy_passthrough_roundtrip() {
+    # Golden-independent validation of the l-EDS merge pass-through raw byte-copy
+    # (EDS::copy_symbol_range_to_stream) for unmodified full-bracket symbols:
+    #   1. the l-EDS output must reload cleanly (proves the raw-copied temp files
+    #      are valid, seekable full-bracket EDS);
+    #   2. re-transforming the already-l-compliant output at the same l must
+    #      converge in 0 iterations (idempotent), proving the pass-through
+    #      preserved structure byte-for-byte.
+    local GEN STAT
+    GEN=$(find_tool "genrandomeds")     || { echo "  SKIP: genrandomeds not found"; return 0; }
+    STAT=$(find_tool "edsparser-stats") || { echo "  SKIP: edsparser-stats not found"; return 0; }
+
+    "$GEN" --ref-size-mb 1 -v 0.05 --min-context 0 --seed 123 -o "$TMPDIR/rc.eds" >/dev/null 2>&1
+    assert_file_exists "$TMPDIR/rc.eds" "generated input EDS" || return 1
+
+    "$TOOL" -i "$TMPDIR/rc.eds" -s "$TMPDIR/rc.seds" -o "$TMPDIR/rc.leds" -l 4 >/dev/null 2>&1
+    assert_exit_code 0 $? "eds2leds (linear) exits 0 on generated input" || return 1
+    assert_not_empty "$TMPDIR/rc.leds" "l-EDS output not empty" || return 1
+
+    "$STAT" -i "$TMPDIR/rc.leds" >/dev/null 2>&1
+    assert_exit_code 0 $? "stats reloads the l-EDS output without error" || return 1
+
+    # eds2leds requires a .eds extension; copy before the idempotency re-run.
+    cp "$TMPDIR/rc.leds" "$TMPDIR/rc_reinput.eds"
+    local out
+    out=$("$TOOL" -i "$TMPDIR/rc_reinput.eds" -o "$TMPDIR/rc2.leds" -l 4 2>&1)
+    assert_exit_code 0 $? "re-transform of l-compliant output exits 0" || return 1
+    echo "$out" | grep -q "Converged after 0 iterations" \
+        || { echo -e "  ${RED}FAIL${NC}: expected 0-iteration convergence on l-compliant input"; return 1; }
+    echo -e "  ${GREEN}PASS${NC}: raw-copy pass-through yields valid, idempotent l-EDS"
+}
+
 run_test "basic EDS→l-EDS (cartesian)"          test_basic_cartesian
 run_test "EDS→l-EDS with sources (linear)"      test_linear_with_sources
 run_test "larger context length (-l 5)"         test_larger_context_length
@@ -96,6 +184,13 @@ run_test "full output format (--full)"          test_full_output_format
 run_test "multi-pass iterative merging"          test_iterative_merging
 run_test "compact EDS format as input"          test_compact_input_format
 run_test "multi-pass iterative merging (linear)" test_iterative_linear_merging
+run_test "EDS→l-EDS with EDZ sources (-z)"       test_linear_with_edz_sources
+run_test "SEDS and EDZ sources agree"            test_seds_and_edz_sources_agree
+run_test "--seds/--edz long flag forms"          test_long_flag_forms
+run_test "-s and -z mutually exclusive"          test_seds_and_edz_mutually_exclusive
+run_test "-z forces EDZ on misnamed file"        test_edz_without_extension
+run_test "-s fails on misnamed EDZ file"         test_seds_autodetect_fails_on_misnamed_edz
+run_test "raw-copy pass-through round-trip"      test_raw_copy_passthrough_roundtrip
 run_test "missing -l exits non-zero"            test_missing_context_length_fails
 run_test "missing input exits non-zero"         test_missing_input_fails
 

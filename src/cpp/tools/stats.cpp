@@ -89,21 +89,31 @@ SourceStats compute_source_stats(const EDS& eds) {
     size_t cardinality = sources->cardinality();
     if (cardinality == 0) return result;
 
+    // PathSet uses complement encoding: a leading 0 means "all paths except
+    // the listed exceptions" (see sources.hpp). .size() alone only gives the
+    // true path count for explicit (non-complement) sets, so every entry
+    // must be expanded against the true path universe first.
+    size_t num_paths_total = sources->num_paths();
+
     std::set<int> all_paths;
     size_t total_set_size = 0;
 
     for (size_t i = 0; i < cardinality; ++i) {
         auto paths = sources->read_source(i);
-        // {0} is the universal marker — treat it as a single counted element
-        all_paths.insert(paths.begin(), paths.end());
-        if (paths.size() > result.max_paths_per_string)
-            result.max_paths_per_string = paths.size();
-        total_set_size += paths.size();
+        size_t true_count;
+        if (!paths.empty() && paths[0] == 0) {
+            size_t exceptions = paths.size() - 1;
+            true_count = (num_paths_total > exceptions) ? num_paths_total - exceptions : 0;
+        } else {
+            true_count = paths.size();
+            all_paths.insert(paths.begin(), paths.end());
+        }
+        if (true_count > result.max_paths_per_string)
+            result.max_paths_per_string = true_count;
+        total_set_size += true_count;
     }
 
-    // Exclude universal marker 0 from path count (it means "all paths", not a real genome ID)
-    all_paths.erase(0);
-    result.num_paths = all_paths.size();
+    result.num_paths = num_paths_total > 0 ? num_paths_total : all_paths.size();
     result.avg_paths_per_string = static_cast<double>(total_set_size) / cardinality;
     return result;
 }
@@ -323,6 +333,7 @@ int main(int argc, char** argv) {
     try {
         std::filesystem::path input_file;
         std::filesystem::path sources_file;
+        std::filesystem::path sources_edz_file;
         bool json_output = false;
         bool csv_output = false;
         bool verbose = false;
@@ -331,7 +342,8 @@ int main(int argc, char** argv) {
         desc.add_options()
             ("help,h", "Show help message")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file")
-            ("sources,s", po::value<std::filesystem::path>(&sources_file), "Source file (.seds) - optional")
+            ("seds,s", po::value<std::filesystem::path>(&sources_file), "Source file (.seds/.edz) - optional, format auto-detected from extension/content")
+            ("edz,z", po::value<std::filesystem::path>(&sources_edz_file), "Source file explicitly treated as binary EDZ format regardless of its extension (mutually exclusive with -s)")
             ("json,j", po::bool_switch(&json_output), "Output in JSON format")
             ("csv,c", po::bool_switch(&csv_output), "Output in CSV format")
             ("verbose,v", po::bool_switch(&verbose), "Show detailed statistics");
@@ -347,6 +359,8 @@ int main(int argc, char** argv) {
             std::cout << "  edsparser-stats -i data.eds\n\n";
             std::cout << "  # Show statistics with sources:\n";
             std::cout << "  edsparser-stats -i data.eds -s data.seds\n\n";
+            std::cout << "  # Show statistics with an EDZ source file that lacks a .edz extension:\n";
+            std::cout << "  edsparser-stats -i data.eds -z data.sources\n\n";
             std::cout << "  # Show statistics in JSON format:\n";
             std::cout << "  edsparser-stats -i data.eds --json\n\n";
             std::cout << "  # Show statistics in CSV format:\n";
@@ -367,6 +381,12 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        if (vm.count("seds") && vm.count("edz")) {
+            std::cerr << "Error: --seds/-s and --edz/-z are mutually exclusive\n";
+            print_perf_stderr();
+            return 1;
+        }
+
         // Check if input file exists
         if (!std::filesystem::exists(input_file)) {
             std::cerr << "Error: Input file '" << input_file << "' not found\n";
@@ -376,8 +396,28 @@ int main(int argc, char** argv) {
 
         // Load EDS (always uses streaming mode)
         EDS eds;
-        bool has_sources = vm.count("sources") > 0;
-        if (has_sources) {
+        bool has_sources_edz = vm.count("edz") > 0;
+        bool has_sources = (vm.count("seds") > 0) || has_sources_edz;
+        if (has_sources_edz) {
+            // -z bypasses extension-based format detection and forces EDZ parsing
+            // (parse_edz() still auto-detects EDZ_SPARSE vs dense EDZ from the
+            // file's own header flags, so this is safe for both).
+            if (!std::filesystem::exists(sources_edz_file)) {
+                std::cerr << "Error: Source file '" << sources_edz_file << "' not found\n";
+                print_perf_stderr();
+                return 1;
+            }
+            eds = EDS::load(input_file);
+            auto sources = Sources::load(sources_edz_file, Sources::Format::EDZ);
+            if (!eds.empty() && sources->cardinality() != eds.cardinality()) {
+                std::cerr << "Error: Sources cardinality (" << sources->cardinality()
+                          << ") does not match EDS cardinality (" << eds.cardinality() << ")\n";
+                print_perf_stderr();
+                return 1;
+            }
+            eds.set_sources_object(sources);
+            sources_file = sources_edz_file;
+        } else if (has_sources) {
             if (!std::filesystem::exists(sources_file)) {
                 std::cerr << "Error: Source file '" << sources_file << "' not found\n";
                 print_perf_stderr();

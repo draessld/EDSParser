@@ -116,6 +116,13 @@ public:
 
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
+    // Bulk-copy the raw on-disk bytes of symbols [start, start+count) to `out`.
+    // METADATA_ONLY only. Precondition: those symbols are stored in full-bracket
+    // format as one contiguous byte run (no inter-symbol padding), so the copy
+    // is byte-for-byte and needs no parse/reserialise. Used by the l-EDS merge
+    // pass-through to raw-copy unmodified symbols; the caller verifies the
+    // precondition per symbol before batching.
+    void copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const;
     Length get_symbol_size(Position pos) const { return metadata_.symbol_sizes[pos]; }
     std::streampos get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
     Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
@@ -144,6 +151,7 @@ private:
     // File streaming (only if mode_ == METADATA_ONLY)
     std::filesystem::path file_path_;
     mutable std::ifstream stream_;      // Mutable to allow reading in const methods
+    mutable std::streamoff file_size_ = -1;  // Lazily cached file size (for last-symbol byte spans)
 
     // Optional source support (delegated to Sources class)
     std::shared_ptr<Sources> sources_;  // nullptr if no sources loaded
@@ -155,6 +163,7 @@ private:
 
     // Streaming helpers
     StringSet read_symbol_from_stream(Position pos) const;
+    std::streamoff stream_file_size() const;  // File size via the open stream (cached)
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

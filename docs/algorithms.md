@@ -150,16 +150,26 @@ For each merged result:
 3. Concatenate `strings_i[a] + strings_j[b]` directly into the output stream.
 4. Flush after each symbol.
 
-For unmodified symbol ranges (not involved in any merge), the raw SEDS
-bytes are bulk-copied with `copy_range_to_stream()` — one seek + sequential
-read for the entire run.
+For unmodified symbol ranges (not involved in any merge), both the raw EDS
+bytes and the raw SEDS bytes are bulk-copied — one seek + sequential read for
+the entire run — via `EDS::copy_symbol_range_to_stream()` and
+`Sources::copy_range_to_stream()` respectively.
 
-### SEDS Batching
+### EDS + SEDS Batching
 
-When copying unmodified source ranges, consecutive unmodified symbols are
-accumulated into a single `copy_range_to_stream()` call per run, rather than
-one call per symbol. This reduces SEDS write calls from ~N to ~(number of
-merge boundaries), typically 2–5× fewer per iteration.
+When copying unmodified ranges, consecutive unmodified symbols are accumulated
+into a single copy call per run (one for the EDS file, one for the SEDS file),
+rather than one call per symbol. This reduces write calls from ~N to ~(number
+of merge boundaries), typically 2–5× fewer per iteration.
+
+The EDS raw-copy (2026-07-03) skips the parse-into-`StringSet` +
+re-serialise-char-by-char that unmodified symbols previously incurred: an
+unmodified full-bracket symbol's output bytes are byte-identical to its input
+bytes, so they are copied verbatim. A symbol qualifies when its input span
+equals its full-bracket byte length (`Σ string_lengths + sym_size + 1`);
+compact-format input, inter-symbol whitespace, or the final symbol fall back to
+the (bulk-read) parse-and-reserialise path. Measured cartesian 1.9–2.2×, linear
+1.16–1.63× faster on 20 MB inputs.
 
 ---
 

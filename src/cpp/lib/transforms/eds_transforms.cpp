@@ -643,6 +643,36 @@ namespace {
         size_t seds_batch_start = 0;
         size_t seds_batch_count = 0;
 
+        // ── EDS raw-copy batch state ─────────────────────────────────────────
+        // The symmetric optimisation for the EDS file: an unmodified symbol
+        // stored in full-bracket format with no trailing padding has output
+        // bytes byte-identical to its input bytes, so it can be raw-copied
+        // instead of parsed (read_symbol → StringSet) and re-serialised.
+        // Consecutive raw-copyable symbols form one contiguous input byte range,
+        // flushed in a single copy_symbol_range_to_stream() call.
+        // eds_batch_start = first input position of the pending run;
+        // eds_batch_count = number of positions accumulated so far.
+        size_t eds_batch_start = 0;
+        size_t eds_batch_count = 0;
+
+        // ── Output byte-offset tracker ───────────────────────────────────────
+        // base_positions must record each output symbol's byte offset, but the
+        // EDS raw-copy batch defers writes past the point where the symbol's
+        // metadata is recorded, so eds_out.tellp() would be stale.  We instead
+        // track the offset ourselves: every symbol (merged, raw-copied, or
+        // re-serialised) writes exactly full-bracket bytes
+        //   1 ('{') + Σ string lengths + (sym_size − 1) commas + 1 ('}')
+        // so out_pos advances by that count regardless of when the bytes are
+        // physically flushed.  Starts at 0 for the fresh temp file.
+        std::streamoff out_pos = 0;
+
+        auto flush_eds_batch = [&]() {
+            if (eds_batch_count > 0) {
+                input_eds.copy_symbol_range_to_stream(eds_batch_start, eds_batch_count, eds_out);
+                eds_batch_count = 0;
+            }
+        };
+
         // flush_seds_batch() is called:
         //   (a) just before writing a merged symbol — the merged symbol's own
         //       SEDS data is written inline, not via copy_range_to_stream(), so
@@ -680,13 +710,13 @@ namespace {
             }
 
             // ── Record the output file position for this symbol ──────────────
-            // eds_out.tellp() returns the current write position in the output
-            // stream, which is the byte offset where the '{' we are about to
-            // write will land.  We store this so the EDS object created from the
-            // output file (via EDS::from_metadata()) knows where to seekg() to
-            // find this symbol.
-            auto base_pos = static_cast<std::streampos>(eds_out.tellp());
-            result.metadata.base_positions.push_back(base_pos);
+            // out_pos is the byte offset where this symbol's '{' will land in the
+            // output file.  We track it manually rather than reading
+            // eds_out.tellp() because the EDS raw-copy batch defers physical
+            // writes past this point, which would make tellp() stale.  The EDS
+            // object created from the output file (via EDS::from_metadata()) uses
+            // these offsets to seekg() to each symbol.
+            result.metadata.base_positions.push_back(static_cast<std::streampos>(out_pos));
 
             // cum_set_sizes[i] = total number of strings in symbols 0..i-1.
             // We push result.m (the running total so far) before updating it.
@@ -700,18 +730,24 @@ namespace {
             // ════════════════════════════════════════════════════════════════
             if (merge_map[pos] >= 0) {
 
-                // Flush unmodified SEDS data accumulated before this group.
+                // Flush unmodified EDS/SEDS data accumulated before this group;
+                // the merged symbol's bytes must follow them in the output.
+                flush_eds_batch();
                 flush_seds_batch();
 
                 const auto& merge_meta = merge_metadata[merge_map[pos]];
                 sym_size = merge_meta.merged_size;
                 const size_t gc = merge_meta.group_count;  // positions in this group
 
+                size_t sum_len = 0;  // Σ string lengths in this output symbol
                 for (Length len : merge_meta.merged_string_lengths) {
                     result.metadata.string_lengths.push_back(len);
                     result.N += len;
+                    sum_len += len;
                     if (len == 0) result.metadata.num_empty_strings++;
                 }
+                // Full-bracket bytes: '{' + strings + (sym_size−1) commas + '}'.
+                out_pos += static_cast<std::streamoff>(sum_len + sym_size + 1);
 
                 // Read all gc symbols in the group sequentially.
                 // The sequential-seek optimisation fires for every call after the
@@ -761,38 +797,64 @@ namespace {
                 // ── String lengths: from input metadata, no I/O ─────────────
                 // All string lengths for this symbol are already in in_meta;
                 // we copy them into the output metadata and update counters.
+                size_t sum_len = 0;  // Σ string lengths in this symbol
                 for (size_t k = 0; k < sym_size; ++k) {
                     Length len = in_meta.string_lengths[global_idx + k];
                     result.metadata.string_lengths.push_back(len);
                     result.N += len;
+                    sum_len += len;
                     if (len == 0) result.metadata.num_empty_strings++;
                 }
 
-                // ── Read and re-write the EDS symbol ────────────────────────
-                // read_symbol() triggers read_symbol_from_stream() in
-                // METADATA_ONLY mode.  Because we process positions in order
-                // (0, 1, 2, …) and the input file has symbols in the same order,
-                // the sequential-seek guard in read_symbol_from_stream() fires
-                // for nearly every call: after reading symbol pos the stream
-                // sits at base_positions[pos+1], so the next call for pos+1
-                // skips its seekg().
-                // Exception: after a merged pair, skip[pos+1] fires and the
-                // loop jumps to pos+2; the stream is at base_positions[pos+1]
-                // but we want base_positions[pos+2], so one seek is needed.
-                StringSet symbol = input_eds.read_symbol(pos);
-
-                // Write in full-bracket format {str1,str2,...}.  Intermediate
-                // temp files always use full-bracket format (required for
-                // METADATA_ONLY seeking) even for non-degenerate symbols.
-                // The compact serialisation (bare string without brackets for
-                // non-degenerate symbols) is applied only to the final output
-                // in eds_to_leds_linear(), not here.
-                eds_out << '{';
-                for (size_t i = 0; i < symbol.size(); ++i) {
-                    if (i > 0) eds_out << ',';
-                    eds_out << symbol[i];
+                // ── Write the EDS symbol: raw-copy fast path ─────────────────
+                // Output temp files are full-bracket format:
+                //   '{' + strings + (sym_size−1) commas + '}'  =  sum_len+sym_size+1
+                // If this symbol is stored in the input the same way with no
+                // trailing padding — i.e. its input span
+                //   base_positions[pos+1] − base_positions[pos]
+                // equals that full-bracket byte length — then its output bytes
+                // are byte-identical to its input bytes and it can be raw-copied
+                // (batched into one contiguous copy_symbol_range_to_stream call)
+                // instead of parsed into a StringSet and re-serialised char by
+                // char.  This holds for every intermediate temp file (iteration
+                // ≥ 1) and for full-bracket, whitespace-free user input at
+                // iteration 0.  When it does not hold (compact input, inter-symbol
+                // whitespace, or the final symbol whose next base_position is
+                // unknown), we fall back to the parse-and-reserialise path, which
+                // is itself now bulk-read in read_symbol_from_stream().
+                const size_t full_len = sum_len + sym_size + 1;
+                bool raw_ok = false;
+                if (pos + 1 < input_eds.length()) {
+                    auto ia = static_cast<std::streamoff>(in_meta.base_positions[pos]);
+                    auto ib = static_cast<std::streamoff>(in_meta.base_positions[pos + 1]);
+                    raw_ok = (ib - ia == static_cast<std::streamoff>(full_len));
                 }
-                eds_out << '}';
+
+                if (raw_ok) {
+                    // Extend the raw-copy batch (a run of consecutive unmodified
+                    // symbols is contiguous in the input file — see the skip[]
+                    // analysis: an unmodified position can only be followed by
+                    // another unmodified position or a merge start, never a
+                    // skipped one — so the run copies in a single call).
+                    if (eds_batch_count == 0) eds_batch_start = pos;
+                    eds_batch_count++;
+                } else {
+                    // Fallback: parse and re-serialise in full-bracket format.
+                    // Flush any pending raw-copy batch first so byte order is
+                    // preserved in the output.
+                    flush_eds_batch();
+                    StringSet symbol = input_eds.read_symbol(pos);
+                    eds_out << '{';
+                    for (size_t i = 0; i < symbol.size(); ++i) {
+                        if (i > 0) eds_out << ',';
+                        eds_out << symbol[i];
+                    }
+                    eds_out << '}';
+                }
+
+                // Advance the output offset by the full-bracket byte length,
+                // whether the bytes were raw-copied (deferred) or written now.
+                out_pos += static_cast<std::streamoff>(full_len);
 
                 // ── Extend the SEDS batch ────────────────────────────────────
                 // Rather than calling copy_range_to_stream() immediately (one
@@ -862,9 +924,10 @@ namespace {
         // END OF MAIN LOOP
         // ════════════════════════════════════════════════════════════════════
 
-        // Drain any SEDS batch that was still accumulating when the loop ended.
-        // This covers the common case where the final symbols of the EDS are all
-        // unmodified (no merge at the very end of the file).
+        // Drain any EDS/SEDS batch that was still accumulating when the loop
+        // ended.  This covers the common case where the final symbols of the EDS
+        // are all unmodified (no merge at the very end of the file).
+        flush_eds_batch();
         flush_seds_batch();
 
         // ── Finalise aggregate statistics ────────────────────────────────────
