@@ -116,6 +116,11 @@ public:
 
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
+    // In-memory (FULL) mode only: return a const reference to the stored symbol,
+    // avoiding the by-value copy of read_symbol().  Throws if the EDS is
+    // file-backed (METADATA_ONLY), where the symbol must be freshly read from
+    // disk — use read_symbol() there.
+    const StringSet& read_symbol_ref(Position pos) const;
     // Bulk-copy the raw on-disk bytes of symbols [start, start+count) to `out`.
     // METADATA_ONLY only. Precondition: those symbols are stored in full-bracket
     // format as one contiguous byte run (no inter-symbol padding), so the copy
@@ -164,6 +169,12 @@ private:
     // Streaming helpers
     StringSet read_symbol_from_stream(Position pos) const;
     std::streamoff stream_file_size() const;  // File size via the open stream (cached)
+
+    // Return a const reference to symbol `pos` without copying when possible.
+    // FULL mode: references sets_[pos] directly (no copy, `scratch` untouched).
+    // METADATA_ONLY mode: reads the symbol into `scratch` and references that.
+    // The reference is valid until `scratch` is reused or the next call.
+    const StringSet& symbol_view(Position pos, StringSet& scratch) const;
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

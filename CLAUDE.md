@@ -107,7 +107,7 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
     - Uses METADATA_ONLY mode (only metadata in RAM, ~100MB for 100GB file)
     - Iterative temp file chaining (iteration N → temp file → iteration N+1)
     - **Per-process unique temp directory** (`/tmp/edsparser_leds_<pid>/`) — prevents conflicts when multiple `eds2leds` instances run in parallel (e.g. from experiment scripts)
-    - Batch metadata accumulation: all `MergeMetadata` is collected across batches before `stream_merged_symbols_to_file` is called once — avoids writing every unmodified symbol once per batch
+    - Incremental batch streaming (2026-07-05): a stateful `MergeStreamWriter` consumes each `BATCH_SIZE` window's `MergeMetadata` via `add_batch()` and writes it out immediately, then `finish()` drains the trailing unmodified tail. Retained `MergeMetadata` is capped to one batch (no per-iteration `all_metadata` accumulator), while still writing each unmodified symbol only once. Byte-identical output vs the old accumulate-then-stream path; ~23% lower peak RSS on cartesian runs with tens of thousands of moderate-size groups.
     - Streaming output with immediate flushing (no ostringstream accumulation)
     - Memory footprint: O(metadata + batch) instead of O(file_size × iterations × threads)
     - Typical reduction: 2TB → 500MB peak memory for 100GB EDS with 1000 groups and 16 threads

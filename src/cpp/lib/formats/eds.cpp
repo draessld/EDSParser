@@ -164,17 +164,24 @@ void EDS::parse(std::istream& is, bool with_strings) {
         std::streamsize n = is.gcount();
         if (n <= 0) break;
 
-        for (std::streamsize i = 0; i < n; ++i) {
+        for (std::streamsize i = 0; i < n; /* advanced inside */) {
             const char ch = buf[i];
 
             if (mode == Scan::IN_BRACKET) {
                 // Inside a {...} group: everything up to the matching '}' is body.
-                if (ch == SET_CLOSE) {
+                // Bulk-scan the run of body bytes in this chunk and append it in
+                // one go rather than one char at a time.
+                std::streamsize j = i;
+                while (j < n && buf[j] != SET_CLOSE) ++j;
+                bracketed_content.append(buf.data() + i, static_cast<size_t>(j - i));
+                if (j < n) {
+                    // buf[j] == '}': close the symbol.
                     process_token(bracketed_content, /*is_bracketed=*/true);
                     bracketed_content.clear();
                     mode = Scan::BETWEEN;
+                    i = j + 1;
                 } else {
-                    bracketed_content += ch;
+                    i = j;  // chunk exhausted mid-bracket; resume on next chunk
                 }
                 continue;
             }
@@ -188,6 +195,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
                 metadata_.base_positions.push_back(
                     static_cast<std::streampos>(file_offset + i));   // offset of '{'
                 mode = Scan::IN_BRACKET;
+                ++i;
             } else if (is_ws(ch)) {
                 // Inter-symbol whitespace terminates a bare token (if any).
                 if (mode == Scan::IN_BARE) {
@@ -196,14 +204,20 @@ void EDS::parse(std::istream& is, bool with_strings) {
                     mode = Scan::BETWEEN;
                 }
                 // Otherwise already BETWEEN: skip the whitespace byte.
+                ++i;
             } else {
-                // Normal character of a bare (non-bracketed) symbol.
+                // Normal character(s) of a bare (non-bracketed) symbol.  Bulk-scan
+                // the run of characters until the next '{' / whitespace / chunk end
+                // and append it in one call.
                 if (mode == Scan::BETWEEN) {
                     metadata_.base_positions.push_back(
                         static_cast<std::streampos>(file_offset + i));  // first char
                     mode = Scan::IN_BARE;
                 }
-                current_token += ch;
+                std::streamsize j = i;
+                while (j < n && buf[j] != SET_OPEN && !is_ws(buf[j])) ++j;
+                current_token.append(buf.data() + i, static_cast<size_t>(j - i));
+                i = j;
             }
         }
 
@@ -369,9 +383,11 @@ void EDS::print(std::ostream& os) const {
 
     os << "EDS with " << n_ << " sets, " << m_ << " total strings:\n";
 
+    StringSet scratch;
     for (size_t i = 0; i < n_; i++) {
-        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes)
-        StringSet set = read_symbol(i);
+        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes);
+        // symbol_view avoids copying in FULL mode.
+        const StringSet& set = symbol_view(i, scratch);
 
         os << "Set " << i << ": {";
 
@@ -399,9 +415,11 @@ void EDS::print(std::ostream& os) const {
 void EDS::save(std::ostream& os, OutputFormat format) const {
     // Now works with both FULL and METADATA_ONLY modes via read_symbol()
     // Output EDS format
+    StringSet scratch;
     for (size_t i = 0; i < n_; i++) {
-        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes)
-        StringSet set = read_symbol(i);
+        // Read symbol on-demand (works in both FULL and METADATA_ONLY modes);
+        // symbol_view avoids copying in FULL mode.
+        const StringSet& set = symbol_view(i, scratch);
 
         // Determine if we should use brackets for this set
         bool use_brackets = (format == OutputFormat::FULL) || metadata_.is_degenerate[i];
@@ -850,6 +868,29 @@ StringSet EDS::read_symbol(Position pos) const {
     if (!sets_.empty()) return sets_[pos];
     // File-backed mode: EDS was loaded from a file via EDS::load()
     return read_symbol_from_stream(pos);
+}
+
+// Const-reference accessor for in-memory (FULL) mode — avoids the read_symbol()
+// copy.  File-backed EDS has no in-RAM set to reference, so this throws there.
+const StringSet& EDS::read_symbol_ref(Position pos) const {
+    if (pos >= n_) {
+        throw std::out_of_range("Position " + std::to_string(pos) + " out of range");
+    }
+    if (sets_.empty()) {
+        throw std::runtime_error(
+            "read_symbol_ref() requires an in-memory EDS; use read_symbol() for "
+            "file-backed (METADATA_ONLY) EDS");
+    }
+    return sets_[pos];
+}
+
+// Copy-avoiding symbol accessor usable in both modes.  FULL mode returns a
+// reference straight into sets_; METADATA_ONLY reads into the caller-provided
+// scratch buffer and references that (one move, no extra copy).
+const StringSet& EDS::symbol_view(Position pos, StringSet& scratch) const {
+    if (!sets_.empty()) return sets_[pos];
+    scratch = read_symbol_from_stream(pos);
+    return scratch;
 }
 
 // ── Raw byte-copy of a run of symbols ────────────────────────────────────────
@@ -1317,7 +1358,11 @@ PathSet EDS::calculate_path_intersection(size_t start_symbol,
             );
         }
 
-        const PathSet current_sources = sources_->read_source(global_string_idx);
+        // read_source_ref avoids copying the PathSet on a cache hit.  This is a
+        // single-threaded path (check_position is never called from the parallel
+        // merge region), and the reference is consumed before the next
+        // read_source_ref() call, so cache eviction cannot dangle it.
+        const PathSet& current_sources = sources_->read_source_ref(global_string_idx);
 
         // Compute intersection
         if (first) {
