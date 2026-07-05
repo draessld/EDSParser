@@ -1,0 +1,17 @@
+##fileformat=VCFv4.2
+##reference=variants.fa
+##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="SV length">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1	S2
+chr1	3	.	G	A	99	PASS	.	GT	0|1	1|0
+chr1	6	.	C	CTT	99	PASS	.	GT	1|0	0|1
+chr1	10	.	CGT	C	99	PASS	.	GT	0|1	1|1
+chr1	15	.	G	<DEL>	99	PASS	.	GT	1|0	0|1
+chr1	20	.	T	<INS>	99	PASS	.	GT	0|1	1|0
+chr1	25	.	A	<INV>	99	PASS	SVLEN=4	GT	1|0	0|1
+chr1	30	.	C	<CN0>	99	PASS	.	GT	1|0	0|0
+chr1	35	.	G	<CN1>	99	PASS	.	GT	0|1	1|0
+chr1	40	.	T	<CN2>	99	PASS	.	GT	1|1	0|1
+chr1	45	.	A	C,G	99	PASS	.	GT	1|2	0|1
+chr1	50	.	C	<BND>	99	PASS	.	GT	1|0	0|1
+chrX	5	.	A	T	99	PASS	.	GT	0|1	1|0
+this_is_a_malformed_line_with_too_few_fields
