@@ -90,6 +90,13 @@ public:
     static std::shared_ptr<Sources> load(const std::filesystem::path& path);  // Auto-detect format
     void save(const std::filesystem::path& path) const;
 
+    // Save in an explicitly chosen target format, independent of how the Sources
+    // object was loaded. Reads each entry via read_source() (format-agnostic) and
+    // re-encodes into the requested format. Used by edsparser-source-transform to
+    // convert between SEDS / SEDS_SPARSE / EDZ / EDZ_SPARSE. EDZ_COMPRESSED throws
+    // (not yet implemented).
+    void save_as(const std::filesystem::path& path, Format format) const;
+
     // Access (always uses streaming with cache)
     PathSet read_source(size_t string_id) const;
 
@@ -216,8 +223,14 @@ private:
 
     // Format-specific saving
     void save_seds(const std::filesystem::path& path) const;
+    void save_seds_sparse(const std::filesystem::path& path) const;
     void save_edz(const std::filesystem::path& path) const;
+    void save_edz_sparse(const std::filesystem::path& path) const;
     void save_edz_compressed(const std::filesystem::path& path) const;
+
+    // Number of paths to use when encoding as EDZ. Returns num_paths_ if known,
+    // otherwise derives it by scanning all entries for the maximum path ID.
+    size_t effective_num_paths() const;
 
     // Helper: Add to cache (takes by value to enable move)
     void add_to_cache(size_t string_id, PathSet paths) const;

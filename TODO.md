@@ -19,28 +19,32 @@ The `copy_range_to_stream()` slow fallback (re-serialise via `read_source`) is t
 path for both EDZ and EDZ_COMPRESSED — it is only called from `eds2leds --linear` SEDS output, so
 no format-specific fast path is needed until EDZ output mode is added.
 
-### Source Format Conversion Tool — `edsparser-source-transform`
+### Source Format Conversion Tool — `edsparser-source-transform` *(implemented, EDZ_COMPRESSED pending)*
 
-Currently there is no way to convert between source formats (SEDS ↔ EDZ ↔ EDZ_COMPRESSED) without
-re-running a full EDS transformation from scratch. A dedicated conversion tool would allow users to:
+**Done:** `src/cpp/tools/source_transform.cpp` converts a source file between all implemented
+formats (SEDS, SEDS_SPARSE, EDZ, EDZ_SPARSE) without re-running a full EDS transformation. It is a
+thin wrapper around the new `Sources::save_as(path, Format)` method (`sources.cpp`), which reads each
+entry via format-agnostic `read_source()` and re-encodes into the requested format. `save_seds` was
+refactored to share `append_seds_set()`; `save_edz` shares `effective_num_paths()` with the new
+`save_seds_sparse` / `save_edz_sparse` writers. Unit test: `test_save_as_conversions` in
+`tests/unit/test_sources.cpp`.
 
-- Compress an existing `.seds` file to `.edz` or `.edz_compressed` after the fact (reducing disk
-  footprint 3–10× without re-parsing the input data)
-- Decompress `.edz` back to `.seds` for inspection or compatibility with external tools
-- Re-compress with a different codec or block size
-
-**Planned interface:**
+Interface:
 ```
-edsparser-source-transform -i input.seds  -o output.edz              # text → binary
-edsparser-source-transform -i input.edz   -o output.edz_compressed   # binary → compressed
-edsparser-source-transform -i input.edz   -o output.seds             # binary → text (decompress)
-edsparser-source-transform -i input.seds  -o output.edz --verify     # round-trip check
+edsparser-source-transform -i input.seds -o output.edz               # text → binary EDZ
+edsparser-source-transform -i input.edz  -o output.seds              # binary → text
+edsparser-source-transform -i input.seds -o output.edz --sparse      # → EDZ_SPARSE
+edsparser-source-transform -i input.seds -o output.edz --verify      # semantic round-trip check
+edsparser-source-transform -i in -o out --from seds --to edz_sparse  # explicit formats
 ```
+Input format auto-detected (override `--from`); output inferred from extension (override `--to`;
+`--sparse` picks the sparse variant). `--verify` collapses the two universal spellings (`{0}` and the
+explicit full universe `{1..num_paths}`, which EDZ canonicalizes to `{0}`) before comparing.
 
-**Implementation path:** thin wrapper around `Sources::save_edz()` /
-`Sources::save_edz_compressed()` / `Sources::parse_seds()` — the actual codec logic lives in
-`sources.cpp`; the tool only handles CLI argument parsing and streaming I/O. Requires EDZ_COMPRESSED
-to be fully implemented first (see entry above).
+**Remaining:** EDZ_COMPRESSED as a conversion target/source is gated — `save_as()` dispatches to the
+still-stubbed `save_edz_compressed()` (throws), and the tool prints a clear error rather than writing
+a corrupt file. Once EDZ_COMPRESSED lands (entry above), it becomes available automatically through
+the same `--to edz_compressed` path.
 
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources
 

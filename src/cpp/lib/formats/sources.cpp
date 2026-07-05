@@ -1349,6 +1349,32 @@ void Sources::save(const std::filesystem::path& path) const {
     }
 }
 
+// Append the textual "{p1,p2,...}" encoding of a source set to `buf`.
+static void append_seds_set(std::string& buf, const PathSet& paths) {
+    buf += SET_OPEN;
+    bool first = true;
+    for (int path_id : paths) {
+        if (!first) buf += SET_SEPARATOR;
+        // Fast integer-to-string without heap allocation
+        char tmp[12];
+        int n = path_id, len = 0;
+        if (n == 0) { tmp[len++] = '0'; }
+        else {
+            while (n > 0) { tmp[len++] = '0' + (n % 10); n /= 10; }
+            std::reverse(tmp, tmp + len);
+        }
+        buf.append(tmp, len);
+        first = false;
+    }
+    buf += SET_CLOSE;
+}
+
+// A source set is "universal" when it is exactly {0} — every path passes through.
+// Sparse formats omit these entries and record them in the presence bitvec.
+static inline bool is_universal_set(const PathSet& ps) {
+    return ps.size() == 1 && ps[0] == 0;
+}
+
 void Sources::save_seds(const std::filesystem::path& path) const {
     std::ofstream os(path);
     if (!os.is_open()) {
@@ -1361,22 +1387,7 @@ void Sources::save_seds(const std::filesystem::path& path) const {
     for (size_t i = 0; i < cardinality_; i++) {
         const PathSet& paths = read_source_ref(i);
         buf.clear();
-        buf += SET_OPEN;
-        bool first = true;
-        for (int path_id : paths) {
-            if (!first) buf += SET_SEPARATOR;
-            // Fast integer-to-string without heap allocation
-            char tmp[12];
-            int n = path_id, len = 0;
-            if (n == 0) { tmp[len++] = '0'; }
-            else {
-                while (n > 0) { tmp[len++] = '0' + (n % 10); n /= 10; }
-                std::reverse(tmp, tmp + len);
-            }
-            buf.append(tmp, len);
-            first = false;
-        }
-        buf += SET_CLOSE;
+        append_seds_set(buf, paths);
         os.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     }
 
@@ -1384,7 +1395,33 @@ void Sources::save_seds(const std::filesystem::path& path) const {
     os.close();
 }
 
-void Sources::save_edz(const std::filesystem::path& path) const {
+void Sources::save_seds_sparse(const std::filesystem::path& path) const {
+    std::ofstream os(path, std::ios::binary);
+    if (!os.is_open()) {
+        throw std::runtime_error("Failed to open file for writing: " + path.string());
+    }
+
+    std::vector<uint8_t> presence_bitvec((cardinality_ + 7) / 8, 0);
+    size_t m_degen = 0;
+
+    // Single pass: write only non-universal entries; record presence in the bitvec.
+    std::string buf;
+    buf.reserve(64);
+    for (size_t i = 0; i < cardinality_; i++) {
+        PathSet paths = read_source(i);
+        if (is_universal_set(paths)) continue;
+        presence_bitvec[i / 8] |= static_cast<uint8_t>(uint8_t{1} << (i % 8));
+        ++m_degen;
+        buf.clear();
+        append_seds_set(buf, paths);
+        os.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    }
+
+    write_seds_sparse_finalize(os, cardinality_, m_degen, presence_bitvec);
+    os.close();
+}
+
+size_t Sources::effective_num_paths() const {
     // If num_paths_ was not explicitly set (e.g. loaded from old varint-EDZ that
     // didn't store num_paths), derive it by scanning all entries for the max path ID.
     size_t np = num_paths_;
@@ -1398,6 +1435,11 @@ void Sources::save_edz(const std::filesystem::path& path) const {
         }
         if (np == 0) np = 1;  // degenerate fallback
     }
+    return np;
+}
+
+void Sources::save_edz(const std::filesystem::path& path) const {
+    const size_t np = effective_num_paths();
 
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("Failed to open for writing: " + path.string());
@@ -1416,6 +1458,38 @@ void Sources::save_edz(const std::filesystem::path& path) const {
     }
 
     write_edz_finalize(os, cardinality_);
+}
+
+void Sources::save_edz_sparse(const std::filesystem::path& path) const {
+    const size_t np = effective_num_paths();
+
+    std::ofstream os(path, std::ios::binary);
+    if (!os) throw std::runtime_error("Failed to open for writing: " + path.string());
+
+    write_edz_sparse_header(os, np);
+
+    // Write only non-universal entries; record presence in the bitvec.
+    std::vector<uint8_t> presence_bitvec((cardinality_ + 7) / 8, 0);
+    size_t m_degen = 0;
+    for (size_t i = 0; i < cardinality_; ++i) {
+        const PathSet ps = read_source(i);
+        if (is_universal_set(ps)) continue;
+        presence_bitvec[i / 8] |= static_cast<uint8_t>(uint8_t{1} << (i % 8));
+        ++m_degen;
+        write_edz_entry(os, ps, np);
+    }
+
+    write_edz_sparse_finalize(os, cardinality_, np, m_degen, presence_bitvec);
+}
+
+void Sources::save_as(const std::filesystem::path& path, Format format) const {
+    switch (format) {
+        case Format::SEDS:           save_seds(path);           break;
+        case Format::SEDS_SPARSE:    save_seds_sparse(path);    break;
+        case Format::EDZ:            save_edz(path);            break;
+        case Format::EDZ_SPARSE:     save_edz_sparse(path);     break;
+        case Format::EDZ_COMPRESSED: save_edz_compressed(path); break;  // throws (not implemented)
+    }
 }
 
 // ── Static streaming write API ────────────────────────────────────────────────

@@ -1072,6 +1072,86 @@ void test_sparse_size_invariant() {
     std::cout << "PASSED\n";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// save_as() format-conversion tests — backs edsparser-source-transform.
+// Universal sets ({0}) and the explicit full universe {1..np} are equivalent;
+// EDZ canonicalizes both to {0}, so compare semantically after collapsing them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static PathSet collapse_universal(PathSet ps, size_t np) {
+    if (ps.size() == 1 && ps[0] == 0) return {0};
+    if (np > 0 && ps.size() == np) {
+        for (size_t k = 0; k < np; ++k)
+            if (ps[k] != static_cast<int>(k + 1)) return ps;
+        return {0};
+    }
+    return ps;
+}
+
+// Convert `in_path` (loaded as in_fmt) to out_fmt, reload, and assert every
+// source set matches the original under universal-set canonicalization.
+static void assert_convert_roundtrip(const std::filesystem::path& in_path,
+                                     Sources::Format in_fmt,
+                                     const std::filesystem::path& out_path,
+                                     Sources::Format out_fmt) {
+    auto src = Sources::load(in_path, in_fmt);
+    src->save_as(out_path, out_fmt);
+
+    auto orig = Sources::load(in_path, in_fmt);
+    auto conv = Sources::load(out_path, out_fmt);
+    assert(orig->cardinality() == conv->cardinality());
+    for (size_t i = 0; i < orig->cardinality(); ++i) {
+        PathSet a = collapse_universal(orig->read_source(i), orig->num_paths());
+        PathSet b = collapse_universal(conv->read_source(i), conv->num_paths());
+        assert(a == b && "save_as conversion changed a source set");
+    }
+    std::filesystem::remove(out_path);
+}
+
+void test_save_as_conversions() {
+    std::cout << "save_as Test: SEDS <-> EDZ conversions round-trip... ";
+
+    auto tmp = std::filesystem::temp_directory_path();
+    auto seds_in = tmp / "save_as_in.seds";
+    {
+        std::ofstream ofs(seds_in);
+        // Universal, explicit, complement/range, and full-universe entries (np=5).
+        ofs << "{0}{1,2,3,5}{2,3,4}{0}{1-4}{0,2}{1,2,3,4,5}";
+        ofs.close();
+    }
+
+    assert_convert_roundtrip(seds_in, Sources::Format::SEDS,
+                             tmp / "save_as.edz",        Sources::Format::EDZ);
+    assert_convert_roundtrip(seds_in, Sources::Format::SEDS,
+                             tmp / "save_as_sp.edz",     Sources::Format::EDZ_SPARSE);
+    assert_convert_roundtrip(seds_in, Sources::Format::SEDS,
+                             tmp / "save_as_sp.seds",    Sources::Format::SEDS_SPARSE);
+
+    // Now go the other way: EDZ produced above -> SEDS, and EDZ_SPARSE -> dense EDZ.
+    auto edz_mid = tmp / "save_as_mid.edz";
+    Sources::load(seds_in, Sources::Format::SEDS)->save_as(edz_mid, Sources::Format::EDZ);
+    assert_convert_roundtrip(edz_mid, Sources::Format::EDZ,
+                             tmp / "save_as_back.seds",  Sources::Format::SEDS);
+
+    auto edzsp_mid = tmp / "save_as_mid_sp.edz";
+    Sources::load(seds_in, Sources::Format::SEDS)->save_as(edzsp_mid, Sources::Format::EDZ_SPARSE);
+    assert_convert_roundtrip(edzsp_mid, Sources::Format::EDZ_SPARSE,
+                             tmp / "save_as_back.edz",   Sources::Format::EDZ);
+
+    // EDZ_COMPRESSED output must throw (not yet implemented).
+    bool threw = false;
+    try {
+        Sources::load(seds_in, Sources::Format::SEDS)
+            ->save_as(tmp / "save_as.edzc", Sources::Format::EDZ_COMPRESSED);
+    } catch (const std::exception&) { threw = true; }
+    assert(threw && "EDZ_COMPRESSED save_as must throw");
+
+    std::filesystem::remove(seds_in);
+    std::filesystem::remove(edz_mid);
+    std::filesystem::remove(edzsp_mid);
+    std::cout << "PASSED\n";
+}
+
 int main() {
     std::cout << "Running sEDS (source) parsing tests...\n\n";
     std::cout << "NOTE: Most original tests disabled - they require in-memory source\n";
@@ -1113,6 +1193,9 @@ int main() {
         test_sparse_copy_range_partial();
         test_sparse_lru_cache();
         test_sparse_size_invariant();
+
+        std::cout << "\n--- Source format conversion (save_as) ---\n";
+        test_save_as_conversions();
 
         std::cout << "\nAll source tests passed!\n";
         return 0;

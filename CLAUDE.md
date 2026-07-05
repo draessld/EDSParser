@@ -131,6 +131,11 @@ Transformation tools (each focused on a specific conversion):
   - **Source format**: `-s/--seds <path>` (default) writes sparse text SEDS (universal `{0}` entries omitted); `-z/--edz` writes sparse binary EDZ instead. **Exception**: in l-EDS mode (`-l`), sources are always dense text SEDS regardless of `-z` — the two-stage EDS→l-EDS pipeline doesn't support sparse/EDZ output, and `-z` combined with `-l` prints a warning and falls back rather than corrupting output.
 
 Utility tools:
+- `edsparser-source-transform`: Convert an existing source file between formats (SEDS ↔ EDZ) without re-running the EDS transform
+  - `-i <in>` / `-o <out>`; input format auto-detected (override with `--from`), output format inferred from the output extension (`.edz`→EDZ, else SEDS; override with `--to`)
+  - `--sparse` selects the sparse variant of the output format (omits universal `{0}` entries); `--verify` reloads input and output and confirms every source set matches
+  - Thin wrapper around `Sources::save_as(path, format)` — reads each entry via format-agnostic `read_source()` and re-encodes. EDZ canonicalizes the explicit full universe `{1..num_paths}` to the universal marker `{0}` (both mean "all paths"); `--verify` treats these as equal
+  - EDZ_COMPRESSED output is gated (prints an error until the codec lands — see TODO.md)
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
   - `-s/--seds <path>` or `-z/--edz <path>` (mutually exclusive) for source-aware stats, same semantics as `eds2leds`
   - Path-count stats (`num_paths`, "paths per string") correctly expand `PathSet` complement encoding (`{0,e1,e2,...}` = all paths except e1,e2,...) against the true path universe — fixed 2026-07-02; previously undercounted for complement-heavy SEDS files

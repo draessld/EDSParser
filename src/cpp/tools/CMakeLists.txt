@@ -10,6 +10,10 @@ target_link_libraries(msa2eds edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
 add_executable(vcf2eds vcf2eds.cpp)
 target_link_libraries(vcf2eds edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
 
+# Source format conversion tool
+add_executable(edsparser-source-transform source_transform.cpp)
+target_link_libraries(edsparser-source-transform edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
+
 # Stats tool
 add_executable(edsparser-stats stats.cpp)
 target_link_libraries(edsparser-stats edsparser_lib ${Boost_LIBRARIES} ${SDSL_LIBRARY})
@@ -27,6 +31,7 @@ install(TARGETS
     eds2leds
     msa2eds
     vcf2eds
+    edsparser-source-transform
     edsparser-stats
     edsparser-genpatterns
     genrandomeds
