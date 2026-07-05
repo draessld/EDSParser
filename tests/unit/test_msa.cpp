@@ -1,6 +1,7 @@
 #include "transforms/eds_transforms.hpp"
 #include "transforms/msa_transforms.hpp"
 #include "common.hpp"
+#include "progress_bar.hpp"
 #include <iostream>
 #include <sstream>
 #include <cassert>
@@ -290,6 +291,54 @@ void test_msa_multiple_context_lengths() {
     std::cout << "  ✓ PASSED (manual inspection)\n\n";
 }
 
+// Regression test: the MSA transform seeks its input stream (records per-sequence
+// offsets with tellg(), then seeks back to read variant data on demand). The
+// tools wrap the input in a CountingStreambuf for the progress bar. If that
+// wrapper does not forward seekoff/seekpos, every seek fails and all degenerate
+// symbols come out empty ({}). This runs the transform through the wrapper —
+// exactly as msa2eds does — and asserts the variants survive.
+void test_msa_through_counting_streambuf() {
+    std::cout << "Test 8: MSA transform through CountingStreambuf (seek regression)\n";
+
+    std::string msa_input =
+        ">seq1\n"
+        "AGTC--TCTATA\n"
+        ">seq2\n"
+        "AGTCCCTATATA\n"
+        ">seq3\n"
+        "AGTC--TATATA\n";
+
+    std::istringstream base(msa_input);
+    CountingStreambuf cbuf(base.rdbuf());
+    std::istream wrapped(&cbuf);
+
+    std::ostringstream eds_out, seds_out;
+    parse_msa_to_eds_streaming(wrapped, eds_out, seds_out);
+
+    std::string eds_str = eds_out.str();
+    std::cout << "  Generated EDS: " << eds_str << "\n";
+
+    // Must match the un-wrapped result — variants present, no empty sets.
+    const std::string expected_eds = "{AGTC}{,CC}{T}{C,A}{TATA}";
+    if (!compare_ignore_whitespace(eds_str, expected_eds)) {
+        std::cerr << "ERROR: EDS through CountingStreambuf mismatch!\n";
+        std::cerr << "  Got:      '" << eds_str << "'\n";
+        std::cerr << "  Expected: '" << expected_eds << "'\n";
+        exit(1);
+    }
+    if (eds_str.find("{}") != std::string::npos) {
+        std::cerr << "ERROR: empty degenerate set '{}' — seek through wrapper failed!\n";
+        exit(1);
+    }
+    // CountingStreambuf must have counted the bytes it delivered.
+    if (cbuf.count() == 0) {
+        std::cerr << "ERROR: CountingStreambuf counted 0 bytes\n";
+        exit(1);
+    }
+
+    std::cout << "  ✓ PASSED\n\n";
+}
+
 int main() {
     std::cout << "=== MSA Transformation Tests ===\n\n";
 
@@ -301,6 +350,7 @@ int main() {
         test_msa_gap_at_beginning();
         test_msa_gap_at_end();
         test_msa_multiple_context_lengths();
+        test_msa_through_counting_streambuf();
 
         std::cout << "=== All tests PASSED ===\n";
         return 0;

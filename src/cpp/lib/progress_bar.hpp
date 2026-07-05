@@ -30,6 +30,43 @@ protected:
         return traits_type::to_int_type(buf_[0]);
     }
 
+    // Seeking support — delegate to the wrapped buffer.
+    // The base std::streambuf returns -1 for seekoff/seekpos, so without these
+    // overrides tellg()/seekg() on the wrapping istream silently fail. That
+    // corrupts any seek-based reader — notably the MSA transform, whose
+    // multi-pass algorithm records per-sequence offsets with tellg() and then
+    // seeks back to them to read variant data on demand. When the seeks failed,
+    // every degenerate symbol came out empty ({}).
+    pos_type seekoff(off_type off, std::ios_base::seekdir way,
+                     std::ios_base::openmode which =
+                         std::ios_base::in | std::ios_base::out) override {
+        // Bytes fetched into buf_ but not yet consumed: src_ sits this far ahead
+        // of the logical read position.
+        const off_type unconsumed = static_cast<off_type>(egptr() - gptr());
+
+        if (way == std::ios_base::cur && off == 0) {
+            // Pure position query (tellg): report the logical position without
+            // moving src_ or dropping the buffer.
+            pos_type p = src_->pubseekoff(0, std::ios_base::cur, which);
+            if (p == pos_type(off_type(-1))) return p;
+            return p - unconsumed;
+        }
+        // Real seek: adjust cur-relative offsets for the unconsumed buffer, then
+        // drop the stale get area so the next underflow() re-reads from target.
+        if (way == std::ios_base::cur) off -= unconsumed;
+        pos_type p = src_->pubseekoff(off, way, which);
+        setg(nullptr, nullptr, nullptr);
+        return p;
+    }
+
+    pos_type seekpos(pos_type pos,
+                     std::ios_base::openmode which =
+                         std::ios_base::in | std::ios_base::out) override {
+        pos_type p = src_->pubseekpos(pos, which);
+        setg(nullptr, nullptr, nullptr);
+        return p;
+    }
+
 private:
     std::streambuf* src_;
     std::atomic<size_t> bytes_;
