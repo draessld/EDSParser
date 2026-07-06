@@ -6,6 +6,7 @@
 #include <iostream>
 #include <string>
 #include <utility>
+#include <filesystem>
 
 namespace edsparser {
 
@@ -103,6 +104,12 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
  *
  * Pipeline: VCF → EDS (temp file) → l-EDS (output stream)
  *
+ * By default the intermediate EDS/SEDS are throwaway temp files deleted on exit.
+ * Pass keep_eds_path / keep_seds_path to materialise the stage-1 EDS/SEDS to
+ * those locations instead (they survive the run) — used by `vcf2eds --keep-eds`
+ * to emit both the plain EDS and the l-EDS in a single pass. Each path is
+ * independent; a null pointer falls back to a temp file for that stage-1 output.
+ *
  * @param vcf_stream Input stream containing VCF file
  * @param fasta_stream Input stream containing reference FASTA
  * @param leds_output Output stream for l-EDS (written directly)
@@ -110,6 +117,8 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
  * @param context_length Minimum context length for l-EDS
  * @param stats Optional pointer to VCFStats structure to receive statistics
  * @param block_size Genomic window size in bases (0 = load all, default 10M)
+ * @param keep_eds_path  If non-null, write the intermediate EDS here (kept)
+ * @param keep_seds_path If non-null, write the intermediate SEDS here (kept)
  */
 void parse_vcf_to_leds_streaming_direct(
     std::istream& vcf_stream,
@@ -118,7 +127,9 @@ void parse_vcf_to_leds_streaming_direct(
     std::ostream& seds_output,
     size_t context_length,
     VCFStats* stats = nullptr,
-    size_t block_size = 10000000);
+    size_t block_size = 10000000,
+    const std::filesystem::path* keep_eds_path = nullptr,
+    const std::filesystem::path* keep_seds_path = nullptr);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking (string return).

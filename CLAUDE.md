@@ -129,6 +129,7 @@ Transformation tools (each focused on a specific conversion):
   - Larger block sizes (e.g., 100M) increase performance but use more memory
   - Set to 0 for legacy mode (loads all variants, high memory)
   - **Source format**: `-s/--seds <path>` (default) writes sparse text SEDS (universal `{0}` entries omitted); `-z/--edz` writes sparse binary EDZ instead. **Exception**: in l-EDS mode (`-l`), sources are always dense text SEDS regardless of `-z` — the two-stage EDS→l-EDS pipeline doesn't support sparse/EDZ output, and `-z` combined with `-l` prints a warning and falls back rather than corrupting output.
+  - **`--keep-eds` flag**: with `-l`, also writes the intermediate stage-1 VCF→EDS output (which is otherwise discarded in a temp dir) to `<input_base>.eds` / `<input_base>.seds` next to the l-EDS output. The kept EDS is byte-identical to a plain no-`-l` run; the kept SEDS is always dense text (same limitation as the l-EDS output SEDS). No-op (with a warning) without `-l`.
 
 Utility tools:
 - `edsparser-source-transform`: Convert an existing source file between formats (SEDS ↔ EDZ) without re-running the EDS transform

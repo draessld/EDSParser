@@ -1244,7 +1244,9 @@ void parse_vcf_to_leds_streaming_direct(
     std::ostream& seds_output,
     size_t context_length,
     VCFStats* stats,
-    size_t block_size)
+    size_t block_size,
+    const std::filesystem::path* keep_eds_path,
+    const std::filesystem::path* keep_seds_path)
 {
     // Two-stage pipeline VCF→EDS→l-EDS routed through temp files.
     //
@@ -1274,8 +1276,11 @@ void parse_vcf_to_leds_streaming_direct(
         }
     } guard{temp_dir};
 
-    std::filesystem::path temp_eds  = temp_dir / "stage1.eds";
-    std::filesystem::path temp_seds = temp_dir / "stage1.seds";
+    // When the caller wants to keep the intermediate EDS/SEDS, write stage 1
+    // straight to those paths (outside temp_dir, so the TempGuard leaves them in
+    // place). Otherwise use throwaway temp files that the guard removes on exit.
+    std::filesystem::path temp_eds  = keep_eds_path  ? *keep_eds_path  : (temp_dir / "stage1.eds");
+    std::filesystem::path temp_seds = keep_seds_path ? *keep_seds_path : (temp_dir / "stage1.seds");
 
     // ── Stage 1: VCF → EDS/SEDS (written to temp files) ──────────────────────
     {

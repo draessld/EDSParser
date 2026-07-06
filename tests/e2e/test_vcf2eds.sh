@@ -126,7 +126,7 @@ test_help_lists_every_option() {
     local out
     out=$("$TOOL" --help 2>&1)
     for opt in "--input" "--reference" "--output" "--seds" "--context-length" \
-               "--block-size" "--edz" "--help"; do
+               "--block-size" "--edz" "--keep-eds" "--help"; do
         if ! printf '%s' "$out" | grep -qF -- "$opt"; then
             echo -e "  ${RED}FAIL${NC}: help does not document $opt"
             return 1
@@ -465,6 +465,35 @@ test_leds_with_edz_flag_warns_and_falls_back() {
     assert_exit_code 0 $? "l-EDS -z output is readable as plain SEDS text once renamed .seds"
 }
 
+test_leds_keep_eds_emits_intermediate() {
+    # --keep-eds with -l must also write the stage-1 EDS/SEDS to <base>.eds/.seds,
+    # and that EDS must be byte-identical to a plain (no -l) VCF→EDS run.
+    local d="$TMPDIR/keep"
+    mkdir -p "$d"
+    # Plain EDS reference (dense SEDS to match the intermediate, which is always dense).
+    "$TOOL" -i "$VCF" -r "$REF" -o "$d/plain.eds" -s "$d/plain.seds" >/dev/null 2>&1
+    # l-EDS with --keep-eds; the intermediate is named from the INPUT stem
+    # (small.vcf -> small.eds) next to the l-EDS output directory.
+    "$TOOL" -i "$VCF" -r "$REF" -l 5 -o "$d/kept_l5.leds" -s "$d/kept_l5.seds" \
+        --keep-eds >/dev/null 2>&1
+    assert_exit_code 0 $? "vcf2eds -l 5 --keep-eds exits 0" || return 1
+    assert_file_exists "$d/small.eds"  "intermediate <input>.eds emitted"  || return 1
+    assert_file_exists "$d/small.seds" "intermediate <input>.seds emitted" || return 1
+    assert_file_exists "$d/kept_l5.leds" "l-EDS still produced"            || return 1
+    assert_files_identical "$d/small.eds" "$d/plain.eds" \
+        "intermediate EDS is byte-identical to a plain VCF→EDS run" || return 1
+}
+
+test_keep_eds_without_l_warns() {
+    # --keep-eds is a no-op without -l; it should warn, not error.
+    local stderr_out
+    stderr_out=$("$TOOL" -i "$VCF" -r "$REF" -o "$TMPDIR/nokl.eds" \
+        -s "$TMPDIR/nokl.seds" --keep-eds 2>&1 >/dev/null)
+    assert_exit_code 0 $? "vcf2eds --keep-eds without -l exits 0" || return 1
+    assert_contains "$stderr_out" "no effect without -l" \
+        "warns that --keep-eds is a no-op without -l" || return 1
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RUN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -529,5 +558,7 @@ run_test "-s and -z produce same stats"                 test_seds_and_edz_stats_
 run_test "--seds/--edz long flag forms"                 test_long_flag_forms_seds_edz
 run_test "l-EDS (-l): default sources are dense"        test_leds_default_sources_are_dense
 run_test "l-EDS (-l) + -z: warns and falls back safely" test_leds_with_edz_flag_warns_and_falls_back
+run_test "l-EDS (-l) --keep-eds: emits intermediate EDS" test_leds_keep_eds_emits_intermediate
+run_test "--keep-eds without -l: warns (no-op)"          test_keep_eds_without_l_warns
 
 print_summary

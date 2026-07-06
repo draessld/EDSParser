@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
         Length context_length;
         size_t block_size;
         bool edz_flag = false;
+        bool keep_eds_flag = false;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -46,7 +47,8 @@ int main(int argc, char** argv) {
             ("seds,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds or .edz); sparse (universal {0} entries omitted) in EDS mode, dense text SEDS in l-EDS (-l) mode")
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
             ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
-            ("edz,z", po::bool_switch(&edz_flag), "Write sources in binary EDZ format instead of text SEDS (EDS mode only; ignored with -l, see WHY TWO-STAGE FOR l-EDS)");
+            ("edz,z", po::bool_switch(&edz_flag), "Write sources in binary EDZ format instead of text SEDS (EDS mode only; ignored with -l, see WHY TWO-STAGE FOR l-EDS)")
+            ("keep-eds", po::bool_switch(&keep_eds_flag), "With -l, also write the intermediate EDS/SEDS (the VCF→EDS stage output) to <base>.eds/<base>.seds instead of discarding them (no-op without -l)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -83,6 +85,10 @@ int main(int argc, char** argv) {
             std::cout << "  # Two-stage transformation (VCF → EDS → l-EDS):\n";
             std::cout << "  vcf2eds -i variants.vcf -r reference.fa -l 5\n";
             std::cout << "  # Creates: variants_l5.leds and variants_l5.seds\n\n";
+            std::cout << "  # Keep the intermediate EDS as well as the l-EDS:\n";
+            std::cout << "  vcf2eds -i variants.vcf -r reference.fa -l 5 --keep-eds\n";
+            std::cout << "  # Creates: variants_l5.leds, variants_l5.seds,\n";
+            std::cout << "  #          variants.eds, variants.seds (intermediate stage-1 EDS)\n\n";
             std::cout << "  # Custom output paths:\n";
             std::cout << "  vcf2eds -i variants.vcf -r reference.fa -o output.eds -s output.seds\n\n";
             std::cout << "  # Write sources in binary EDZ format instead of text SEDS:\n";
@@ -93,7 +99,8 @@ int main(int argc, char** argv) {
             std::cout << "    <input_base>.seds  - Source tracking file (sample-level)\n\n";
             std::cout << "  l-EDS (with -l):\n";
             std::cout << "    <input_base>_l<N>.leds - Length-constrained EDS\n";
-            std::cout << "    <input_base>_l<N>.seds - Source tracking file\n\n";
+            std::cout << "    <input_base>_l<N>.seds - Source tracking file\n";
+            std::cout << "    (with --keep-eds, also <input_base>.eds / .seds - intermediate EDS)\n\n";
             std::cout << "WHY TWO-STAGE FOR l-EDS:\n";
             std::cout << "  VCF represents sparse variants on a reference. Unlike MSA (which has\n";
             std::cout << "  full alignment), VCF doesn't provide a global view of common vs variant\n";
@@ -175,6 +182,9 @@ int main(int argc, char** argv) {
         // Determine output paths first
         std::filesystem::path eds_path;
         std::filesystem::path seds_path;
+        // Intermediate EDS/SEDS to keep alongside the l-EDS (only with -l --keep-eds)
+        std::filesystem::path kept_eds_path;
+        std::filesystem::path kept_seds_path;
 
         // The l-EDS (-l) pipeline's merge step (eds_to_leds_linear() in
         // eds_transforms.cpp) only knows how to write dense text SEDS for its
@@ -185,6 +195,10 @@ int main(int argc, char** argv) {
         if (create_leds && edz_flag) {
             std::cerr << "Warning: -z/--edz is not supported in l-EDS (-l) mode yet; "
                          "sources will be written as dense text SEDS instead.\n";
+        }
+        if (keep_eds_flag && !create_leds) {
+            std::cerr << "Warning: --keep-eds has no effect without -l "
+                         "(the EDS is already the primary output).\n";
         }
 
         const bool is_edz_fmt    = !create_leds && (seds_format == Sources::Format::EDZ ||
@@ -204,6 +218,14 @@ int main(int argc, char** argv) {
             seds_path = sources_file.empty()
                 ? eds_path.parent_path() / (base_name + suffix + src_ext)
                 : sources_file;
+
+            // The intermediate VCF→EDS stage output is always dense text SEDS
+            // (the merge step that follows can't consume sparse/EDZ sources),
+            // so name it plainly .eds/.seds next to the l-EDS output.
+            if (keep_eds_flag) {
+                kept_eds_path  = eds_path.parent_path() / (base_name + ".eds");
+                kept_seds_path = eds_path.parent_path() / (base_name + ".seds");
+            }
         } else {
             eds_path = output_file.empty()
                 ? input_file.parent_path() / (input_file.stem().string() + ".eds")
@@ -240,7 +262,9 @@ int main(int argc, char** argv) {
         {
             edsparser::ProgressBar pb("VCF", vcf_file_size, vcf_cbuf);
             if (create_leds) {
-                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size);
+                const std::filesystem::path* keep_eds  = keep_eds_flag ? &kept_eds_path  : nullptr;
+                const std::filesystem::path* keep_seds = keep_eds_flag ? &kept_seds_path : nullptr;
+                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size, keep_eds, keep_seds);
             } else {
                 edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format);
             }
@@ -254,6 +278,10 @@ int main(int argc, char** argv) {
         std::cout << "Transformation complete!\n";
         std::cout << "  Output: " << eds_path << "\n";
         std::cout << "  Sources: " << seds_path << "\n";
+        if (keep_eds_flag && create_leds) {
+            std::cout << "  Intermediate EDS: " << kept_eds_path << "\n";
+            std::cout << "  Intermediate SEDS: " << kept_seds_path << "\n";
+        }
         std::cout << "\n";
 
         // Print variant processing statistics

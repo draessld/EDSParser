@@ -1,8 +1,21 @@
 # EDSParser – known issues and planned work
 
 ---
-
 ## Planned Features
+
+### vcf2eds add flag to flush also eds to file when -l is given (vcf -> eds -> leds) *(implemented)*
+
+**Done:** `vcf2eds --keep-eds` (with `-l`) now materialises the stage-1 VCF→EDS output
+to `<input_base>.eds` / `<input_base>.seds` next to the l-EDS output, instead of
+discarding it in the throwaway temp dir. Without `-l` the flag is a no-op and warns.
+Implemented by threading optional `keep_eds_path` / `keep_seds_path` into
+`parse_vcf_to_leds_streaming_direct()` (`vcf_transforms.cpp`): when non-null, stage 1
+writes straight to those paths (outside the per-pid temp dir, so the `TempGuard`
+leaves them in place); stage 2 reads them as before. The kept EDS is byte-identical
+to a plain `vcf2eds` (no `-l`) run; the kept SEDS is always dense text (the merge
+stage can't consume sparse/EDZ sources, same limitation as the l-EDS output SEDS).
+E2E coverage: `test_leds_keep_eds_emits_intermediate` + `test_keep_eds_without_l_warns`
+in `tests/e2e/test_vcf2eds.sh`.
 
 ### Format Genericity — EDZ_COMPRESSED
 
