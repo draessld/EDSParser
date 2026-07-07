@@ -57,9 +57,10 @@ Input format auto-detected (override `--from`); output inferred from extension (
 `--sparse` picks the sparse variant). `--verify` collapses the two universal spellings (`{0}` and the
 explicit full universe `{1..num_paths}`, which EDZ canonicalizes to `{0}`) before comparing.
 
-EDZ_COMPRESSED is now available as a conversion target/source through `--to edz_compressed` /
-auto-detect (see the EDZ_COMPRESSED entry above); on a build without zstd the tool surfaces the
-library's "built without zstd" error instead of writing a corrupt file.
+EDZ_COMPRESSED is now available as a conversion target/source through `--to edz_compressed`, the
+`--compress`/`-c` shorthand (mutually exclusive with `--sparse`, EDZ output only), or auto-detect on
+input (see the EDZ_COMPRESSED entry above); on a build without zstd the tool surfaces the library's
+"built without zstd" error instead of writing a corrupt file.
 
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources
 
@@ -184,4 +185,68 @@ wall-clock measurements exist for different `--block-size` values.
 
 Benchmark `vcf2eds` on a real or large synthetic VCF with block sizes 1M, 5M, 10M (default), 50M,
 100M — measure peak RSS and runtime. Produce a plot of memory vs block-size and time vs block-size.
+
+### 9. First real-data results — 1000 Genomes phase 3 (hs37d5) VCF→EDS
+
+First full run over all 24 chromosomes (evaluation notebook:
+`experiments/results/vcf2eds/vcf2eds_evaluation.ipynb`). Headline: 84.8M variants, 99.98%
+processed (only ~16.8K unsupported mobile-element/MT insertions skipped), 37 h wall-clock,
+peak RSS ~2.5 GB. Two follow-ups fall out of the results:
+
+#### 9a. Disk-footprint comparison is incomplete + EDS/SEDS need compression
+
+- **Missing reference in the comparison.** The disk-footprint charts compare VCF vs EDS vs SEDS but
+  ignore the reference FASTA. The fair accounting is **`vcf` vs `eds + seds + ref`** — an EDS is only
+  reconstructable *with* its reference, so the reference belongs on the EDS side of the ledger.
+  Add `ref_disk_size.txt` (already captured) into the comparison and totals.
+- **Compression is the real open question.** Against the *raw* VCF (808 GB) EDS+SEDS (~36.5 GB) is
+  ~22× smaller, but 1000G is distributed as **`.vcf.gz`**, not raw VCF — and gzipped VCF is roughly
+  15–20× smaller, i.e. comparable to or smaller than the current uncompressed EDS+SEDS. So the honest
+  claim ("EDS+SEDS may take *more* disk than the compressed VCF") only holds once both sides are
+  compressed. **SEDS dominates the EDS output (~33 GB vs ~3.4 GB EDS)** — it's the thing to shrink.
+- **Action:** measure the compressed comparison — `vcf.gz` vs `eds.gz + seds.gz (+ ref.gz)` — and
+  decide whether plain gzip on the EDS/SEDS is enough or whether a purpose-built compact form is
+  needed. Note EDZ_COMPRESSED (zstd, implemented 2026-07-07) already addresses the *sources* side;
+  quantify EDZ_COMPRESSED SEDS vs `seds.gz` here, and consider a compressed EDS encoding for the
+  string side.
+
+#### 9b. Why is chr21 ~1.7× faster than chr22 despite identical size? (notebook §5.2)
+
+chr21 and chr22 are near-identical in input (11 GB VCF each; 1,105,538 vs 1,103,547 variants;
+~1.10M variant groups each) yet chr21 finished in **1017.9 s** vs chr22's **1772.6 s** —
+~1090 vs ~623 variants/s. Peak memory is similar (1467 vs 1377 MB), so it's a runtime-per-variant
+gap, not a memory effect. Candidate explanations to check:
+- **System/IO contention during the run** (VCFs stream from `raid_storage`; overlapping jobs or disk
+  contention would inflate chr22 alone) — most likely if chromosomes were processed concurrently.
+- **Reference N-content / block distribution** — chr21 and chr22 are both acrocentric with large
+  heterochromatic/masked stretches; differing N-runs change how many of the 200 kb blocks carry
+  variants.
+- **Variant complexity** — multiallelic site density or indel-length distribution differing between
+  the two would change per-variant work even at equal counts.
+- **Action:** re-run chr21 and chr22 in isolation (no parallel load) with `/usr/bin/time -v` to rule
+  out contention first; if the gap persists, profile to find where the extra time goes.
+
+#### 9c. Paths are sample-level, not haplotype-resolved — phase & zygosity are dropped
+
+- **Location:** `parse_genotype()` (`src/cpp/lib/transforms/vcf_transforms.cpp` ~L340) and
+  `merge_variant_group()` per-sample allele collection (~L646-677); source assignment comment at
+  ~L748 (*"each sample gets one path ID"*), `path_id = sample_id + 1`, `total_paths = n_samples`.
+- **What happens today:** each **diploid sample maps to a single path**, not to its two chromosome
+  copies. Phasing is explicitly ignored — `parse_genotype` treats `0/1` the same as `0|1` (the `|`/`/`
+  delimiter is only used to split the string). A sample's two alleles are dumped into a per-sample
+  `std::set<int>`, so allele order is lost and a heterozygous sample is recorded as present in
+  *multiple* allele-strings at the same site (a `0/1` het marks both the reference and the ALT string;
+  a `1/1` hom marks only the ALT). Copy number is not represented at all.
+- **Consequence:** the EDS is **genotype/sample-level, not haplotype-specific**. Traversing one path
+  does *not* reconstruct a single physical chromosome — wherever the sample is heterozygous the path
+  belongs to several strings at once, so a path is a *set of alleles a sample carries*, not a phased
+  walk. `num_paths` and the paths-per-string stats therefore count samples, not haplotypes, which
+  matters when interpreting §7 structural stats and any pangenome-graph comparison. (Note `0/1` and
+  `1/1` are not byte-identical in the SEDS — het additionally marks reference-allele membership — but
+  neither is phase- or dosage-aware.)
+- **Idea / action:** decide whether haplotype-resolved paths are a goal. If so, split each phased
+  diploid sample into **two paths** (`2*n_samples`), assigning allele *a0* and *a1* to separate paths
+  so each path is a consistent single-chromosome walk; keep the current sample-level collapse as a
+  fallback for unphased data (and warn/skip when phasing is required but genotypes are unphased).
+  Until then, document in CLAUDE.md that `vcf2eds` sources are sample-level, not haplotype-level.
 

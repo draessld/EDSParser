@@ -213,6 +213,17 @@ test_roundtrip_edz_compressed() {
         || { echo -e "  ${RED}FAIL${NC}: [$d] EDZ_COMPRESSED→SEDS --verify failed: $vout"; return 1; }
     assert_sem_equal "$TMPDIR/${d}.seds" "$TMPDIR/${d}_c.seds" \
         "[$d] SEDS→EDZ_COMPRESSED→SEDS round-trips" || return 1
+
+    # The --compress flag is an alias for --to edz_compressed: same result.
+    local cz2="$TMPDIR/${d}_compress_flag.edz"
+    "$XFORM" -i "$TMPDIR/${d}.seds" -o "$cz2" --compress >/dev/null 2>&1 || return 1
+    assert_sem_equal "$cz" "$cz2" \
+        "[$d] --compress matches --to edz_compressed" || return 1
+
+    # --sparse and --compress are mutually exclusive.
+    if "$XFORM" -i "$TMPDIR/${d}.seds" -o "$TMPDIR/${d}_bad.edz" --sparse --compress >/dev/null 2>&1; then
+        echo -e "  ${RED}FAIL${NC}: [$d] --sparse --compress should be rejected"; return 1
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
