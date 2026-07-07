@@ -3,6 +3,34 @@
 ---
 ## Planned Features
 
+### Single-pass `vcf2eds -l` (one-phase VCF→l-EDS, no intermediate EDS on disk)
+
+- **Today:** `vcf2eds -l N` is a **two-stage** pipeline — `parse_vcf_to_leds_streaming_direct()`
+  (`src/cpp/lib/transforms/vcf_transforms.cpp` ~L1246) writes the full stage-1 VCF→EDS/SEDS to temp
+  files, then runs `eds_to_leds_linear(temp_eds, ..., temp_seds, ...)` over them. Temp files (not a
+  pipe) are required because `eds_to_leds_linear()` consumes its EDS input to EOF before emitting
+  output and copies its inputs into its own temp dir — a `make_pipe()` producer/consumer would
+  deadlock. So the entire intermediate EDS+SEDS is materialised to disk even though the user only
+  wants the l-EDS.
+- **Goal:** a **one-phase** path that produces l-EDS directly from the VCF stream without writing the
+  whole intermediate EDS, ideally keeping VCF's block/streaming memory profile. Two possible shapes:
+  - **Fused merge in the VCF walk:** carry the l-EDS chain-merge state (`select_merge_groups()` /
+    `compute_merge_metadata()`) alongside variant-group generation so merged symbols are emitted as
+    the reference is scanned. Hard part: merging needs bounded lookahead across adjacent degenerate
+    runs and the linear pipeline currently converges over *full-file* iterations — a streaming
+    version needs a windowed convergence proof (or a bounded-context guarantee) so it can commit
+    output without a second pass.
+  - **Bounded-window buffering:** merge within each VCF processing block plus a carryover window
+    large enough to cover any chain that could still merge across the block boundary, flushing settled
+    prefixes. Reuses the existing block machinery; only defers a small tail per block instead of the
+    whole file.
+- **Value:** removes the stage-1 EDS/SEDS disk write (relevant for the 100 GB+ population-VCF runs in
+  §9 where SEDS dominates footprint) and cuts VCF→l-EDS wall-clock by avoiding the reparse.
+- **Notes / constraints:** must stay behavior-identical to the two-stage output (add a byte-for-byte
+  e2e check against the current path); `--keep-eds` explicitly wants the intermediate materialised, so
+  that flag would bypass the fused path. Interacts with the *"l-EDS merge output never writes sparse
+  or EDZ sources"* item below — a fused writer should honor the requested source format from the start.
+
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources
 
 - **Location:** `eds_to_leds_linear()` in `src/cpp/lib/transforms/eds_transforms.cpp` (both the
