@@ -66,10 +66,20 @@ public:
 
     // ── Streaming SEDS_SPARSE write API ───────────────────────────────────────
     // Write text entries for non-universal strings only, then call finalize to
-    // append the bitvec + trailer.
+    // append the bitvec + trailer. The trailer stores num_paths so complement
+    // encoding ({0,e1,...}) can be expanded exactly on load without inference.
+    // Trailer: bitvec | "SED2"(4) | cardinality(8) | m_degenerate(8) | num_paths(8).
     static void write_seds_sparse_finalize(std::ostream& os, size_t cardinality,
                                            size_t m_degenerate,
-                                           const std::vector<uint8_t>& presence_bitvec);
+                                           const std::vector<uint8_t>& presence_bitvec,
+                                           size_t num_paths);
+
+    // ── Streaming SEDS (dense) trailer API ────────────────────────────────────
+    // After writing all cardinality text entries, append a trailer recording the
+    // path universe size so complement entries expand exactly on load.
+    // Trailer: "SEDN"(4) | cardinality(8) | num_paths(8).
+    static void write_seds_dense_finalize(std::ostream& os, size_t cardinality,
+                                          size_t num_paths);
 
     // Construction
     explicit Sources(size_t cardinality, Format format = Format::SEDS);

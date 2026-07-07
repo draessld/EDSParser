@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
+#include <optional>
 #include <unistd.h>
 
 namespace po = boost::program_options;
@@ -204,8 +205,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Cannot open output file: " + output_file.string());
         }
 
-        // Handle sources if provided
-        std::ofstream* sources_out = nullptr;
+        // Handle sources if provided. RAII-owned so the stream is closed on any
+        // exit path (normal return or exception) without manual delete.
+        std::optional<std::ofstream> sources_out;
 
         // Intended final path for the output sources file (used for rename below).
         std::filesystem::path output_sources;
@@ -240,9 +242,8 @@ int main(int argc, char** argv) {
                 // Files on different filesystems — no conflict possible.
             }
 
-            sources_out = new std::ofstream(actual_sources_out_path);
+            sources_out.emplace(actual_sources_out_path);
             if (!*sources_out) {
-                delete sources_out;
                 throw std::runtime_error("Cannot create output sources file: " +
                                          actual_sources_out_path.string());
             }
@@ -261,7 +262,7 @@ int main(int argc, char** argv) {
                     output,
                     context_length,
                     &sources_file,
-                    sources_out,
+                    sources_out ? &*sources_out : nullptr,
                     static_cast<size_t>(num_threads),
                     compact_mode
                 );
@@ -276,9 +277,8 @@ int main(int argc, char** argv) {
                 );
             }
 
-            // Cleanup streams before rename (file must be closed on some platforms).
-            delete sources_out;
-            sources_out = nullptr;
+            // Close the stream before rename (file must be closed on some platforms).
+            sources_out.reset();
 
             // If we wrote to a temp file to avoid self-overwrite, rename it now.
             if (rename_sources_after) {
@@ -290,9 +290,8 @@ int main(int argc, char** argv) {
             return 0;
 
         } catch (...) {
-            // Cleanup on exception
-            delete sources_out;
-            // Remove temp file if rename did not happen
+            // Close the stream, then remove the temp file if the rename did not happen.
+            sources_out.reset();
             if (rename_sources_after &&
                 std::filesystem::exists(actual_sources_out_path)) {
                 std::filesystem::remove(actual_sources_out_path);

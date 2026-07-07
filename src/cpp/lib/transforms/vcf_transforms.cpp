@@ -1192,7 +1192,13 @@ void parse_vcf_to_eds_streaming(
         size_t bitvec_size = (total_seds_entries + 7) / 8;
         if (presence_bitvec.size() < bitvec_size) presence_bitvec.resize(bitvec_size, 0);
         Sources::write_seds_sparse_finalize(seds_output, total_seds_entries,
-                                             total_m_degen_entries, presence_bitvec);
+                                             total_m_degen_entries, presence_bitvec,
+                                             /*num_paths=*/n_samples);
+    } else if (seds_format == Sources::Format::SEDS) {
+        // Dense text SEDS: append the "SEDN" trailer recording num_paths so
+        // complement entries expand exactly on load (no max-path-ID inference).
+        Sources::write_seds_dense_finalize(seds_output, total_seds_entries,
+                                           /*num_paths=*/n_samples);
     }
 
     // Final flush

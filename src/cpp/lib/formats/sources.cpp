@@ -130,18 +130,24 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
     std::string ext = path.extension().string();
 
     if (ext == ".seds") {
-        // Check for sparse trailer: last 20 bytes = "SEDS"(4) + card(8) + m_degen(8)
+        // Sparse trailer magic sits just before the fixed-size trailer:
+        //   new sparse "SED2" at EOF-28, legacy sparse "SEDS" at EOF-20.
+        // Dense ("SEDN" or legacy trailerless) maps to Format::SEDS; parse_seds
+        // re-detects the exact trailer on load either way.
         std::ifstream f(path, std::ios::binary | std::ios::ate);
         if (f.is_open()) {
             auto sz = static_cast<std::streamoff>(f.tellg());
-            if (sz >= 20) {
-                f.seekg(sz - 20);
-                char trailer[4];
-                f.read(trailer, 4);
-                if (f.gcount() == 4 && trailer[0] == 'S' && trailer[1] == 'E' &&
-                    trailer[2] == 'D' && trailer[3] == 'S') {
-                    return Format::SEDS_SPARSE;
-                }
+            auto magic_at = [&](std::streamoff off, const char* want) -> bool {
+                if (off < 0) return false;
+                f.seekg(off);
+                char m[4];
+                f.read(m, 4);
+                return f.gcount() == 4 &&
+                       m[0] == want[0] && m[1] == want[1] && m[2] == want[2] && m[3] == want[3];
+            };
+            if ((sz >= 28 && magic_at(sz - 28, "SED2")) ||
+                (sz >= 20 && magic_at(sz - 20, "SEDS"))) {
+                return Format::SEDS_SPARSE;
             }
         }
         return Format::SEDS;
@@ -266,9 +272,14 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
 void Sources::parse_seds(std::istream& is) {
     base_positions_.clear();
 
-    // ── Sparse trailer detection ────────────────────────────────────────────
-    // SEDS_SPARSE files end with: bitvec | "SEDS"(4) | cardinality(8) | m_degen(8)
-    // Last 20 bytes are always: "SEDS" + cardinality + m_degenerate
+    // ── Trailer detection ─────────────────────────────────────────────────────
+    // A SEDS file may carry one of three trailers (or none, for legacy dense):
+    //   new sparse : bitvec | "SED2"(4) | cardinality(8) | m_degen(8) | num_paths(8)
+    //   legacy sp. : bitvec | "SEDS"(4) | cardinality(8) | m_degen(8)
+    //   new dense  : text   | "SEDN"(4) | cardinality(8) | num_paths(8)
+    //   legacy den.: text only (no trailer)
+    // "SED2"/"SEDN" record num_paths so complement encoding expands exactly on
+    // load; "SEDS"/legacy-dense fall back to max-path-ID inference below.
     is.seekg(0, std::ios::end);
     auto file_size = static_cast<std::streamoff>(is.tellg());
 
@@ -280,43 +291,69 @@ void Sources::parse_seds(std::istream& is) {
         for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(buf[i]) << (i * 8);
         return v;
     };
+    auto magic_at = [&](std::streamoff off, const char* want) -> bool {
+        if (off < 0) return false;
+        is.seekg(off);
+        char m[4];
+        is.read(m, 4);
+        return is.gcount() == 4 &&
+               m[0] == want[0] && m[1] == want[1] && m[2] == want[2] && m[3] == want[3];
+    };
 
-    if (file_size >= 20) {
-        is.seekg(file_size - 20);
-        char trailer_magic[4];
-        is.read(trailer_magic, 4);
-        if (is.gcount() == 4 && trailer_magic[0] == 'S' && trailer_magic[1] == 'E' &&
-            trailer_magic[2] == 'D' && trailer_magic[3] == 'S') {
-            // Sparse format: read cardinality and m_degenerate from trailer
-            uint64_t card    = read_u64le(is);
-            uint64_t m_degen = read_u64le(is);
+    // Whether num_paths came from a trailer (exact) vs must be inferred below.
+    bool num_paths_from_trailer = false;
+    // For a dense "SEDN" file, the exact number of text entries to parse before
+    // the binary trailer begins (SIZE_MAX = parse to EOF, for legacy dense).
+    size_t dense_entry_limit = SIZE_MAX;
 
-            if (cardinality_ == 0) cardinality_ = static_cast<size_t>(card);
-            else if (cardinality_ != static_cast<size_t>(card))
-                throw std::runtime_error("SEDS_SPARSE: cardinality mismatch");
+    // Sets up the shared sparse state and reads the presence bitvec that ends
+    // `trailer_bytes` before EOF.
+    auto setup_sparse = [&](uint64_t card, uint64_t m_degen, std::streamoff trailer_bytes) {
+        if (cardinality_ == 0) cardinality_ = static_cast<size_t>(card);
+        else if (cardinality_ != static_cast<size_t>(card))
+            throw std::runtime_error("SEDS_SPARSE: cardinality mismatch");
+        m_degenerate_ = static_cast<size_t>(m_degen);
+        is_sparse_    = true;
+        format_       = Format::SEDS_SPARSE;
 
-            m_degenerate_ = static_cast<size_t>(m_degen);
-            is_sparse_    = true;
-            format_       = Format::SEDS_SPARSE;
+        size_t bitvec_size = (cardinality_ + 7) / 8;
+        auto bitvec_pos = file_size - trailer_bytes - static_cast<std::streamoff>(bitvec_size);
+        if (bitvec_pos < 0) throw std::runtime_error("SEDS_SPARSE: file too small for bitvec");
+        is.seekg(bitvec_pos);
+        presence_bitvec_.resize(bitvec_size);
+        is.read(reinterpret_cast<char*>(presence_bitvec_.data()),
+                static_cast<std::streamsize>(bitvec_size));
+        if (static_cast<size_t>(is.gcount()) != bitvec_size)
+            throw std::runtime_error("SEDS_SPARSE: failed to read presence bitvec");
 
-            // Read bitvec: ceil(cardinality/8) bytes ending at file_size-20
-            size_t bitvec_size = (cardinality_ + 7) / 8;
-            auto bitvec_pos = file_size - 20 - static_cast<std::streamoff>(bitvec_size);
-            if (bitvec_pos < 0) throw std::runtime_error("SEDS_SPARSE: file too small for bitvec");
-            is.seekg(bitvec_pos);
-            presence_bitvec_.resize(bitvec_size);
-            is.read(reinterpret_cast<char*>(presence_bitvec_.data()),
-                    static_cast<std::streamsize>(bitvec_size));
-            if (static_cast<size_t>(is.gcount()) != bitvec_size)
-                throw std::runtime_error("SEDS_SPARSE: failed to read presence bitvec");
+        bitvec_prefix_.resize(bitvec_size + 1);
+        bitvec_prefix_[0] = 0;
+        for (size_t i = 0; i < bitvec_size; ++i)
+            bitvec_prefix_[i + 1] = bitvec_prefix_[i] +
+                                    static_cast<uint32_t>(__builtin_popcount(presence_bitvec_[i]));
+    };
 
-            // Build prefix popcount: prefix_[i] = #set bits in bitvec[0..i-1]
-            bitvec_prefix_.resize(bitvec_size + 1);
-            bitvec_prefix_[0] = 0;
-            for (size_t i = 0; i < bitvec_size; ++i)
-                bitvec_prefix_[i + 1] = bitvec_prefix_[i] +
-                                        static_cast<uint32_t>(__builtin_popcount(presence_bitvec_[i]));
-        }
+    if (file_size >= 28 && magic_at(file_size - 28, "SED2")) {
+        // New sparse trailer with num_paths.
+        is.seekg(file_size - 24);
+        uint64_t card = read_u64le(is), m_degen = read_u64le(is), np = read_u64le(is);
+        setup_sparse(card, m_degen, /*trailer_bytes=*/28);
+        num_paths_ = static_cast<size_t>(np);
+        num_paths_from_trailer = true;
+    } else if (file_size >= 20 && magic_at(file_size - 20, "SEDS")) {
+        // Legacy sparse trailer (no num_paths) — inferred below.
+        is.seekg(file_size - 16);
+        uint64_t card = read_u64le(is), m_degen = read_u64le(is);
+        setup_sparse(card, m_degen, /*trailer_bytes=*/20);
+    } else if (file_size >= 20 && magic_at(file_size - 20, "SEDN")) {
+        // New dense trailer with num_paths.
+        is.seekg(file_size - 16);
+        uint64_t card = read_u64le(is), np = read_u64le(is);
+        cardinality_           = static_cast<size_t>(card);
+        num_paths_             = static_cast<size_t>(np);
+        num_paths_from_trailer = true;
+        dense_entry_limit      = cardinality_;  // stop text scan before the trailer
+        format_                = Format::SEDS;
     }
 
     // Seek back to start for text-entry parsing
@@ -331,8 +368,10 @@ void Sources::parse_seds(std::istream& is) {
     if (is_sparse_) base_positions_.reserve(m_degenerate_);
     else if (cardinality_ > 0) base_positions_.reserve(cardinality_);
 
-    // Count limit: for sparse, stop after exactly m_degenerate_ text entries
-    const size_t max_entries = is_sparse_ ? m_degenerate_ : SIZE_MAX;
+    // Count limit: sparse stops after m_degenerate_ text entries; a "SEDN" dense
+    // file stops after cardinality_ entries (before its binary trailer); legacy
+    // dense parses to EOF.
+    const size_t max_entries = is_sparse_ ? m_degenerate_ : dense_entry_limit;
     size_t entries_found = 0;
 
     constexpr std::streamsize CHUNK = 64 * 1024;
@@ -400,7 +439,9 @@ void Sources::parse_seds(std::istream& is) {
         file_offset += n;
     }
 
-    num_paths_ = max_path_id_seen;
+    // A "SED2"/"SEDN" trailer already gave us the exact path universe; only fall
+    // back to the inferred max path ID for legacy files that lack it.
+    if (!num_paths_from_trailer) num_paths_ = max_path_id_seen;
 
     if (!is_sparse_) {
         const size_t string_count = base_positions_.size();
@@ -1381,6 +1422,10 @@ void Sources::save_seds(const std::filesystem::path& path) const {
         throw std::runtime_error("Failed to open file for writing: " + path.string());
     }
 
+    // Compute the path universe up front so the trailer can record it exactly
+    // (avoids the load-time max-path-ID inference and its undercount corner case).
+    const size_t np = effective_num_paths();
+
     // Read sources on-demand and write, batching each set into a string buffer
     std::string buf;
     buf.reserve(64);
@@ -1391,7 +1436,8 @@ void Sources::save_seds(const std::filesystem::path& path) const {
         os.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     }
 
-    os << '\n';  // Trailing newline
+    os << '\n';  // Trailing newline separates entries from the binary trailer
+    write_seds_dense_finalize(os, cardinality_, np);
     os.close();
 }
 
@@ -1401,6 +1447,7 @@ void Sources::save_seds_sparse(const std::filesystem::path& path) const {
         throw std::runtime_error("Failed to open file for writing: " + path.string());
     }
 
+    const size_t np = effective_num_paths();
     std::vector<uint8_t> presence_bitvec((cardinality_ + 7) / 8, 0);
     size_t m_degen = 0;
 
@@ -1417,7 +1464,7 @@ void Sources::save_seds_sparse(const std::filesystem::path& path) const {
         os.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     }
 
-    write_seds_sparse_finalize(os, cardinality_, m_degen, presence_bitvec);
+    write_seds_sparse_finalize(os, cardinality_, m_degen, presence_bitvec, np);
     os.close();
 }
 
@@ -1564,15 +1611,27 @@ void Sources::write_edz_sparse_finalize(std::ostream& os, size_t cardinality,
 
 void Sources::write_seds_sparse_finalize(std::ostream& os, size_t cardinality,
                                           size_t m_degenerate,
-                                          const std::vector<uint8_t>& presence_bitvec) {
+                                          const std::vector<uint8_t>& presence_bitvec,
+                                          size_t num_paths) {
     // Bitvec
     os.write(reinterpret_cast<const char*>(presence_bitvec.data()),
              static_cast<std::streamsize>(presence_bitvec.size()));
-    // Magic
-    os.write("SEDS", 4);
-    // cardinality + m_degenerate (little-endian 64-bit each)
+    // Magic "SED2" marks a sparse trailer that carries num_paths (vs legacy
+    // "SEDS", which lacked it and forced max-path-ID inference on load).
+    os.write("SED2", 4);
+    // cardinality + m_degenerate + num_paths (little-endian 64-bit each)
     write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
     write_le<uint64_t>(os, static_cast<uint64_t>(m_degenerate));
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_paths));
+}
+
+void Sources::write_seds_dense_finalize(std::ostream& os, size_t cardinality,
+                                        size_t num_paths) {
+    // Magic "SEDN" marks a dense SEDS trailer carrying num_paths. Legacy dense
+    // SEDS has no trailer at all and still loads via max-path-ID inference.
+    os.write("SEDN", 4);
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality));
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_paths));
 }
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {

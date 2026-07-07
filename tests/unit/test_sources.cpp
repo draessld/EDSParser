@@ -611,7 +611,7 @@ void test_seds_sparse_roundtrip() {
         std::ofstream seds(path, std::ios::binary);
         // Write text entries for non-universal strings only
         seds << "{1,3}{2,4}";
-        Sources::write_seds_sparse_finalize(seds, total, non_univ.size(), bv);
+        Sources::write_seds_sparse_finalize(seds, total, non_univ.size(), bv, /*num_paths=*/4);
     }
 
     auto src = Sources::load(path);
@@ -745,6 +745,11 @@ static std::shared_ptr<Sources> write_sparse_seds(const std::filesystem::path& p
         non_univ.push_back(sets[i]);
     }
     auto bv = make_bitvec(sets.size(), present);
+    // Path universe = largest path ID appearing in any set (exception or member).
+    size_t num_paths = 0;
+    for (const auto& ps : sets)
+        for (int id : ps)
+            if (id > 0 && static_cast<size_t>(id) > num_paths) num_paths = static_cast<size_t>(id);
     std::ofstream f(p, std::ios::binary);
     // Write text entries for non-universal sets
     for (const auto& ps : non_univ) {
@@ -755,7 +760,7 @@ static std::shared_ptr<Sources> write_sparse_seds(const std::filesystem::path& p
         }
         f << '}';
     }
-    Sources::write_seds_sparse_finalize(f, sets.size(), non_univ.size(), bv);
+    Sources::write_seds_sparse_finalize(f, sets.size(), non_univ.size(), bv, num_paths);
     f.close();
     return Sources::load(p);
 }
@@ -915,7 +920,7 @@ void test_seds_sparse_complement_form() {
     {
         std::ofstream f(seds_p, std::ios::binary);
         f << "{0,3}{2,4}";  // {0,3} = complement-of-{3}; {2,4} = explicit
-        Sources::write_seds_sparse_finalize(f, total, present.size(), bv);
+        Sources::write_seds_sparse_finalize(f, total, present.size(), bv, /*num_paths=*/4);
     }
     auto src = Sources::load(seds_p);
     assert(src->cardinality() == total);
@@ -929,6 +934,64 @@ void test_seds_sparse_complement_form() {
     assert(src->read_source(5) == PathSet{0});
 
     std::filesystem::remove(seds_p);
+    std::cout << "PASSED\n";
+}
+
+void test_num_paths_trailer() {
+    std::cout << "Sparse EC-6b: SED2/SEDN trailers persist exact num_paths (no inference undercount)... ";
+    auto dir = std::filesystem::temp_directory_path();
+
+    // Adversarial case: the true path universe is 10, but the largest path ID
+    // that ever appears explicitly in the text is 5. Max-path-ID inference would
+    // wrongly report 5; a stored trailer must report 10.
+    // Dense "SEDN": entries {0,5}{2}{0}, num_paths=10.
+    {
+        auto p = dir / "np_dense.seds";
+        {
+            std::ofstream f(p, std::ios::binary);
+            f << "{0,5}{2}{0}";
+            Sources::write_seds_dense_finalize(f, /*card=*/3, /*num_paths=*/10);
+        }
+        auto s = Sources::load(p);
+        assert(s->cardinality() == 3);
+        assert(s->num_paths() == 10 && "SEDN must report stored num_paths, not inferred 5");
+        assert((s->read_source(0) == PathSet{0, 5}));  // complement stored as-is
+        assert((s->read_source(1) == PathSet{2}));
+        assert((s->read_source(2) == PathSet{0}));
+        assert(Sources::detect_format(p) == Sources::Format::SEDS);
+        std::filesystem::remove(p);
+    }
+
+    // Sparse "SED2": non-universal {0,5}{2} at idx 0,1; idx 2 universal; num_paths=10.
+    {
+        auto p = dir / "np_sparse.seds";
+        std::vector<uint8_t> bv(1, 0);
+        bv[0] |= 1 << 0; bv[0] |= 1 << 1;
+        {
+            std::ofstream f(p, std::ios::binary);
+            f << "{0,5}{2}";
+            Sources::write_seds_sparse_finalize(f, /*card=*/3, /*m_degen=*/2, bv, /*num_paths=*/10);
+        }
+        auto s = Sources::load(p);
+        assert(s->cardinality() == 3 && s->is_sparse());
+        assert(s->m_degenerate() == 2);
+        assert(s->num_paths() == 10 && "SED2 must report stored num_paths, not inferred 5");
+        assert((s->read_source(0) == PathSet{0, 5}));
+        assert((s->read_source(1) == PathSet{2}));
+        assert((s->read_source(2) == PathSet{0}));
+        assert(Sources::detect_format(p) == Sources::Format::SEDS_SPARSE);
+        std::filesystem::remove(p);
+    }
+
+    // Legacy dense (no trailer) still loads and falls back to inference (=5).
+    {
+        auto p = dir / "np_legacy.seds";
+        { std::ofstream f(p); f << "{0,5}{2}{0}\n"; }
+        auto s = Sources::load(p);
+        assert(s->cardinality() == 3);
+        assert(s->num_paths() == 5 && "legacy dense must still infer max path ID");
+        std::filesystem::remove(p);
+    }
     std::cout << "PASSED\n";
 }
 
@@ -1189,6 +1252,7 @@ int main() {
         test_sparse_single_entry();
         test_edz_sparse_multibyte();
         test_seds_sparse_complement_form();
+        test_num_paths_trailer();
         test_sparse_detect_format();
         test_sparse_copy_range_partial();
         test_sparse_lru_cache();

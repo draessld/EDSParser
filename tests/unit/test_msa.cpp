@@ -9,12 +9,18 @@
 
 using namespace edsparser;
 
-// Test helper: compare strings ignoring whitespace
+// Test helper: compare SEDS/EDS text ignoring whitespace. Dense SEDS output now
+// ends with a binary "SEDN" trailer (num_paths); drop it (and anything after)
+// before comparing against the expected entry text.
 bool compare_ignore_whitespace(const std::string& s1, const std::string& s2) {
-    std::string clean1, clean2;
-    for (char c : s1) if (!std::isspace(c)) clean1 += c;
-    for (char c : s2) if (!std::isspace(c)) clean2 += c;
-    return clean1 == clean2;
+    auto clean = [](std::string s) {
+        auto p = s.find("SEDN");
+        if (p != std::string::npos) s = s.substr(0, p);
+        std::string out;
+        for (char c : s) if (!std::isspace(static_cast<unsigned char>(c))) out += c;
+        return out;
+    };
+    return clean(s1) == clean(s2);
 }
 
 // Test 1: MSA → EDS transformation

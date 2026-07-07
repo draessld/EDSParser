@@ -351,13 +351,15 @@ test_seds_produces_seds_file() {
 }
 
 test_seds_trailer_magic() {
-    # SEDS_SPARSE trailer ends with "SEDS" (4 bytes = 53454453 little-endian hex).
+    # SEDS_SPARSE now uses a 28-byte trailer carrying num_paths:
+    #   bitvec | "SED2"(4) | card(8) | m_degen(8) | num_paths(8)
+    # so the magic "SED2" (53454432 hex) sits 28 bytes from EOF.
     "$TOOL" -i "$VCF" -r "$REF" -o "$TMPDIR/magic.eds" -s "$TMPDIR/magic.seds" 2>/dev/null
     assert_exit_code 0 $? "default (SEDS) exits 0" || return 1
     local magic
-    magic=$(tail -c 20 "$TMPDIR/magic.seds" | head -c 4 | xxd -p | tr -d '\n')
-    if [ "$magic" != "53454453" ]; then
-        echo -e "  ${RED}FAIL${NC}: SEDS_SPARSE trailer magic wrong: got $magic, want 53454453"
+    magic=$(tail -c 28 "$TMPDIR/magic.seds" | head -c 4 | xxd -p | tr -d '\n')
+    if [ "$magic" != "53454432" ]; then
+        echo -e "  ${RED}FAIL${NC}: SEDS_SPARSE trailer magic wrong: got $magic, want 53454432 (SED2)"
         return 1
     fi
 }
@@ -434,11 +436,11 @@ test_long_flag_forms_seds_edz() {
 test_leds_default_sources_are_dense() {
     "$TOOL" -i "$VCF" -r "$REF" -l 5 -o "$TMPDIR/leds_default.leds" -s "$TMPDIR/leds_default.seds" 2>/dev/null
     assert_exit_code 0 $? "vcf2eds -l 5 (default) exits 0" || return 1
-    # Dense SEDS has no "SEDS" sparse trailer magic in its last 20 bytes.
+    # Dense SEDS ends with the "SEDN" trailer (5345444e), not the sparse "SED2".
     local magic
     magic=$(tail -c 20 "$TMPDIR/leds_default.seds" | head -c 4 | xxd -p | tr -d '\n')
-    if [ "$magic" == "53454453" ]; then
-        echo -e "  ${RED}FAIL${NC}: l-EDS default sources unexpectedly sparse (SEDS trailer found)"
+    if [ "$magic" != "5345444e" ]; then
+        echo -e "  ${RED}FAIL${NC}: l-EDS default sources not dense SEDN trailer (got $magic)"
         return 1
     fi
 }

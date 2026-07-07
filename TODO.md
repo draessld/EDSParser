@@ -3,19 +3,6 @@
 ---
 ## Planned Features
 
-### vcf2eds add flag to flush also eds to file when -l is given (vcf -> eds -> leds) *(implemented)*
-
-**Done:** `vcf2eds --keep-eds` (with `-l`) now materialises the stage-1 VCF→EDS output
-to `<input_base>.eds` / `<input_base>.seds` next to the l-EDS output, instead of
-discarding it in the throwaway temp dir. Without `-l` the flag is a no-op and warns.
-Implemented by threading optional `keep_eds_path` / `keep_seds_path` into
-`parse_vcf_to_leds_streaming_direct()` (`vcf_transforms.cpp`): when non-null, stage 1
-writes straight to those paths (outside the per-pid temp dir, so the `TempGuard`
-leaves them in place); stage 2 reads them as before. The kept EDS is byte-identical
-to a plain `vcf2eds` (no `-l`) run; the kept SEDS is always dense text (the merge
-stage can't consume sparse/EDZ sources, same limitation as the l-EDS output SEDS).
-E2E coverage: `test_leds_keep_eds_emits_intermediate` + `test_keep_eds_without_l_warns`
-in `tests/e2e/test_vcf2eds.sh`.
 
 ### Format Genericity — EDZ_COMPRESSED
 
@@ -76,27 +63,33 @@ the same `--to edz_compressed` path.
   writer (mirroring `Sources::write_seds_sparse_finalize()` / `write_edz_entry()`) so `-l` mode can
   actually honor the requested source format instead of always falling back to dense SEDS.
 
-### `PathSet` complement encoding requires knowing total path count — SEDS text has no header for it
+### `PathSet` complement encoding requires knowing total path count — SEDS text has no header for it *(solved 2026-07-06)*
 
-- **Location:** `Sources::parse_seds()` in `src/cpp/lib/formats/sources.cpp`.
+- **Location:** `Sources::parse_seds()` / writers in `src/cpp/lib/formats/sources.cpp`.
 - **Problem:** `PathSet` uses complement encoding (`{0,e1,e2,...}` = all paths except `e1,e2,...`;
-  see `sources.hpp`), which `write_seds_entry()` in `vcf_transforms.cpp` uses automatically whenever
-  a variant is present in >50% of paths — common on real data. Correctly expanding a complement set
-  to its true size requires the total path universe size, which EDZ stores in its 24-byte header but
-  text SEDS never encodes anywhere. Before 2026-07-02, `edsparser-stats`'s `compute_source_stats()`
-  just took `PathSet::size()` directly, silently under-reporting "paths per string" for any
-  complement-encoded entry (and for `{0}` pure-universal entries in *both* formats).
-- **Fix landed:** `parse_seds()` now infers `num_paths_` as the largest path-ID token seen anywhere
-  in the file (explicit members or complement exceptions), during the same single pass that already
-  builds the entry-position index — no extra I/O. `compute_source_stats()` uses it to expand
-  complement/universal sets to their true size.
-- **Known residual limitation:** the inference undercounts in the degenerate case where the true
-  maximum path ID is present in literally every entry and never appears explicitly anywhere in the
-  file (never listed as an explicit member, never listed as a complement exception). This is rare in
-  practice (some entry almost always has a small enough explicit set, or excludes that path
-  somewhere) but not impossible on adversarial input. A fully robust fix would need text SEDS to
-  carry an explicit path-count header (format change) or for callers to pass `num_paths` in from
-  external context (e.g. VCF sample count).
+  see `sources.hpp`), which `write_seds_entry()` uses automatically whenever a variant is present in
+  >50% of paths — common on real data. Correctly expanding a complement set to its true size requires
+  the total path universe size, which EDZ stores in its 24-byte header but text SEDS never encoded.
+  Inference (largest path-ID token seen) was the interim fix but undercounts in the degenerate case
+  where the true maximum path ID is present in every entry yet never appears explicitly anywhere.
+- **Fix landed (format change, backward compatible):** SEDS now persists `num_paths` in a
+  self-describing trailer, so the loader reads it exactly instead of inferring:
+  - sparse: `bitvec | "SED2"(4) | cardinality(8) | m_degen(8) | num_paths(8)` (was 20-byte `"SEDS"`)
+  - dense:  `text | "SEDN"(4) | cardinality(8) | num_paths(8)` (dense previously had no trailer)
+  `parse_seds()` detects `SED2`/`SEDS`/`SEDN`/none and only falls back to max-path-ID inference for
+  legacy (trailerless / `"SEDS"`) files, so every pre-existing `.seds` still loads. All producers emit
+  the trailer with the true universe: `vcf2eds -s/-z/-l` (`n_samples`), `msa2eds` (`n_sequences`),
+  `eds2leds`/l-EDS merge (`MergeStreamWriter::finish()` carries it through iterations),
+  `Sources::save_seds`/`save_seds_sparse`. `genrandomeds` intentionally has no trailer — its
+  round-robin output writes the explicit full universe `{1..n}`, so inference is always exact.
+- **`--verify` also fixed:** `edsparser-source-transform --verify` now expands complement sets with
+  the (now-reliable) `num_paths` before comparing (`canonicalize_expanded()`), instead of collapsing
+  only the universal spelling — it previously reported false "source set mismatch" on any
+  complement-encoded entry (i.e. on essentially all real VCF sources).
+- **Tests:** unit `test_num_paths_trailer` (adversarial case: universe 10, max explicit token 5) in
+  `tests/unit/test_sources.cpp`; e2e `--verify passes on complement data` + `SEDS trailer records
+  num_paths` in `tests/e2e/test_source_transform.sh`; trailer-magic assertions updated in
+  `test_vcf2eds.sh`; SEDS goldens regenerated.
 
 ---
 

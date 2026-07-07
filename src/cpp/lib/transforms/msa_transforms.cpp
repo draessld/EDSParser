@@ -1,5 +1,6 @@
 #include "msa_transforms.hpp"
 #include "../common.hpp"
+#include "../formats/sources.hpp"
 #include <fstream>
 #include <sstream>
 #include <map>
@@ -258,6 +259,9 @@ void generate_output(
     // Buffer for reading sequence data
     std::vector<char> buffer(meta.seq_length + (meta.seq_length / meta.line_width) + 10);
 
+    // Total SEDS entries written (cardinality) — needed for the dense trailer.
+    size_t total_seds_entries = 0;
+
     // Process each symbol
     for (size_t sym_idx = 0; sym_idx < n_symbols; sym_idx++) {
         size_t start_pos = select_h(sym_idx + 1);  // select is 1-indexed
@@ -295,6 +299,7 @@ void generate_output(
 
             // Source: {0} for universal path (one string in this symbol)
             seds_out << "{0}";
+            ++total_seds_entries;
         }
         else {
             // Variant region - collect alternatives from all sequences
@@ -346,6 +351,7 @@ void generate_output(
 
                 // Output source set with range + complement encoding
                 write_seds_entry_msa(seds_out, paths, meta.n_sequences);
+                ++total_seds_entries;
             }
         }
 
@@ -355,6 +361,11 @@ void generate_output(
         eds_out.flush();
         seds_out.flush();
     }
+
+    // Append the dense "SEDN" trailer recording num_paths (sequence count) so the
+    // complement encoding written above expands exactly on load without inference.
+    Sources::write_seds_dense_finalize(seds_out, total_seds_entries, meta.n_sequences);
+    seds_out.flush();
 }
 
 // ============================================================================

@@ -634,6 +634,16 @@ namespace {
             flush_eds_batch();
             flush_seds_batch();
 
+            // Append the dense "SEDN" trailer so the merged SEDS records its path
+            // universe (carried through from the input sources). This lets later
+            // loads — including the next merge iteration's temp file — expand
+            // complement entries exactly instead of inferring num_paths.
+            if (has_sources_ && sources_out_) {
+                auto src = input_eds_.get_sources_object();
+                size_t np = src ? src->num_paths() : 0;
+                Sources::write_seds_dense_finalize(*sources_out_, result_.m, np);
+            }
+
             result_.metadata.avg_context_length = (num_context_blocks_ > 0)
                 ? static_cast<double>(total_context_length_) / num_context_blocks_
                 : 0.0;

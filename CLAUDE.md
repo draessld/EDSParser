@@ -135,7 +135,7 @@ Utility tools:
 - `edsparser-source-transform`: Convert an existing source file between formats (SEDS ↔ EDZ) without re-running the EDS transform
   - `-i <in>` / `-o <out>`; input format auto-detected (override with `--from`), output format inferred from the output extension (`.edz`→EDZ, else SEDS; override with `--to`)
   - `--sparse` selects the sparse variant of the output format (omits universal `{0}` entries); `--verify` reloads input and output and confirms every source set matches
-  - Thin wrapper around `Sources::save_as(path, format)` — reads each entry via format-agnostic `read_source()` and re-encodes. EDZ canonicalizes the explicit full universe `{1..num_paths}` to the universal marker `{0}` (both mean "all paths"); `--verify` treats these as equal
+  - Thin wrapper around `Sources::save_as(path, format)` — reads each entry via format-agnostic `read_source()` and re-encodes. `--verify` expands complement/universal encodings to their explicit member list (`canonicalize_expanded()`) using the now-reliable `num_paths` before comparing, so SEDS complement form (`{0,4}`) and EDZ explicit form (`{1,2,3,5}`) of the same set compare equal. (Before 2026-07-06 it only collapsed the universal spelling and reported false mismatches on any complement entry.)
   - EDZ_COMPRESSED output is gated (prints an error until the codec lands — see TODO.md)
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
   - `-s/--seds <path>` or `-z/--edz <path>` (mutually exclusive) for source-aware stats, same semantics as `eds2leds`
@@ -158,7 +158,7 @@ Utility tools:
 - `.msa`: Multiple Sequence Alignment in FASTA format (with gaps as `-`)
 - `.vcf`: Variant Call Format
 - `.eds`: Elastic-Degenerate String: `{str1,str2,...}{str3}{...}`
-- `.seds`: Sources file (text format mapping string IDs to path IDs; range+complement encoding, sparse by default from `vcf2eds`)
+- `.seds`: Sources file (text entries mapping string IDs to path IDs; range+complement encoding, sparse by default from `vcf2eds`). Ends with a self-describing binary trailer that records the path universe size (`num_paths`) so complement entries (`{0,e1,...}` = all paths except e1,...) expand exactly on load: sparse = `bitvec | "SED2"(4) | cardinality(8) | m_degen(8) | num_paths(8)`; dense = `text | "SEDN"(4) | cardinality(8) | num_paths(8)`. Legacy trailerless files (and the old 20-byte `"SEDS"` sparse trailer) still load — `parse_seds()` falls back to inferring `num_paths` from the largest path-ID token, which is exact except in the rare degenerate case where the true max path appears in every entry but never explicitly.
 - `.edz`: Sources file (binary bitset format; self-describing via magic bytes `"EDZ\0"` + flags; auto-detected by `.edz` extension or forced via `-z`/`--edz`)
 - `.leds`: Length-constrained EDS (minimum context length guaranteed)
 - `.peds`: Phased EDS (combined .eds + .seds, planned but not implemented)

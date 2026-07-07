@@ -35,6 +35,15 @@ std::string format_size(uintmax_t bytes) {
     return ss.str();
 }
 
+// Write the standard "[Performance] Runtime: Xs | Peak Memory: Y MB" line to stderr.
+void print_performance_line(double runtime_s, double peak_memory_mb) {
+    std::cerr << "[Performance] Runtime: " << std::fixed << std::setprecision(2) << runtime_s << "s";
+    if (peak_memory_mb > 0.0) {
+        std::cerr << " | Peak Memory: " << std::fixed << std::setprecision(1) << peak_memory_mb << " MB";
+    }
+    std::cerr << "\n";
+}
+
 // Estimate RAM required if all EDS strings were loaded into memory (stream/string construction)
 size_t estimate_in_memory_storage(size_t N, size_t m, size_t n) {
     // Rough estimation:
@@ -321,13 +330,7 @@ int main(int argc, char** argv) {
     // Print performance to stderr (used only in non-structured output modes and on error)
     auto print_perf_stderr = [&timer]() {
         timer.stop();
-        double runtime = timer.elapsed_seconds();
-        double memory_mb = get_peak_memory_mb();
-        std::cerr << "[Performance] Runtime: " << std::fixed << std::setprecision(2) << runtime << "s";
-        if (memory_mb > 0.0) {
-            std::cerr << " | Peak Memory: " << std::fixed << std::setprecision(1) << memory_mb << " MB";
-        }
-        std::cerr << "\n";
+        print_performance_line(timer.elapsed_seconds(), get_peak_memory_mb());
     };
 
     try {
@@ -440,11 +443,7 @@ int main(int argc, char** argv) {
             print_csv(eds, input_file, has_sources, runtime, memory_mb);
         } else {
             print_standard(eds, input_file, verbose, has_sources);
-            std::cerr << "[Performance] Runtime: " << std::fixed << std::setprecision(2) << runtime << "s";
-            if (memory_mb > 0.0) {
-                std::cerr << " | Peak Memory: " << std::fixed << std::setprecision(1) << memory_mb << " MB";
-            }
-            std::cerr << "\n";
+            print_performance_line(runtime, memory_mb);
         }
 
         return 0;

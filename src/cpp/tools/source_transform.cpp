@@ -53,20 +53,29 @@ Sources::Format sparse_variant(Sources::Format fmt) {
     }
 }
 
-// Canonicalize a source set for cross-format comparison. The universal set has two
-// equivalent spellings: the marker {0}, and the explicit full list {1,2,...,np}.
-// The EDZ bitset format stores both as all-ones and always reads back {0}, so a
-// SEDS entry that explicitly enumerates every path is equal-but-not-identical after
-// a round-trip. Collapse both spellings to {0} before comparing.
-PathSet canonicalize_universal(PathSet ps, size_t num_paths) {
-    if (ps.size() == 1 && ps[0] == 0) return {0};
-    if (num_paths > 0 && ps.size() == num_paths) {
-        for (size_t k = 0; k < num_paths; ++k) {
-            if (ps[k] != static_cast<int>(k + 1)) return ps;
-        }
-        return {0};
+// Canonicalize a source set to its explicit member list for cross-format
+// comparison. The same logical set has several equivalent spellings:
+//   - universal marker {0}                     = all paths 1..num_paths
+//   - complement {0,e1,e2,...}                 = all paths except e1,e2,...
+//   - explicit full list {1,2,...,num_paths}   = all paths (what EDZ reads back)
+// SEDS stores complement/universal forms literally; EDZ expands to explicit
+// bitsets. Expanding every spelling to the explicit set makes them comparable.
+// Requires an accurate num_paths — now carried in the SEDS "SED2"/"SEDN" trailer
+// and the EDZ header (no longer subject to max-path-ID inference undercount).
+PathSet canonicalize_expanded(const PathSet& ps, size_t num_paths) {
+    // Explicit form (no leading 0): already canonical.
+    if (ps.empty() || ps[0] != 0) return ps;
+    // Complement form {0, e1, e2, ...}: emit 1..num_paths minus the exceptions.
+    PathSet out;
+    if (num_paths == 0) return {0};  // universe unknown — leave as universal marker
+    out.reserve(num_paths);
+    size_t ei = 1;  // index into ps of the next exception (ps[0] is the 0 marker)
+    for (size_t p = 1; p <= num_paths; ++p) {
+        while (ei < ps.size() && static_cast<size_t>(ps[ei]) < p) ++ei;
+        if (ei < ps.size() && static_cast<size_t>(ps[ei]) == p) { ++ei; continue; }
+        out.push_back(static_cast<int>(p));
     }
-    return ps;
+    return out;
 }
 
 }  // namespace
@@ -177,8 +186,8 @@ int main(int argc, char** argv) {
             const size_t np_in  = original->num_paths();
             const size_t np_out = reloaded->num_paths();
             for (size_t i = 0; i < original->cardinality(); ++i) {
-                PathSet a = canonicalize_universal(original->read_source(i), np_in);
-                PathSet b = canonicalize_universal(reloaded->read_source(i), np_out);
+                PathSet a = canonicalize_expanded(original->read_source(i), np_in);
+                PathSet b = canonicalize_expanded(reloaded->read_source(i), np_out);
                 if (a != b) {
                     std::cerr << "Error: source set mismatch at index " << i << "\n";
                     print_performance();
