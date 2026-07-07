@@ -3,65 +3,6 @@
 ---
 ## Planned Features
 
-
-### Format Genericity — EDZ_COMPRESSED *(implemented 2026-07-07)*
-
-**Done:** EDZ_COMPRESSED is a zstd-block-compressed variant of the dense EDZ bitset. The dense
-per-entry bitset data section is split into ~256 KiB blocks; each block is compressed with
-`ZSTD_compress` and preceded by a block index (compressed offset/size + uncompressed size per
-block). Reads compute `block = string_id / entries_per_block`, decompress that block once via
-`ZSTD_decompress`, cache it (single-block cache guarded by `io_mutex_`, so sequential reads only
-decompress each block once), and slice out the entry.
-
-- **Layout** (`sources.cpp`): 40-byte header `magic(4) | flags(2,=0x0003) | reserved(2) |
-  cardinality(8) | num_paths(8) | entries_per_block(8) | num_blocks(8)`, then `num_blocks × 16`
-  index entries, then the concatenated zstd frames. `detect_format()` already routed `flags & 0x0001`
-  to EDZ_COMPRESSED; `load()` now parses instead of throwing.
-- **Entry points filled in:** `parse_edz_compressed()`, `read_from_edz_compressed()`,
-  `save_edz_compressed()` (were stubs). `save_as()` / `save()` dispatch to them; the
-  `edsparser-source-transform` gate is removed so `--to edz_compressed` works.
-- **Optional dependency:** gated on `EDSPARSER_HAVE_ZSTD` (CMake `find_path`/`find_library` for
-  zstd, searching `$CONDA_PREFIX`/`$HOME`/system). Without zstd the three functions throw a clear
-  "built without zstd" error and nothing else changes. `Sources::edz_compressed_available()` exposes
-  build support to tools/tests.
-- **All EDZ variants keep the `.edz` extension** (self-describing via flags); force compression with
-  `--to edz_compressed`, auto-detect resolves it back on load.
-- **Tests:** unit `test_edz_compressed_multiblock` (large num_paths → multi-block, out-of-order reads)
-  + updated `test_save_as_conversions`; e2e `SEDS↔EDZ_COMPRESSED round-trip (zstd)` in
-  `test_source_transform.sh` (skips cleanly when built without zstd).
-
-The `copy_range_to_stream()` slow fallback (re-serialise via `read_source`) remains the correct path
-for EDZ_COMPRESSED — it is only called from `eds2leds --linear` SEDS output, so no format-specific
-fast path is needed until an EDZ output mode is added to the merge pipeline.
-
-### Source Format Conversion Tool — `edsparser-source-transform` *(implemented)*
-
-**Done:** `src/cpp/tools/source_transform.cpp` converts a source file between all implemented
-formats (SEDS, SEDS_SPARSE, EDZ, EDZ_SPARSE, and EDZ_COMPRESSED on a zstd-enabled build) without
-re-running a full EDS transformation. It is a
-thin wrapper around the new `Sources::save_as(path, Format)` method (`sources.cpp`), which reads each
-entry via format-agnostic `read_source()` and re-encodes into the requested format. `save_seds` was
-refactored to share `append_seds_set()`; `save_edz` shares `effective_num_paths()` with the new
-`save_seds_sparse` / `save_edz_sparse` writers. Unit test: `test_save_as_conversions` in
-`tests/unit/test_sources.cpp`.
-
-Interface:
-```
-edsparser-source-transform -i input.seds -o output.edz               # text → binary EDZ
-edsparser-source-transform -i input.edz  -o output.seds              # binary → text
-edsparser-source-transform -i input.seds -o output.edz --sparse      # → EDZ_SPARSE
-edsparser-source-transform -i input.seds -o output.edz --verify      # semantic round-trip check
-edsparser-source-transform -i in -o out --from seds --to edz_sparse  # explicit formats
-```
-Input format auto-detected (override `--from`); output inferred from extension (override `--to`;
-`--sparse` picks the sparse variant). `--verify` collapses the two universal spellings (`{0}` and the
-explicit full universe `{1..num_paths}`, which EDZ canonicalizes to `{0}`) before comparing.
-
-EDZ_COMPRESSED is now available as a conversion target/source through `--to edz_compressed`, the
-`--compress`/`-c` shorthand (mutually exclusive with `--sparse`, EDZ output only), or auto-detect on
-input (see the EDZ_COMPRESSED entry above); on a build without zstd the tool surfaces the library's
-"built without zstd" error instead of writing a corrupt file.
-
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources
 
 - **Location:** `eds_to_leds_linear()` in `src/cpp/lib/transforms/eds_transforms.cpp` (both the
@@ -77,35 +18,9 @@ input (see the EDZ_COMPRESSED entry above); on a build without zstd the tool sur
   honestly, so no corruption there — just an undocumented always-downgrades-to-SEDS limitation.
 - **Idea:** give `stream_merged_symbols_to_file()` / the SEDS batching path a sparse and/or EDZ
   writer (mirroring `Sources::write_seds_sparse_finalize()` / `write_edz_entry()`) so `-l` mode can
-  actually honor the requested source format instead of always falling back to dense SEDS.
-
-### `PathSet` complement encoding requires knowing total path count — SEDS text has no header for it *(solved 2026-07-06)*
-
-- **Location:** `Sources::parse_seds()` / writers in `src/cpp/lib/formats/sources.cpp`.
-- **Problem:** `PathSet` uses complement encoding (`{0,e1,e2,...}` = all paths except `e1,e2,...`;
-  see `sources.hpp`), which `write_seds_entry()` uses automatically whenever a variant is present in
-  >50% of paths — common on real data. Correctly expanding a complement set to its true size requires
-  the total path universe size, which EDZ stores in its 24-byte header but text SEDS never encoded.
-  Inference (largest path-ID token seen) was the interim fix but undercounts in the degenerate case
-  where the true maximum path ID is present in every entry yet never appears explicitly anywhere.
-- **Fix landed (format change, backward compatible):** SEDS now persists `num_paths` in a
-  self-describing trailer, so the loader reads it exactly instead of inferring:
-  - sparse: `bitvec | "SED2"(4) | cardinality(8) | m_degen(8) | num_paths(8)` (was 20-byte `"SEDS"`)
-  - dense:  `text | "SEDN"(4) | cardinality(8) | num_paths(8)` (dense previously had no trailer)
-  `parse_seds()` detects `SED2`/`SEDS`/`SEDN`/none and only falls back to max-path-ID inference for
-  legacy (trailerless / `"SEDS"`) files, so every pre-existing `.seds` still loads. All producers emit
-  the trailer with the true universe: `vcf2eds -s/-z/-l` (`n_samples`), `msa2eds` (`n_sequences`),
-  `eds2leds`/l-EDS merge (`MergeStreamWriter::finish()` carries it through iterations),
-  `Sources::save_seds`/`save_seds_sparse`. `genrandomeds` intentionally has no trailer — its
-  round-robin output writes the explicit full universe `{1..n}`, so inference is always exact.
-- **`--verify` also fixed:** `edsparser-source-transform --verify` now expands complement sets with
-  the (now-reliable) `num_paths` before comparing (`canonicalize_expanded()`), instead of collapsing
-  only the universal spelling — it previously reported false "source set mismatch" on any
-  complement-encoded entry (i.e. on essentially all real VCF sources).
-- **Tests:** unit `test_num_paths_trailer` (adversarial case: universe 10, max explicit token 5) in
-  `tests/unit/test_sources.cpp`; e2e `--verify passes on complement data` + `SEDS trailer records
-  num_paths` in `tests/e2e/test_source_transform.sh`; trailer-magic assertions updated in
-  `test_vcf2eds.sh`; SEDS goldens regenerated.
+  actually honor the requested source format instead of always falling back to dense SEDS. The
+  EDZ_COMPRESSED writer (`Sources::save_edz_compressed()`, shipped 2026-07-07) is a candidate target
+  once the merge pipeline can emit binary sources.
 
 ---
 
@@ -249,4 +164,3 @@ gap, not a memory effect. Candidate explanations to check:
   so each path is a consistent single-chromosome walk; keep the current sample-level collapse as a
   fallback for unphased data (and warn/skip when phasing is required but genotypes are unphased).
   Until then, document in CLAUDE.md that `vcf2eds` sources are sample-level, not haplotype-level.
-
