@@ -53,6 +53,21 @@ Sources::Format sparse_variant(Sources::Format fmt) {
     }
 }
 
+// zstd-compressed counterpart of a dense EDZ output (idempotent for an already
+// compressed target). Compression applies only to EDZ; anything else throws so
+// the user gets a clear message instead of a silently ignored flag.
+Sources::Format compressed_variant(Sources::Format fmt) {
+    switch (fmt) {
+        case Sources::Format::EDZ:
+        case Sources::Format::EDZ_COMPRESSED: return Sources::Format::EDZ_COMPRESSED;
+        default:
+            throw std::runtime_error(
+                std::string("--compress only applies to EDZ output; got ") +
+                format_name(fmt) + " (compressed EDZ is a dense bitset — "
+                "drop --sparse and target a .edz file)");
+    }
+}
+
 // Canonicalize a source set to its explicit member list for cross-format
 // comparison. The same logical set has several equivalent spellings:
 //   - universal marker {0}                     = all paths 1..num_paths
@@ -101,6 +116,7 @@ int main(int argc, char** argv) {
         std::string from_str;
         std::string to_str;
         bool sparse = false;
+        bool compress = false;
         bool verify = false;
 
         po::options_description desc(
@@ -113,12 +129,16 @@ int main(int argc, char** argv) {
             ("output,o", po::value<std::filesystem::path>(&output_file)->required(),
                 "Output source file")
             ("from", po::value<std::string>(&from_str),
-                "Input format: seds | seds_sparse | edz | edz_sparse (default: auto-detect)")
+                "Input format: seds | seds_sparse | edz | edz_sparse | edz_compressed "
+                "(default: auto-detect)")
             ("to", po::value<std::string>(&to_str),
-                "Output format: seds | seds_sparse | edz | edz_sparse "
+                "Output format: seds | seds_sparse | edz | edz_sparse | edz_compressed "
                 "(default: inferred from output extension)")
             ("sparse", po::bool_switch(&sparse),
                 "Select the sparse variant of the output format (omit universal {0} entries)")
+            ("compress,c", po::bool_switch(&compress),
+                "Select the zstd-compressed EDZ variant (edz_compressed); requires a "
+                "zstd-enabled build. Mutually exclusive with --sparse.")
             ("verify", po::bool_switch(&verify),
                 "Reload input and output and confirm every source set matches");
 
@@ -131,6 +151,8 @@ int main(int argc, char** argv) {
                       << "  edsparser-source-transform -i in.seds -o out.edz\n"
                       << "  edsparser-source-transform -i in.edz  -o out.seds\n"
                       << "  edsparser-source-transform -i in.seds -o out.edz --sparse\n"
+                      << "  edsparser-source-transform -i in.seds -o out.edz --compress\n"
+                      << "  edsparser-source-transform -i in.seds -o out.edz --to edz_compressed\n"
                       << "  edsparser-source-transform -i in.seds -o out.edz --verify\n";
             return 0;
         }
@@ -146,21 +168,19 @@ int main(int argc, char** argv) {
             ? parse_format(from_str)
             : Sources::detect_format(input_file);
 
-        // Resolve output format: explicit --to wins; otherwise infer from the output
-        // extension and apply --sparse if requested.
-        Sources::Format out_fmt;
-        if (vm.count("to")) {
-            out_fmt = parse_format(to_str);
-            if (sparse) out_fmt = sparse_variant(out_fmt);
-        } else {
-            out_fmt = infer_output_format(output_file);
-            if (sparse) out_fmt = sparse_variant(out_fmt);
-        }
-
-        if (out_fmt == Sources::Format::EDZ_COMPRESSED) {
-            std::cerr << "Error: EDZ_COMPRESSED output is not yet implemented.\n";
+        if (sparse && compress) {
+            std::cerr << "Error: --sparse and --compress are mutually exclusive "
+                         "(compressed EDZ is a dense bitset).\n";
             return static_cast<int>(ErrorCode::INVALID_PARAMETER);
         }
+
+        // Resolve output format: explicit --to wins; otherwise infer from the output
+        // extension. --sparse/--compress then select the requested variant.
+        Sources::Format out_fmt = vm.count("to")
+            ? parse_format(to_str)
+            : infer_output_format(output_file);
+        if (sparse)   out_fmt = sparse_variant(out_fmt);
+        if (compress) out_fmt = compressed_variant(out_fmt);
 
         std::cerr << "Converting " << input_file << " (" << format_name(in_fmt) << ") -> "
                   << output_file << " (" << format_name(out_fmt) << ")\n";

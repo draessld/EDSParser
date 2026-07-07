@@ -106,6 +106,35 @@ else()
     message(WARNING "divsufsort64 library not found")
 endif()
 
+# Find zstd (optional, required for the EDZ_COMPRESSED source format).
+# Searches the usual custom/conda locations first, then system paths.
+find_path(ZSTD_INCLUDE_DIR zstd.h
+    PATHS
+        ${CMAKE_INCLUDE_PATH}
+        $ENV{CONDA_PREFIX}/include
+        $ENV{HOME}/include
+        /usr/local/include
+        /usr/include
+)
+find_library(ZSTD_LIBRARY
+    NAMES zstd
+    PATHS
+        ${CMAKE_LIBRARY_PATH}
+        $ENV{CONDA_PREFIX}/lib
+        $ENV{HOME}/lib
+        /usr/local/lib
+        /usr/lib
+)
+
+if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
+    message(STATUS "Found zstd: ${ZSTD_LIBRARY} (EDZ_COMPRESSED enabled)")
+    set(EDSPARSER_HAVE_ZSTD ON)
+    include_directories(${ZSTD_INCLUDE_DIR})
+else()
+    message(STATUS "zstd not found — EDZ_COMPRESSED source format will be disabled")
+    set(EDSPARSER_HAVE_ZSTD OFF)
+endif()
+
 # Enable testing
 enable_testing()
 
@@ -171,4 +200,5 @@ message(STATUS "  Build type          : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard        : ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Install prefix      : ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  Boost version       : ${Boost_VERSION}")
+message(STATUS "  EDZ_COMPRESSED (zstd): ${EDSPARSER_HAVE_ZSTD}")
 message(STATUS "")

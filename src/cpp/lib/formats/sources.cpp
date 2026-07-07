@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <cctype>
 
+#ifdef EDSPARSER_HAVE_ZSTD
+#include <zstd.h>
+#endif
+
 // Constants for .seds format
 static const char SET_OPEN = '{';
 static const char SET_CLOSE = '}';
@@ -80,10 +84,6 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
         throw std::runtime_error("Sources file does not exist: " + path.string());
     }
 
-    if (format == Format::EDZ_COMPRESSED) {
-        throw std::runtime_error("EDZ_COMPRESSED format not yet implemented");
-    }
-
     auto sources = std::make_shared<Sources>(0, format);
     sources->file_path_ = path;
 
@@ -109,6 +109,17 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path,
             throw std::runtime_error("EDZ file contains no source sets");
         }
         sources->stream_ = std::move(stream);
+    } else if (format == Format::EDZ_COMPRESSED) {
+        // EDZ_COMPRESSED: binary mode; parse_edz_compressed() reads header + block index
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.is_open()) {
+            throw std::runtime_error("Failed to open sources file: " + path.string());
+        }
+        sources->parse_edz_compressed(stream);
+        if (sources->cardinality_ == 0) {
+            throw std::runtime_error("EDZ file contains no source sets");
+        }
+        sources->stream_ = std::move(stream);
     } else {
         throw std::runtime_error("Unsupported or unimplemented sources format");
     }
@@ -125,6 +136,14 @@ std::shared_ptr<Sources> Sources::load(const std::filesystem::path& path) {
 // ================================================================================
 // FORMAT DETECTION
 // ================================================================================
+
+bool Sources::edz_compressed_available() {
+#ifdef EDSPARSER_HAVE_ZSTD
+    return true;
+#else
+    return false;
+#endif
+}
 
 Sources::Format Sources::detect_format(const std::filesystem::path& path) {
     std::string ext = path.extension().string();
@@ -643,8 +662,85 @@ void Sources::parse_edz(std::istream& is) {
     }
 }
 
+// ── EDZ_COMPRESSED format layout (all integers little-endian) ─────────────────
+//
+//   Header (40 bytes):
+//     [0..3]   magic 'E','D','Z','\0'
+//     [4..5]   flags = 0x0003 (bit0 compressed | bit1 bitset)
+//     [6..7]   reserved = 0
+//     [8..15]  cardinality: uint64
+//     [16..23] num_paths:   uint64
+//     [24..31] entries_per_block: uint64
+//     [32..39] num_blocks:  uint64
+//
+//   Block index (num_blocks * 16 bytes):
+//     for each block: comp_offset:uint64 + comp_size:uint32 + uncomp_size:uint32
+//
+//   Data section: concatenated zstd frames, one per block. Block b holds the
+//   dense bitset entries [b*epb, min((b+1)*epb, cardinality)), each bpe bytes.
+static constexpr uint64_t EDZC_HEADER_SIZE       = 40;
+static constexpr uint64_t EDZC_INDEX_ENTRY_SIZE  = 16;         // off(8)+comp(4)+uncomp(4)
+static constexpr size_t   EDZC_TARGET_BLOCK_BYTES = 256 * 1024; // uncompressed target per block
+static constexpr int      EDZC_COMPRESSION_LEVEL = 3;           // zstd default
+
 void Sources::parse_edz_compressed(std::istream& is) {
-    throw std::runtime_error("EDZ_COMPRESSED format parsing not yet implemented");
+#ifdef EDSPARSER_HAVE_ZSTD
+    char magic[4];
+    is.read(magic, 4);
+    if (is.gcount() != 4 || magic[0] != 'E' || magic[1] != 'D' ||
+            magic[2] != 'Z' || magic[3] != '\0') {
+        throw std::runtime_error("EDZ_COMPRESSED: invalid magic bytes (not an EDZ file)");
+    }
+
+    uint16_t flags = read_le<uint16_t>(is);
+    if (!(flags & 0x0001)) {
+        throw std::runtime_error(
+            "EDZ_COMPRESSED: compression flag not set — use EDZ format instead");
+    }
+    read_le<uint16_t>(is);  // reserved
+
+    uint64_t card = read_le<uint64_t>(is);
+    uint64_t np   = read_le<uint64_t>(is);
+    uint64_t epb  = read_le<uint64_t>(is);
+    uint64_t nblk = read_le<uint64_t>(is);
+
+    if (np == 0)  throw std::runtime_error("EDZ_COMPRESSED: num_paths is 0 in header");
+    if (epb == 0) throw std::runtime_error("EDZ_COMPRESSED: entries_per_block is 0 in header");
+
+    num_paths_             = static_cast<size_t>(np);
+    edz_entries_per_block_ = static_cast<size_t>(epb);
+
+    edz_blocks_.resize(static_cast<size_t>(nblk));
+    for (uint64_t b = 0; b < nblk; ++b) {
+        EdzCBlock blk;
+        blk.offset      = read_le<uint64_t>(is);
+        blk.comp_size   = read_le<uint32_t>(is);
+        blk.uncomp_size = read_le<uint32_t>(is);
+        edz_blocks_[static_cast<size_t>(b)] = blk;
+    }
+
+    // Validate block count against declared cardinality.
+    if (card != 0) {
+        uint64_t expected_blocks = (card + epb - 1) / epb;
+        if (expected_blocks != nblk) {
+            throw std::runtime_error("EDZ_COMPRESSED: block count mismatch (expected " +
+                std::to_string(expected_blocks) + ", got " + std::to_string(nblk) + ")");
+        }
+    }
+
+    if (cardinality_ == 0) {
+        cardinality_ = static_cast<size_t>(card);
+    } else if (cardinality_ != static_cast<size_t>(card)) {
+        throw std::runtime_error("EDZ_COMPRESSED: cardinality mismatch (expected " +
+            std::to_string(cardinality_) + ", got " + std::to_string(card) + ")");
+    }
+
+    edz_cached_block_ = static_cast<size_t>(-1);
+#else
+    (void)is;
+    throw std::runtime_error(
+        "EDZ_COMPRESSED: library built without zstd support (rebuild with zstd installed)");
+#endif
 }
 
 // ================================================================================
@@ -867,7 +963,55 @@ PathSet Sources::read_from_edz(size_t string_id) const {
 }
 
 PathSet Sources::read_from_edz_compressed(size_t string_id) const {
-    throw std::runtime_error("EDZ_COMPRESSED streaming not yet implemented (Phase 3)");
+#ifdef EDSPARSER_HAVE_ZSTD
+    if (!stream_.is_open()) {
+        throw std::runtime_error("EDZ_COMPRESSED stream not open");
+    }
+    const size_t epb   = edz_entries_per_block_;
+    const size_t block = string_id / epb;
+    if (block >= edz_blocks_.size()) {
+        throw std::out_of_range("EDZ_COMPRESSED: block index out of range for source set " +
+                                std::to_string(string_id));
+    }
+
+    // Decompress the target block into edz_block_buf_ (cached across calls to the
+    // same block — reads are typically sequential). Guarded by io_mutex_ held in
+    // read_source(), so mutating the mutable cache members here is safe.
+    if (edz_cached_block_ != block) {
+        const EdzCBlock& blk = edz_blocks_[block];
+        std::vector<uint8_t> comp(blk.comp_size);
+        stream_.clear();
+        stream_.seekg(static_cast<std::streampos>(blk.offset));
+        stream_.read(reinterpret_cast<char*>(comp.data()),
+                     static_cast<std::streamsize>(blk.comp_size));
+        if (static_cast<uint32_t>(stream_.gcount()) != blk.comp_size) {
+            throw std::runtime_error("EDZ_COMPRESSED: short read for block " +
+                                     std::to_string(block));
+        }
+        edz_block_buf_.resize(blk.uncomp_size);
+        size_t got = ZSTD_decompress(edz_block_buf_.data(), blk.uncomp_size,
+                                     comp.data(), blk.comp_size);
+        if (ZSTD_isError(got) || got != blk.uncomp_size) {
+            throw std::runtime_error(std::string("EDZ_COMPRESSED: decompress failed for block ") +
+                                     std::to_string(block) +
+                                     (ZSTD_isError(got) ? std::string(": ") + ZSTD_getErrorName(got)
+                                                        : std::string()));
+        }
+        edz_cached_block_ = block;
+    }
+
+    const size_t bpe    = edz_bpe(num_paths_);
+    const size_t within = (string_id % epb) * bpe;
+    if (within + bpe > edz_block_buf_.size()) {
+        throw std::runtime_error("EDZ_COMPRESSED: entry past end of decompressed block for source set " +
+                                 std::to_string(string_id));
+    }
+    return bitset_to_pathset(edz_block_buf_.data() + within, bpe, num_paths_);
+#else
+    (void)string_id;
+    throw std::runtime_error(
+        "EDZ_COMPRESSED: library built without zstd support (rebuild with zstd installed)");
+#endif
 }
 
 // ================================================================================
@@ -1635,7 +1779,81 @@ void Sources::write_seds_dense_finalize(std::ostream& os, size_t cardinality,
 }
 
 void Sources::save_edz_compressed(const std::filesystem::path& path) const {
-    throw std::runtime_error("EDZ_COMPRESSED format saving not yet implemented (Phase 3)");
+#ifdef EDSPARSER_HAVE_ZSTD
+    const size_t np = effective_num_paths();
+    if (np == 0) {
+        throw std::runtime_error("EDZ_COMPRESSED: cannot save with num_paths == 0");
+    }
+    const size_t bpe = edz_bpe(np);
+    size_t epb = EDZC_TARGET_BLOCK_BYTES / bpe;
+    if (epb == 0) epb = 1;  // one entry wider than the target block still gets its own block
+    const size_t num_blocks = (cardinality_ == 0) ? 0 : (cardinality_ + epb - 1) / epb;
+
+    std::ofstream os(path, std::ios::binary);
+    if (!os) throw std::runtime_error("Failed to open for writing: " + path.string());
+
+    // Header (40 bytes) — all fields known up front, no placeholders needed.
+    os.write("EDZ\0", 4);
+    write_le<uint16_t>(os, uint16_t{0x0003});   // flags: compressed | bitset
+    write_le<uint16_t>(os, uint16_t{0});         // reserved
+    write_le<uint64_t>(os, static_cast<uint64_t>(cardinality_));
+    write_le<uint64_t>(os, static_cast<uint64_t>(np));
+    write_le<uint64_t>(os, static_cast<uint64_t>(epb));
+    write_le<uint64_t>(os, static_cast<uint64_t>(num_blocks));
+
+    // Reserve the block index; patched after the data section is written.
+    const std::streampos index_pos = os.tellp();
+    const std::vector<uint8_t> zero_entry(EDZC_INDEX_ENTRY_SIZE, 0);
+    for (size_t b = 0; b < num_blocks; ++b) {
+        os.write(reinterpret_cast<const char*>(zero_entry.data()),
+                 static_cast<std::streamsize>(EDZC_INDEX_ENTRY_SIZE));
+    }
+
+    std::vector<EdzCBlock> index(num_blocks);
+    std::vector<uint8_t> raw, comp;
+    uint64_t offset = static_cast<uint64_t>(index_pos) + num_blocks * EDZC_INDEX_ENTRY_SIZE;
+
+    for (size_t b = 0; b < num_blocks; ++b) {
+        const size_t start = b * epb;
+        const size_t end   = std::min(start + epb, cardinality_);
+        const size_t n     = end - start;
+
+        raw.assign(n * bpe, 0);
+        for (size_t i = 0; i < n; ++i) {
+            const PathSet ps = read_source(start + i);
+            pathset_to_bitset(raw.data() + i * bpe, bpe, np, ps);
+        }
+
+        const size_t bound = ZSTD_compressBound(raw.size());
+        comp.resize(bound);
+        const size_t csize = ZSTD_compress(comp.data(), bound, raw.data(), raw.size(),
+                                           EDZC_COMPRESSION_LEVEL);
+        if (ZSTD_isError(csize)) {
+            throw std::runtime_error(std::string("EDZ_COMPRESSED: zstd compress failed: ") +
+                                     ZSTD_getErrorName(csize));
+        }
+        os.write(reinterpret_cast<const char*>(comp.data()),
+                 static_cast<std::streamsize>(csize));
+
+        index[b] = EdzCBlock{offset, static_cast<uint32_t>(csize),
+                             static_cast<uint32_t>(raw.size())};
+        offset += csize;
+    }
+
+    // Patch the block index in place.
+    os.seekp(index_pos);
+    for (const EdzCBlock& blk : index) {
+        write_le<uint64_t>(os, blk.offset);
+        write_le<uint32_t>(os, blk.comp_size);
+        write_le<uint32_t>(os, blk.uncomp_size);
+    }
+    os.seekp(0, std::ios::end);
+    if (!os) throw std::runtime_error("EDZ_COMPRESSED: write failed for " + path.string());
+#else
+    (void)path;
+    throw std::runtime_error(
+        "EDZ_COMPRESSED: library built without zstd support (rebuild with zstd installed)");
+#endif
 }
 
 // ================================================================================

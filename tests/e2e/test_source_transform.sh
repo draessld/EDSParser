@@ -21,6 +21,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
+: "${YELLOW:=\033[0;33m}"   # helpers.sh defines RED/GREEN/NC but not YELLOW
 
 DATA_DIR="$SCRIPT_DIR/data"
 VCF2EDS=$(find_tool "vcf2eds")                    || { echo "ERROR: vcf2eds not found";                    exit 1; }
@@ -182,6 +183,49 @@ test_roundtrip_large_pathcount() {
         "[big] genrandomeds SEDS survives SEDS→EDZ→SEDS" || return 1
 }
 
+# ── EDZ_COMPRESSED (zstd) round-trips, when the tool was built with zstd ───────
+# The compressed format is an optional build feature: if zstd was absent at build
+# time, the tool errors with "built without zstd" and this test is skipped.
+test_roundtrip_edz_compressed() {
+    local d="small"
+    # Compressed EDZ uses the .edz extension like every EDZ variant; the format is
+    # self-describing via magic+flags, so --to edz_compressed forces compression.
+    local cz="$TMPDIR/${d}_compressed.edz"
+    local probe
+    probe=$("$XFORM" -i "$TMPDIR/${d}.seds" -o "$cz" --to edz_compressed 2>&1)
+    if echo "$probe" | grep -qi "without zstd"; then
+        echo -e "  ${YELLOW}SKIP${NC}: tool built without zstd (EDZ_COMPRESSED disabled)"
+        return 0
+    fi
+    if ! echo "$probe" | grep -q "source sets to"; then
+        echo -e "  ${RED}FAIL${NC}: [$d] SEDS→EDZ_COMPRESSED failed: $probe"; return 1
+    fi
+    # Compressed form must be semantically equal to the plain SEDS...
+    assert_sem_equal "$TMPDIR/${d}.seds" "$cz" \
+        "[$d] EDZ_COMPRESSED encodes the same sources as SEDS" || return 1
+    # ...and survive a full round-trip back to SEDS (auto-detecting the .edz as
+    # EDZ_COMPRESSED from its flags, no explicit --from needed).
+    local vout
+    vout=$("$XFORM" -i "$cz" -o "$TMPDIR/${d}_c.seds" --to seds --verify 2>&1)
+    echo "$vout" | grep -q "(edz_compressed)" \
+        || { echo -e "  ${RED}FAIL${NC}: [$d] compressed .edz not auto-detected as edz_compressed: $vout"; return 1; }
+    echo "$vout" | grep -q "Verification passed" \
+        || { echo -e "  ${RED}FAIL${NC}: [$d] EDZ_COMPRESSED→SEDS --verify failed: $vout"; return 1; }
+    assert_sem_equal "$TMPDIR/${d}.seds" "$TMPDIR/${d}_c.seds" \
+        "[$d] SEDS→EDZ_COMPRESSED→SEDS round-trips" || return 1
+
+    # The --compress flag is an alias for --to edz_compressed: same result.
+    local cz2="$TMPDIR/${d}_compress_flag.edz"
+    "$XFORM" -i "$TMPDIR/${d}.seds" -o "$cz2" --compress >/dev/null 2>&1 || return 1
+    assert_sem_equal "$cz" "$cz2" \
+        "[$d] --compress matches --to edz_compressed" || return 1
+
+    # --sparse and --compress are mutually exclusive.
+    if "$XFORM" -i "$TMPDIR/${d}.seds" -o "$TMPDIR/${d}_bad.edz" --sparse --compress >/dev/null 2>&1; then
+        echo -e "  ${RED}FAIL${NC}: [$d] --sparse --compress should be rejected"; return 1
+    fi
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RUN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -204,5 +248,6 @@ run_test "explicit --from/--to == auto-detect"          test_explicit_from_to_fl
 run_test "--verify passes on complement data"           test_verify_passes_on_complement_data
 run_test "SEDS trailer records num_paths (SED2)"        test_seds_trailer_records_num_paths
 run_test "large path count SEDS↔EDZ round-trip"         test_roundtrip_large_pathcount
+run_test "SEDS↔EDZ_COMPRESSED round-trip (zstd)"        test_roundtrip_edz_compressed
 
 print_summary

@@ -136,7 +136,7 @@ Utility tools:
   - `-i <in>` / `-o <out>`; input format auto-detected (override with `--from`), output format inferred from the output extension (`.edz`→EDZ, else SEDS; override with `--to`)
   - `--sparse` selects the sparse variant of the output format (omits universal `{0}` entries); `--verify` reloads input and output and confirms every source set matches
   - Thin wrapper around `Sources::save_as(path, format)` — reads each entry via format-agnostic `read_source()` and re-encodes. `--verify` expands complement/universal encodings to their explicit member list (`canonicalize_expanded()`) using the now-reliable `num_paths` before comparing, so SEDS complement form (`{0,4}`) and EDZ explicit form (`{1,2,3,5}`) of the same set compare equal. (Before 2026-07-06 it only collapsed the universal spelling and reported false mismatches on any complement entry.)
-  - EDZ_COMPRESSED output is gated (prints an error until the codec lands — see TODO.md)
+  - `--compress`/`-c`: select the zstd-compressed EDZ variant (equivalent to `--to edz_compressed`); mutually exclusive with `--sparse`, and only valid for EDZ output. Requires a zstd-enabled build. All EDZ variants share the `.edz` extension (distinguished by header flags), so compression is requested via the flag rather than a distinct extension; auto-detect resolves it back from the flags on load. Without zstd the conversion throws a clear "built without zstd" error rather than writing a corrupt file (`Sources::edz_compressed_available()` reports build support).
 - `edsparser-stats`: Display EDS statistics, memory estimates, l-EDS compliance
   - `-s/--seds <path>` or `-z/--edz <path>` (mutually exclusive) for source-aware stats, same semantics as `eds2leds`
   - Path-count stats (`num_paths`, "paths per string") correctly expand `PathSet` complement encoding (`{0,e1,e2,...}` = all paths except e1,e2,...) against the true path universe — fixed 2026-07-02; previously undercounted for complement-heavy SEDS files
@@ -159,7 +159,7 @@ Utility tools:
 - `.vcf`: Variant Call Format
 - `.eds`: Elastic-Degenerate String: `{str1,str2,...}{str3}{...}`
 - `.seds`: Sources file (text entries mapping string IDs to path IDs; range+complement encoding, sparse by default from `vcf2eds`). Ends with a self-describing binary trailer that records the path universe size (`num_paths`) so complement entries (`{0,e1,...}` = all paths except e1,...) expand exactly on load: sparse = `bitvec | "SED2"(4) | cardinality(8) | m_degen(8) | num_paths(8)`; dense = `text | "SEDN"(4) | cardinality(8) | num_paths(8)`. Legacy trailerless files (and the old 20-byte `"SEDS"` sparse trailer) still load — `parse_seds()` falls back to inferring `num_paths` from the largest path-ID token, which is exact except in the rare degenerate case where the true max path appears in every entry but never explicitly.
-- `.edz`: Sources file (binary bitset format; self-describing via magic bytes `"EDZ\0"` + flags; auto-detected by `.edz` extension or forced via `-z`/`--edz`)
+- `.edz`: Sources file (binary bitset format; self-describing via magic bytes `"EDZ\0"` + flags; auto-detected by `.edz` extension or forced via `-z`/`--edz`). Flags select the variant: dense (`0x0002`), sparse (`0x0006`), or zstd-compressed (`0x0003`). EDZ_COMPRESSED splits the dense bitset data into ~256 KiB blocks, zstd-compresses each, and stores a per-block index (compressed offset/size + uncompressed size) for O(1) block lookup; reads decompress one block on demand and cache it. Requires a zstd-enabled build.
 - `.leds`: Length-constrained EDS (minimum context length guaranteed)
 - `.peds`: Phased EDS (combined .eds + .seds, planned but not implemented)
 
@@ -178,7 +178,7 @@ Utility tools:
 - Using EDS without sources (simpler, faster)
 - Loading sources on-demand with LRU cache (default: 10K entries)
 - Different merging strategies (LINEAR requires sources, CARTESIAN doesn't)
-- Format extensibility: `SEDS`/`SEDS_SPARSE` (text, implemented), `EDZ`/`EDZ_SPARSE` (binary bitset, implemented), `EDZ_COMPRESSED` (planned)
+- Format extensibility: `SEDS`/`SEDS_SPARSE` (text, implemented), `EDZ`/`EDZ_SPARSE` (binary bitset, implemented), `EDZ_COMPRESSED` (zstd block compression, implemented — requires a zstd-enabled build)
 
 Key methods:
 - `Sources::load()` — factory method, returns `shared_ptr<Sources>`
@@ -445,6 +445,7 @@ eds2leds -i file_84MB.eds -s file_13GB.seds -l 3 -o output.leds
 - **SDSL** (optional): Required for MSA transformations (suffix array construction). Install from https://github.com/simongog/sdsl-lite
 - **divsufsort/divsufsort64** (optional): Required by SDSL
 - **OpenMP** (optional): Parallel processing support
+- **zstd** (optional): Enables the EDZ_COMPRESSED source format. CMake searches `$CONDA_PREFIX`, `$HOME`, and system paths for `zstd.h` + `libzstd`; when found it defines `EDSPARSER_HAVE_ZSTD` and links the library. Without it, EDZ_COMPRESSED load/save/read paths throw a clear error and every other format works unchanged.
 
 ## Using as a Library
 
