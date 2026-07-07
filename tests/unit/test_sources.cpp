@@ -1201,17 +1201,84 @@ void test_save_as_conversions() {
     assert_convert_roundtrip(edzsp_mid, Sources::Format::EDZ_SPARSE,
                              tmp / "save_as_back.edz",   Sources::Format::EDZ);
 
-    // EDZ_COMPRESSED output must throw (not yet implemented).
-    bool threw = false;
-    try {
+    if (Sources::edz_compressed_available()) {
+        // SEDS -> EDZ_COMPRESSED and EDZ_COMPRESSED -> SEDS round-trip.
+        assert_convert_roundtrip(seds_in, Sources::Format::SEDS,
+                                 tmp / "save_as.edzc", Sources::Format::EDZ_COMPRESSED);
+
+        auto edzc_mid = tmp / "save_as_mid.edzc";
         Sources::load(seds_in, Sources::Format::SEDS)
-            ->save_as(tmp / "save_as.edzc", Sources::Format::EDZ_COMPRESSED);
-    } catch (const std::exception&) { threw = true; }
-    assert(threw && "EDZ_COMPRESSED save_as must throw");
+            ->save_as(edzc_mid, Sources::Format::EDZ_COMPRESSED);
+        assert_convert_roundtrip(edzc_mid, Sources::Format::EDZ_COMPRESSED,
+                                 tmp / "save_as_back_from_c.seds", Sources::Format::SEDS);
+        // Auto-detection must resolve the .edz magic/flags to EDZ_COMPRESSED.
+        assert(Sources::detect_format(edzc_mid) == Sources::Format::EDZ_COMPRESSED);
+        std::filesystem::remove(edzc_mid);
+    } else {
+        // Built without zstd: the format must fail loudly, not write garbage.
+        bool threw = false;
+        try {
+            Sources::load(seds_in, Sources::Format::SEDS)
+                ->save_as(tmp / "save_as.edzc", Sources::Format::EDZ_COMPRESSED);
+        } catch (const std::exception&) { threw = true; }
+        assert(threw && "EDZ_COMPRESSED save_as must throw when built without zstd");
+    }
 
     std::filesystem::remove(seds_in);
     std::filesystem::remove(edz_mid);
     std::filesystem::remove(edzsp_mid);
+    std::cout << "PASSED\n";
+}
+
+// Force multiple compressed blocks by using a large path universe (big bpe →
+// few entries per block) and many entries, then verify every entry round-trips.
+void test_edz_compressed_multiblock() {
+    std::cout << "EDZ_COMPRESSED Test: multi-block round-trip... ";
+    if (!Sources::edz_compressed_available()) {
+        std::cout << "SKIPPED (built without zstd)\n";
+        return;
+    }
+
+    // num_paths large enough that bpe = ceil(np/8) makes entries_per_block small
+    // relative to `total`, guaranteeing >1 block (block target is 256 KiB).
+    const size_t np    = 20000;                 // bpe = 2500 bytes
+    const size_t total = 500;                   // 500 * 2500 = 1.25 MiB > 256 KiB → ~5 blocks
+    std::vector<PathSet> sets(total);
+    for (size_t i = 0; i < total; ++i) {
+        if (i % 7 == 0) {
+            sets[i] = {0};                      // universal
+        } else if (i % 7 == 1) {
+            sets[i] = {0, static_cast<int>((i % np) + 1)};  // complement
+        } else {
+            sets[i] = { static_cast<int>((i % np) + 1),
+                        static_cast<int>(((i * 3) % np) + 1) };
+            std::sort(sets[i].begin(), sets[i].end());
+            sets[i].erase(std::unique(sets[i].begin(), sets[i].end()), sets[i].end());
+        }
+    }
+
+    // Build a dense EDZ input file we can load, then convert to EDZ_COMPRESSED.
+    auto tmp    = std::filesystem::temp_directory_path();
+    auto edz_in = tmp / "edzc_multiblock_in.edz";
+    write_dense_edz(edz_in, sets, np);
+
+    auto src  = Sources::load(edz_in, Sources::Format::EDZ);
+    auto edzc = tmp / "edzc_multiblock.edzc";
+    src->save_as(edzc, Sources::Format::EDZ_COMPRESSED);
+
+    auto conv = Sources::load(edzc, Sources::Format::EDZ_COMPRESSED);
+    assert(conv->cardinality() == total);
+    assert(conv->num_paths() == np);
+    // Read out of order too, to exercise block cache eviction/reload.
+    for (size_t i = 0; i < total; ++i) {
+        size_t idx = (i * 137) % total;
+        PathSet a = collapse_universal(src->read_source(idx), np);
+        PathSet b = collapse_universal(conv->read_source(idx), np);
+        assert(a == b && "EDZ_COMPRESSED multi-block round-trip changed a source set");
+    }
+
+    std::filesystem::remove(edz_in);
+    std::filesystem::remove(edzc);
     std::cout << "PASSED\n";
 }
 
@@ -1260,6 +1327,9 @@ int main() {
 
         std::cout << "\n--- Source format conversion (save_as) ---\n";
         test_save_as_conversions();
+
+        std::cout << "\n--- EDZ_COMPRESSED (zstd block compression) ---\n";
+        test_edz_compressed_multiblock();
 
         std::cout << "\nAll source tests passed!\n";
         return 0;

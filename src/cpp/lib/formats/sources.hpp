@@ -29,7 +29,13 @@ using PathSet = std::vector<int>;
  *     No index section; O(1) random access by byte-offset arithmetic.
  *     24-byte header: magic(4) + flags(2,=0x0002) + reserved(2) +
  *                     cardinality(8) + num_paths(8)
- * - EDZ_COMPRESSED: planned (zstd compression of EDZ data section)
+ * - EDZ_COMPRESSED: EDZ bitset data section split into fixed-size blocks, each
+ *     zstd-compressed. A block index (compressed offset/size + uncompressed size
+ *     per block) gives O(1) block lookup; reads decompress one block on demand
+ *     and cache it. Requires the library to be built with zstd (EDSPARSER_HAVE_ZSTD);
+ *     otherwise the format's parse/read/save paths throw a clear error.
+ *     40-byte header: magic(4) + flags(2,=0x0003) + reserved(2) +
+ *                     cardinality(8) + num_paths(8) + entries_per_block(8) + num_blocks(8)
  */
 class Sources {
 public:
@@ -39,7 +45,7 @@ public:
         SEDS_SPARSE,      // Text format, sparse: {0} omitted; bitvec+trailer appended
         EDZ,              // Binary bitset format (dense)
         EDZ_SPARSE,       // Binary bitset, sparse: non-degen entries only; bitvec at end
-        EDZ_COMPRESSED    // Binary format with zstd block compression (planned)
+        EDZ_COMPRESSED    // Binary bitset format with per-block zstd compression
     };
 
     // ── Streaming EDZ write API (dense) ──────────────────────────────────────
@@ -103,8 +109,8 @@ public:
     // Save in an explicitly chosen target format, independent of how the Sources
     // object was loaded. Reads each entry via read_source() (format-agnostic) and
     // re-encodes into the requested format. Used by edsparser-source-transform to
-    // convert between SEDS / SEDS_SPARSE / EDZ / EDZ_SPARSE. EDZ_COMPRESSED throws
-    // (not yet implemented).
+    // convert between SEDS / SEDS_SPARSE / EDZ / EDZ_SPARSE / EDZ_COMPRESSED
+    // (EDZ_COMPRESSED requires the library to be built with zstd, else throws).
     void save_as(const std::filesystem::path& path, Format format) const;
 
     // Access (always uses streaming with cache)
@@ -174,6 +180,10 @@ public:
     // Format detection
     static Format detect_format(const std::filesystem::path& path);
 
+    // True iff the library was built with zstd, i.e. EDZ_COMPRESSED load/save/read
+    // work rather than throwing. Lets tools/tests branch without the build macro.
+    static bool edz_compressed_available();
+
 private:
     // Core data
     size_t   cardinality_;                  // Number of strings (m)
@@ -195,6 +205,17 @@ private:
     // Index data structures (format-specific)
     std::vector<std::streampos> base_positions_;           // For .seds: file position per source
     std::vector<std::pair<uint64_t, uint32_t>> binary_index_;  // For varint .edz: (offset, size)
+
+    // EDZ_COMPRESSED: per-block index + single decompressed-block cache.
+    struct EdzCBlock {
+        uint64_t offset;       // absolute file offset of the compressed block
+        uint32_t comp_size;    // compressed byte length
+        uint32_t uncomp_size;  // uncompressed byte length (= entries_in_block * bpe)
+    };
+    std::vector<EdzCBlock> edz_blocks_;
+    size_t                 edz_entries_per_block_ = 0;
+    mutable std::vector<uint8_t> edz_block_buf_;                 // decompressed edz_cached_block_
+    mutable size_t         edz_cached_block_ = static_cast<size_t>(-1);
 
     // ── EDZ bitset helpers ────────────────────────────────────────────────────
     static size_t edz_bpe(size_t num_paths) { return (num_paths + 7) / 8; }

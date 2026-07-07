@@ -4,25 +4,41 @@
 ## Planned Features
 
 
-### Format Genericity — EDZ_COMPRESSED
+### Format Genericity — EDZ_COMPRESSED *(implemented 2026-07-07)*
 
-EDZ (binary, uncompressed) is fully implemented: `parse_edz()`, `read_from_edz()`, `save_edz()`,
-the guard in `load()` is lifted, and 6 unit tests cover basic load, auto-detect, save/load
-roundtrip, multi-byte varints, LRU cache eviction, and error handling.
+**Done:** EDZ_COMPRESSED is a zstd-block-compressed variant of the dense EDZ bitset. The dense
+per-entry bitset data section is split into ~256 KiB blocks; each block is compressed with
+`ZSTD_compress` and preceded by a block index (compressed offset/size + uncompressed size per
+block). Reads compute `block = string_id / entries_per_block`, decompress that block once via
+`ZSTD_decompress`, cache it (single-block cache guarded by `io_mutex_`, so sequential reads only
+decompress each block once), and slice out the entry.
 
-**Remaining:** EDZ_COMPRESSED follows the same pattern but steps 2/4/5 additionally wrap data blobs
-with zstd block compression; the index stores compressed block boundaries instead of raw per-entry
-offsets. The `parse_edz_compressed`, `read_from_edz_compressed`, and `save_edz_compressed` stubs in
-`sources.cpp` are the entry points.
+- **Layout** (`sources.cpp`): 40-byte header `magic(4) | flags(2,=0x0003) | reserved(2) |
+  cardinality(8) | num_paths(8) | entries_per_block(8) | num_blocks(8)`, then `num_blocks × 16`
+  index entries, then the concatenated zstd frames. `detect_format()` already routed `flags & 0x0001`
+  to EDZ_COMPRESSED; `load()` now parses instead of throwing.
+- **Entry points filled in:** `parse_edz_compressed()`, `read_from_edz_compressed()`,
+  `save_edz_compressed()` (were stubs). `save_as()` / `save()` dispatch to them; the
+  `edsparser-source-transform` gate is removed so `--to edz_compressed` works.
+- **Optional dependency:** gated on `EDSPARSER_HAVE_ZSTD` (CMake `find_path`/`find_library` for
+  zstd, searching `$CONDA_PREFIX`/`$HOME`/system). Without zstd the three functions throw a clear
+  "built without zstd" error and nothing else changes. `Sources::edz_compressed_available()` exposes
+  build support to tools/tests.
+- **All EDZ variants keep the `.edz` extension** (self-describing via flags); force compression with
+  `--to edz_compressed`, auto-detect resolves it back on load.
+- **Tests:** unit `test_edz_compressed_multiblock` (large num_paths → multi-block, out-of-order reads)
+  + updated `test_save_as_conversions`; e2e `SEDS↔EDZ_COMPRESSED round-trip (zstd)` in
+  `test_source_transform.sh` (skips cleanly when built without zstd).
 
-The `copy_range_to_stream()` slow fallback (re-serialise via `read_source`) is the correct interim
-path for both EDZ and EDZ_COMPRESSED — it is only called from `eds2leds --linear` SEDS output, so
-no format-specific fast path is needed until EDZ output mode is added.
+The `copy_range_to_stream()` slow fallback (re-serialise via `read_source`) remains the correct path
+for EDZ_COMPRESSED — it is only called from `eds2leds --linear` SEDS output, so no format-specific
+fast path is needed until an EDZ output mode is added to the merge pipeline.
 
-### Source Format Conversion Tool — `edsparser-source-transform` *(implemented, EDZ_COMPRESSED pending)*
+### Source Format Conversion Tool — `edsparser-source-transform` *(implemented)*
 
 **Done:** `src/cpp/tools/source_transform.cpp` converts a source file between all implemented
-formats (SEDS, SEDS_SPARSE, EDZ, EDZ_SPARSE) without re-running a full EDS transformation. It is a
+formats (SEDS, SEDS_SPARSE, EDZ, EDZ_SPARSE, and EDZ_COMPRESSED on a zstd-enabled build) without
+re-running a full EDS transformation. It is a
 thin wrapper around the new `Sources::save_as(path, Format)` method (`sources.cpp`), which reads each
 entry via format-agnostic `read_source()` and re-encodes into the requested format. `save_seds` was
 refactored to share `append_seds_set()`; `save_edz` shares `effective_num_paths()` with the new
@@ -41,10 +57,9 @@ Input format auto-detected (override `--from`); output inferred from extension (
 `--sparse` picks the sparse variant). `--verify` collapses the two universal spellings (`{0}` and the
 explicit full universe `{1..num_paths}`, which EDZ canonicalizes to `{0}`) before comparing.
 
-**Remaining:** EDZ_COMPRESSED as a conversion target/source is gated — `save_as()` dispatches to the
-still-stubbed `save_edz_compressed()` (throws), and the tool prints a clear error rather than writing
-a corrupt file. Once EDZ_COMPRESSED lands (entry above), it becomes available automatically through
-the same `--to edz_compressed` path.
+EDZ_COMPRESSED is now available as a conversion target/source through `--to edz_compressed` /
+auto-detect (see the EDZ_COMPRESSED entry above); on a build without zstd the tool surfaces the
+library's "built without zstd" error instead of writing a corrupt file.
 
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources
 

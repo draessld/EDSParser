@@ -38,6 +38,12 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(edsparser_lib OpenMP::OpenMP_CXX)
 endif()
 
+# Link zstd if available — enables the EDZ_COMPRESSED source format
+if(EDSPARSER_HAVE_ZSTD)
+    target_compile_definitions(edsparser_lib PRIVATE EDSPARSER_HAVE_ZSTD)
+    target_link_libraries(edsparser_lib ${ZSTD_LIBRARY})
+endif()
+
 # Set include directories for the library
 target_include_directories(edsparser_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

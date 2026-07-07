@@ -157,11 +157,6 @@ int main(int argc, char** argv) {
             if (sparse) out_fmt = sparse_variant(out_fmt);
         }
 
-        if (out_fmt == Sources::Format::EDZ_COMPRESSED) {
-            std::cerr << "Error: EDZ_COMPRESSED output is not yet implemented.\n";
-            return static_cast<int>(ErrorCode::INVALID_PARAMETER);
-        }
-
         std::cerr << "Converting " << input_file << " (" << format_name(in_fmt) << ") -> "
                   << output_file << " (" << format_name(out_fmt) << ")\n";
 
