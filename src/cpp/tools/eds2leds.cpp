@@ -128,6 +128,7 @@ int main(int argc, char** argv) {
         std::string max_memory_str;
         std::string source_format_str;
         std::string block_size_str;
+        bool estimate_only = false;
 
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
@@ -145,6 +146,11 @@ int main(int argc, char** argv) {
                 "produced by re-encoding the merged sources once at the end; EDZ "
                 "variants are written as <output>.edz. edz-compressed needs a "
                 "zstd-enabled build and is typically several times smaller than SEDS.")
+            ("estimate-memory", po::bool_switch(&estimate_only),
+                "Print a machine-readable memory estimate for this transform and exit 0 "
+                "without doing any work. Emits KEY=BYTES lines (RECOMMENDED_BUDGET_BYTES "
+                "is the one to schedule on). Use it to decide how many runs can safely "
+                "share a machine.")
             ("block-size", po::value<std::string>(&block_size_str),
                 "Process the input in blocks of about this many EDS bytes (e.g. 200M, 1G) "
                 "so peak RAM is bounded by the block instead of the file. Cuts land only "
@@ -319,26 +325,34 @@ int main(int argc, char** argv) {
             std::cout << "  Block size: " << human_bytes(block_bytes)
                       << " of input EDS per block (bounded memory)\n";
 
-        // ===== PRE-FLIGHT MEMORY GUARD =====
-        // Estimate worst-case merge RAM from metadata only (no merging yet) and bail
-        // out before doing expensive work if it would exceed the budget.
+        // ===== MEMORY ESTIMATE (shared by --estimate-memory and --max-memory) =====
+        // Both consumers need the same metadata-only numbers, so compute once. The
+        // work here is a metadata load plus one merge-group scan — no merging, no
+        // string reads.
+        const bool need_estimate = estimate_only || vm.count("max-memory") > 0;
+
+        unsigned long long budget = 0;
         if (vm.count("max-memory")) {
-            unsigned long long budget = parse_size(max_memory_str);
+            budget = parse_size(max_memory_str);
             if (budget == 0) {
                 std::cerr << "Error: --max-memory must be > 0 (got '" << max_memory_str << "')\n";
                 print_performance();
                 return 1;
             }
+        }
 
+        if (need_estimate) {
             // A linear (phased) merge can't produce more strings than there are source
             // paths; use that as the cap. Without sources, assume cartesian (no cap).
             unsigned long long path_cap = 0;
+            unsigned long long num_strings_sources = 0;
             if (!sources_file.empty()) {
                 try {
                     auto src = Sources::load(sources_file);
                     path_cap = static_cast<unsigned long long>(src->num_paths());
+                    num_strings_sources = static_cast<unsigned long long>(src->cardinality());
                 } catch (const std::exception& e) {
-                    std::cerr << "  [max-memory] warning: could not read source paths ("
+                    std::cerr << "  [memory] warning: could not read source paths ("
                               << e.what() << "); using the cartesian (uncapped) bound\n";
                 }
             }
@@ -347,17 +361,92 @@ int main(int argc, char** argv) {
             auto est = estimate_worst_case_merge_memory(
                 probe, context_length, path_cap);
 
-            std::cout << "  Memory pre-flight: est. peak "
-                      << human_bytes(est.peak_batch_bytes)
-                      << " (budget " << human_bytes(budget) << ", "
+            // Resident cost of the structures that live for the whole run, alongside
+            // the merge metadata the estimate above covers. Measured layout (see
+            // CLAUDE.md): per symbol base_positions 8 + symbol_sizes 4 +
+            // cum_set_sizes 4 + is_degenerate 1/8; per string string_lengths 4. The
+            // merge holds an input and an output metadata at once, hence the ×2.
+            const unsigned long long n = probe.length();
+            const unsigned long long m = probe.cardinality();
+            const unsigned long long eds_index_bytes = 2ULL * (n * 16 + n / 8 + m * 4);
+            // Sources keep one 8-byte byte-offset per entry for the whole file.
+            const unsigned long long sources_index_bytes = num_strings_sources * 8;
+
+            // The merge-group list is held for a whole iteration: one MergeGroup
+            // (start, count, reason) per group.
+            const unsigned long long groups_bytes =
+                static_cast<unsigned long long>(est.num_groups) * 24;
+
+            // --block-size bounds the per-symbol indices to one block instead of the
+            // whole file. Blocks are cut at barriers, so their size is approximately
+            // (not exactly) block_bytes — scale the index terms by the block's share
+            // of the input. The sources index stays whole-file in linear mode.
+            unsigned long long eds_index_scaled = eds_index_bytes;
+            if (block_bytes > 0) {
+                std::error_code fs_ec;
+                const auto file_bytes = std::filesystem::file_size(input_file, fs_ec);
+                if (!fs_ec && file_bytes > 0 && block_bytes < file_bytes) {
+                    eds_index_scaled = static_cast<unsigned long long>(
+                        static_cast<long double>(eds_index_bytes) *
+                        static_cast<long double>(block_bytes) /
+                        static_cast<long double>(file_bytes));
+                }
+            }
+
+            unsigned long long recommended;
+            if (est.saturated || est.peak_batch_bytes ==
+                    std::numeric_limits<unsigned long long>::max()) {
+                recommended = std::numeric_limits<unsigned long long>::max();
+            } else {
+                // 1.15× headroom + 64 MB covers what the component sum misses
+                // (allocator overhead, LRU source cache, stream buffers). Calibrated
+                // against measured peaks: predicts 2.47 GB for a run that peaked at
+                // 2.38 GB, and 216 MB for one that peaked at 159 MB — deliberately
+                // on the safe side, since schedulers admit work based on this.
+                const unsigned long long sum = eds_index_scaled + sources_index_bytes
+                                             + est.peak_batch_bytes + groups_bytes;
+                recommended = static_cast<unsigned long long>(
+                                  static_cast<long double>(sum) * 1.15L)
+                            + (64ULL << 20);
+            }
+
+            if (estimate_only) {
+                // Machine-readable: stable KEY=BYTES lines for schedulers to parse.
+                std::cout << "ESTIMATE_FOR=" << input_file.string() << "\n";
+                std::cout << "CONTEXT_LENGTH=" << context_length << "\n";
+                std::cout << "MERGE_PEAK_BYTES=" << est.peak_batch_bytes << "\n";
+                std::cout << "EDS_INDEX_BYTES=" << eds_index_scaled << "\n";
+                std::cout << "MERGE_GROUPS_BYTES=" << groups_bytes << "\n";
+                std::cout << "BLOCK_SIZE_BYTES=" << block_bytes << "\n";
+                std::cout << "SOURCES_INDEX_BYTES=" << sources_index_bytes << "\n";
+                std::cout << "RECOMMENDED_BUDGET_BYTES=" << recommended << "\n";
+                std::cout << "MERGE_GROUPS=" << est.num_groups << "\n";
+                std::cout << "PATH_CAP=" << path_cap << "\n";
+                std::cout << "SATURATED=" << (est.saturated ? 1 : 0) << "\n";
+                std::cout << "# human: merge " << human_bytes(est.peak_batch_bytes)
+                          << " + indices " << human_bytes(eds_index_scaled + sources_index_bytes)
+                          << " → recommend " << human_bytes(recommended) << "\n";
+                print_performance();
+                return 0;
+            }
+
+            // Gate on the FULL predicted peak, not just the merge metadata. The merge
+            // term alone is tiny for a linear merge (measured: 295 KiB for a run that
+            // peaked at 2.3 GB — the index arrays dominate), so comparing only that
+            // made the guard almost unfirable in linear mode and let a run that could
+            // not possibly fit start anyway.
+            std::cout << "  Memory pre-flight: est. peak " << human_bytes(recommended)
+                      << " (merge " << human_bytes(est.peak_batch_bytes)
+                      << " + indices " << human_bytes(eds_index_scaled + sources_index_bytes)
+                      << "; budget " << human_bytes(budget) << ", "
                       << est.num_groups << " merge groups, "
                       << (path_cap ? "linear cap " + std::to_string(path_cap) + " paths"
                                    : "cartesian bound")
                       << ")\n";
 
-            if (est.saturated || est.peak_batch_bytes > budget) {
-                std::cerr << "Error: estimated worst-case merge memory "
-                          << human_bytes(est.peak_batch_bytes)
+            if (est.saturated || recommended > budget) {
+                std::cerr << "Error: estimated peak memory "
+                          << human_bytes(recommended)
                           << " exceeds --max-memory " << human_bytes(budget) << ".\n";
                 std::cerr << "  Worst merge group: " << est.peak_group_count
                           << " symbols at position " << est.peak_group_start

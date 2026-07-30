@@ -328,6 +328,45 @@ test_block_size_rejects_zero() {
     assert_exit_code 1 $? "--block-size 0 exits 1" || return 1
 }
 
+# --estimate-memory must do no work, emit parseable KEY=BYTES lines, and predict
+# at least as much as the run actually needs (a scheduler admits work on it, so
+# under-predicting is the dangerous direction).
+test_estimate_memory_is_parseable_and_safe() {
+    local out
+    out=$("$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" -l 3 \
+        -o "$TMPDIR/never_written.leds" --estimate-memory 2>/dev/null)
+    assert_exit_code 0 $? "--estimate-memory exits 0" || return 1
+    [ ! -e "$TMPDIR/never_written.leds" ] || {
+        echo -e "  ${RED}FAIL${NC}: --estimate-memory wrote output"; return 1; }
+
+    local key
+    for key in MERGE_PEAK_BYTES EDS_INDEX_BYTES SOURCES_INDEX_BYTES \
+               RECOMMENDED_BUDGET_BYTES MERGE_GROUPS SATURATED; do
+        assert_contains "$out" "$key=" "emits $key" || return 1
+    done
+
+    # Values must be plain integers so `cut -d= -f2` arithmetic works in schedulers.
+    local rec; rec=$(echo "$out" | grep "^RECOMMENDED_BUDGET_BYTES=" | cut -d= -f2)
+    [[ "$rec" =~ ^[0-9]+$ ]] || {
+        echo -e "  ${RED}FAIL${NC}: RECOMMENDED_BUDGET_BYTES not an integer: '$rec'"; return 1; }
+    [ "$rec" -gt 0 ] || { echo -e "  ${RED}FAIL${NC}: budget must be > 0"; return 1; }
+}
+
+# --block-size must lower the estimate, since it bounds the per-symbol indices.
+test_estimate_memory_block_mode_is_lower() {
+    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    "$GEN" --ref-size-mb 2 -v 0.02 --min-context 0 --seed 9 -o "$TMPDIR/est.eds" >/dev/null 2>&1
+    local whole blocked
+    whole=$("$TOOL" -i "$TMPDIR/est.eds" -s "$TMPDIR/est.seds" -l 10 --estimate-memory 2>/dev/null \
+        | grep "^RECOMMENDED_BUDGET_BYTES=" | cut -d= -f2)
+    blocked=$("$TOOL" -i "$TMPDIR/est.eds" -s "$TMPDIR/est.seds" -l 10 --block-size 200K \
+        --estimate-memory 2>/dev/null | grep "^RECOMMENDED_BUDGET_BYTES=" | cut -d= -f2)
+    [ -n "$whole" ] && [ -n "$blocked" ] || {
+        echo -e "  ${RED}FAIL${NC}: missing estimate output"; return 1; }
+    [ "$blocked" -lt "$whole" ] || {
+        echo -e "  ${RED}FAIL${NC}: block estimate ($blocked) not below whole-file ($whole)"; return 1; }
+}
+
 run_test "basic EDS→l-EDS (cartesian)"          test_basic_cartesian
 run_test "EDS→l-EDS with sources (linear)"      test_linear_with_sources
 run_test "larger context length (-l 5)"         test_larger_context_length
@@ -355,5 +394,7 @@ run_test "--source-format rejects unknown value" test_source_format_rejects_unkn
 run_test "--block-size == whole-file output"     test_block_size_matches_whole_file
 run_test "--block-size falls back without cuts"  test_block_size_falls_back_without_cuts
 run_test "--block-size rejects 0"                test_block_size_rejects_zero
+run_test "--estimate-memory output is parseable"  test_estimate_memory_is_parseable_and_safe
+run_test "--estimate-memory drops with blocks"    test_estimate_memory_block_mode_is_lower
 
 print_summary
