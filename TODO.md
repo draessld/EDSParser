@@ -42,7 +42,7 @@
 - **What still scales with n:** input `EDS::Metadata` (~23 B/symbol: `base_positions` 8,
   `symbol_sizes` 4, `cum_set_sizes` 4, `string_lengths` 4/string), the output metadata
   built inline by `MergeStreamWriter` (~19 B/symbol), the `Sources` byte-offset index
-  (8 B/string), `ctx_run_len` (4 B/symbol), and the `groups` vector (~16 B/group).
+  (8 B/string), and the `groups` vector (~16 B/group).
 - **Why it can be constant:** every phase of an iteration already walks positions
   strictly left-to-right — `select_merge_groups()` scans in order, `compute_merge_metadata()`
   consumes groups in order, `MergeStreamWriter` has a monotone `cursor_`. The per-symbol
@@ -57,9 +57,15 @@
   the raw-copy pass-through computes byte spans from `base_positions[pos+1] - base_positions[pos]`,
   which a sequential reader knows anyway as it parses. Interacts with the single-pass
   `vcf2eds -l` item above — both want the same streaming merge core.
-- **Cheaper intermediate step:** `ctx_run_len` (4 B/symbol) can be computed on the fly
-  inside `select_merge_groups()`'s existing left-to-right walk instead of being
-  precomputed into a full-length vector.
+- **Done 2026-07-30:** `ctx_run_len` is no longer an n-entry vector — `CtxRunCursor`
+  measures each common run on the fly during `select_merge_groups()`'s existing
+  left-to-right walk. This removed a 4 B/symbol transient (127 MB at 31.7M symbols) but
+  did not move peak RSS, since that allocation did not overlap the peak.
+- **Next cheapest real win:** the `Sources` byte-offset index (8 B/string, ~13 B/symbol —
+  roughly 18% of what remains). Because source reads are also overwhelmingly sequential,
+  a *sampled* index (every 16th entry plus a short forward scan) would cut it to
+  0.5 B/string. `copy_range_to_stream()`'s exact-byte-range fast path is the part to be
+  careful with.
 
 ### l-EDS (`-l`) merge output never writes sparse or EDZ sources *(partly addressed)*
 
