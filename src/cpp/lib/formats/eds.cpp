@@ -53,13 +53,10 @@ void EDS::parse(std::istream& is, bool with_strings) {
     size_t total_context_length = 0;
     size_t num_context_blocks = 0;
 
-    // Cumulative arrays built incrementally (push one entry per symbol)
+    // Lazy position-lookup arrays: cleared here, built on first use by
+    // ensure_position_index() (see EDS::Metadata).
     metadata_.cum_common_positions.clear();
     metadata_.cum_degenerate_counts.clear();
-    metadata_.cum_common_positions.push_back(0);  // cum_common_positions[0] = 0
-    metadata_.cum_degenerate_counts.push_back(0); // cum_degenerate_counts[0] = 0
-    Position cumulative_common = 0;
-    int cumulative_degenerate = 0;
 
     auto process_token = [&](const std::string& token, bool is_bracketed) {
         if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
@@ -109,7 +106,6 @@ void EDS::parse(std::istream& is, bool with_strings) {
         if (is_deg) {
             metadata_.num_degenerate_symbols++;
             metadata_.total_change_size += (symbol_size - 1);
-            cumulative_degenerate += static_cast<int>(symbol_size);
         } else {
             // Non-degenerate: this is a context block
             Length ctx_len = metadata_.string_lengths[m_]; // first (and only) string
@@ -118,12 +114,11 @@ void EDS::parse(std::istream& is, bool with_strings) {
             if (ctx_len > metadata_.max_context_length) metadata_.max_context_length = ctx_len;
             total_context_length += ctx_len;
             num_context_blocks++;
-            cumulative_common += ctx_len;
         }
 
-        // Cumulative arrays: push value after this symbol
-        metadata_.cum_common_positions.push_back(cumulative_common);
-        metadata_.cum_degenerate_counts.push_back(cumulative_degenerate);
+        // cum_common_positions / cum_degenerate_counts are NOT built here — they
+        // are lazy (see EDS::Metadata). ensure_position_index() materialises them
+        // from these same running counts on the first position lookup.
 
         m_ += symbol_size;
         n_++;
@@ -193,7 +188,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
                     current_token.clear();
                 }
                 metadata_.base_positions.push_back(
-                    static_cast<std::streampos>(file_offset + i));   // offset of '{'
+                    static_cast<uint64_t>(file_offset + i));   // offset of '{'
                 mode = Scan::IN_BRACKET;
                 ++i;
             } else if (is_ws(ch)) {
@@ -211,7 +206,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
                 // and append it in one call.
                 if (mode == Scan::BETWEEN) {
                     metadata_.base_positions.push_back(
-                        static_cast<std::streampos>(file_offset + i));  // first char
+                        static_cast<uint64_t>(file_offset + i));  // first char
                     mode = Scan::IN_BARE;
                 }
                 std::streamsize j = i;
@@ -247,6 +242,16 @@ void EDS::parse(std::istream& is, bool with_strings) {
             ? static_cast<double>(total_context_length) / num_context_blocks
             : 0.0;
     }
+
+    // The index arrays were grown by push_back, so each holds up to 2× the bytes
+    // it needs. That slack is not transient for a METADATA_ONLY EDS: it stays
+    // resident for the object's whole life, and the l-EDS merge keeps an input
+    // and an output metadata alive at once. Hand the excess back now — one
+    // realloc per array, paid once at load.
+    metadata_.base_positions.shrink_to_fit();
+    metadata_.symbol_sizes.shrink_to_fit();
+    metadata_.string_lengths.shrink_to_fit();
+    metadata_.cum_set_sizes.shrink_to_fit();
 }
 
 // ================================================================================
@@ -679,7 +684,7 @@ std::string EDS::normalize_eds_format(const std::string& input) const {
 //
 // THE INDEX — how we know where to look
 //
-//   `metadata_.base_positions` is a vector of std::streampos values, one per
+//   `metadata_.base_positions` is a vector of uint64_t byte offsets, one per
 //   symbol.  base_positions[pos] is the byte offset of the first character of
 //   symbol pos in the file (the opening '{' in full-bracket format, or the
 //   first DNA character in compact format).  This index is built once during
@@ -764,8 +769,8 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
     // (lseek + buffer-refill read) and in the common sequential-access pattern
     // the stream lands exactly at base_positions[pos+1] after reading pos, so
     // the guard fires and we skip both syscalls.
-    auto target = metadata_.base_positions[pos];
-    if (!stream_.good() || stream_.tellg() != target) {
+    const auto target = static_cast<std::streamoff>(metadata_.base_positions[pos]);
+    if (!stream_.good() || stream_.tellg() != std::streampos(target)) {
         stream_.clear();   // Heal any prior EOF / error state before seeking.
         stream_.seekg(target);
         if (!stream_) {
@@ -790,7 +795,7 @@ StringSet EDS::read_symbol_from_stream(Position pos) const {
         stream_.clear();
         stream_.seekg(target);
     }
-    std::streamoff span = span_end - static_cast<std::streamoff>(target);
+    std::streamoff span = span_end - target;
     if (span <= 0) {
         throw std::runtime_error("Unexpected EOF reading symbol at position " + std::to_string(pos));
     }
@@ -1037,8 +1042,34 @@ bool EDS::check_position(Position common_pos,
     return reconstructed == pattern;
 }
 
+// Materialise the lazy position-lookup prefix sums.  Both arrays are pure
+// functions of symbol_sizes / string_lengths / is_degenerate, so parsing skips
+// them (12 bytes per symbol) and only callers that actually look up positions
+// pay for them — the l-EDS merge never does.
+void EDS::ensure_position_index() const {
+    if (metadata_.cum_common_positions.size() == n_ + 1) return;  // already built
+
+    metadata_.cum_common_positions.assign(1, 0);
+    metadata_.cum_degenerate_counts.assign(1, 0);
+    metadata_.cum_common_positions.reserve(n_ + 1);
+    metadata_.cum_degenerate_counts.reserve(n_ + 1);
+
+    Position cumulative_common = 0;
+    int cumulative_degenerate = 0;
+    for (size_t i = 0; i < n_; ++i) {
+        if (metadata_.is_degenerate[i]) {
+            cumulative_degenerate += static_cast<int>(metadata_.symbol_sizes[i]);
+        } else {
+            cumulative_common += metadata_.string_lengths[metadata_.cum_set_sizes[i]];
+        }
+        metadata_.cum_common_positions.push_back(cumulative_common);
+        metadata_.cum_degenerate_counts.push_back(cumulative_degenerate);
+    }
+}
+
 // Position checking helper: decode absolute degenerate string number
 std::pair<size_t, size_t> EDS::decode_degenerate_string_number(int abs_string_num) const {
+    ensure_position_index();
     if (abs_string_num < 0) {
         throw std::invalid_argument(
             "Degenerate string number must be non-negative, got: " +
@@ -1086,6 +1117,7 @@ std::pair<size_t, size_t> EDS::decode_degenerate_string_number(int abs_string_nu
 
 // Position checking helper: find symbol containing common position
 size_t EDS::find_symbol_at_common_position(Position common_pos, Position& offset_out) const {
+    ensure_position_index();
     // Binary search in cum_common_positions
     auto it = std::upper_bound(
         metadata_.cum_common_positions.begin(),

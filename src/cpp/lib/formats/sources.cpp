@@ -229,7 +229,7 @@ Sources::Format Sources::detect_format(const std::filesystem::path& path) {
 //
 // WHAT THIS FUNCTION BUILDS
 //
-//   `base_positions_` is a std::vector<std::streampos> with one entry per SEDS
+//   `base_positions_` is a std::vector<uint64_t> byte offsets, one entry per SEDS
 //   entry.  base_positions_[i] is the byte offset of the opening '{' of the
 //   i-th source set.  This is the only index structure we need: given an index
 //   i we can seekg() directly to base_positions_[i] and parse the set.
@@ -428,7 +428,7 @@ void Sources::parse_seds(std::istream& is) {
             if (ch == SET_OPEN) {
                 if (depth == 0) {
                     base_positions_.push_back(
-                        static_cast<std::streampos>(file_offset + i));
+                        static_cast<uint64_t>(file_offset + i));
                     ++entries_found;
                 }
                 ++depth;
@@ -765,10 +765,10 @@ PathSet Sources::read_from_seds(size_t string_id) const {
         size_t rank = bitvec_prefix_[byte_idx] +
                       static_cast<size_t>(__builtin_popcount(partial));
         stream_.clear();
-        stream_.seekg(base_positions_[rank]);
+        stream_.seekg(static_cast<std::streamoff>(base_positions_[rank]));
     } else {
         stream_.clear();
-        stream_.seekg(base_positions_[string_id]);
+        stream_.seekg(static_cast<std::streamoff>(base_positions_[string_id]));
     }
 
     if (!stream_) {
@@ -1199,7 +1199,7 @@ void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream&
     }
 
     // The byte offset in the SEDS file where our range begins.
-    auto target = base_positions_[start_idx];
+    const auto target = static_cast<std::streamoff>(base_positions_[start_idx]);
 
     // ════════════════════════════════════════════════════════════════════════
     // FAST PATH — exact byte range known from index
@@ -1208,9 +1208,8 @@ void Sources::copy_range_to_stream(size_t start_idx, size_t count, std::ostream&
         // base_positions_[start_idx + count] is the start of the *next* source
         // set after our range, so the byte count we need to copy is the
         // difference between these two file positions.
-        auto end_pos    = base_positions_[start_idx + count];
-        auto byte_count = static_cast<std::streamoff>(end_pos)
-                        - static_cast<std::streamoff>(target);
+        auto end_pos    = static_cast<std::streamoff>(base_positions_[start_idx + count]);
+        auto byte_count = end_pos - target;
 
         if (byte_count > 0) {
             // ── Seek guard ───────────────────────────────────────────────────

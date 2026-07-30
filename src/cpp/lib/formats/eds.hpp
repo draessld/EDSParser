@@ -69,7 +69,11 @@ public:
     // This is the core of memory-efficient streaming EDS
     struct Metadata {
         // Index data (position/size information)
-        std::vector<std::streampos> base_positions;   // Starting position of each symbol in file
+        // Byte offset of each symbol in the file. Stored as uint64_t, not
+        // std::streampos: streampos carries an mbstate_t and is 16 bytes, which
+        // doubled the largest per-symbol array for no benefit (EDS files are
+        // byte streams, never multibyte-stateful).
+        std::vector<uint64_t> base_positions;         // Starting position of each symbol in file
         std::vector<Length> symbol_sizes;             // Number of strings per symbol (n entries)
         std::vector<Length> string_lengths;           // Length of each string (m entries total)
         std::vector<Length> cum_set_sizes;            // Cumulative string IDs (for mapping)
@@ -84,9 +88,16 @@ public:
         size_t total_change_size;         // Total chars in degenerate symbols
         size_t num_empty_strings;         // Count of empty string alternatives
 
-        // Position checking support (computed from index data)
-        std::vector<Position> cum_common_positions;   // Cumulative common chars before each symbol (n+1 entries)
-        std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
+        // Position checking support — LAZY: both arrays are empty until the first
+        // call to a position-lookup method (decode_degenerate_string_number(),
+        // find_symbol_at_common_position(), check_position()), which materialises
+        // them via ensure_position_index(). They cost 12 bytes per symbol and are
+        // pure prefix sums of symbol_sizes / string_lengths / is_degenerate, so
+        // the l-EDS merge — which never looks up positions but does hold both an
+        // input and an output metadata at once — no longer pays for them.
+        // Read them through ensure_position_index(), never directly.
+        mutable std::vector<Position> cum_common_positions;   // Cumulative common chars before each symbol (n+1 entries)
+        mutable std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
@@ -129,7 +140,7 @@ public:
     // precondition per symbol before batching.
     void copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const;
     Length get_symbol_size(Position pos) const { return metadata_.symbol_sizes[pos]; }
-    std::streampos get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
+    uint64_t get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
     Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
 
     // Source access (delegated to Sources object)
@@ -175,6 +186,11 @@ private:
     // METADATA_ONLY mode: reads the symbol into `scratch` and references that.
     // The reference is valid until `scratch` is reused or the next call.
     const StringSet& symbol_view(Position pos, StringSet& scratch) const;
+
+    // Build metadata_.cum_common_positions / cum_degenerate_counts if they have
+    // not been materialised yet (see the note on those fields). O(n), one pass
+    // over the already-resident per-symbol arrays; a no-op once built.
+    void ensure_position_index() const;
 
     // Position checking helpers
     std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;

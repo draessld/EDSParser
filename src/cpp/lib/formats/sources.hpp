@@ -203,7 +203,10 @@ private:
     mutable std::ifstream stream_;
 
     // Index data structures (format-specific)
-    std::vector<std::streampos> base_positions_;           // For .seds: file position per source
+    // Byte offset per SEDS entry. uint64_t, not std::streampos: streampos is 16
+    // bytes (it carries an mbstate_t), which doubled this index — the largest
+    // per-string allocation — for no benefit on a byte-oriented file.
+    std::vector<uint64_t> base_positions_;                 // For .seds: file position per source
     std::vector<std::pair<uint64_t, uint32_t>> binary_index_;  // For varint .edz: (offset, size)
 
     // EDZ_COMPRESSED: per-block index + single decompressed-block cache.

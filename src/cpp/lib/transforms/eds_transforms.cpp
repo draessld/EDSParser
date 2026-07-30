@@ -586,8 +586,8 @@ namespace {
 //   is_degenerate[]      true if sym_size > 1.
 //
 //   cum_common_positions[], cum_degenerate_counts[]:
-//                        per-symbol cumulative position counters used by
-//                        locate() in the index.
+//                        NOT built here — they are lazy (EDS::Metadata) and only
+//                        position lookups need them, which the merge never does.
 //
 //   min/max/avg_context_length, num_degenerate_symbols, etc.:
 //                        aggregate statistics for --verbose output and compliance
@@ -614,14 +614,32 @@ namespace {
 // ─────────────────────────────────────────────────────────────────────────────
     class MergeStreamWriter {
     public:
+        // n_out_hint: the exact number of symbols this iteration will write
+        // (computable up front — each group of `count` positions collapses to one
+        // symbol). Used to reserve the per-symbol index arrays so they never
+        // double-and-copy: a doubling realloc briefly holds old+new (1.5× the
+        // array) at exactly the moment input and output metadata are both live.
         MergeStreamWriter(const EDS& input_eds,
                           std::ostream& eds_out,
-                          std::ostream* sources_out)
+                          std::ostream* sources_out,
+                          size_t n_out_hint = 0)
             : input_eds_(input_eds),
               eds_out_(eds_out),
               sources_out_(sources_out),
               has_sources_(input_eds.has_sources()),
               in_meta_(input_eds.get_metadata()) {
+            if (n_out_hint > 0) {
+                result_.metadata.base_positions.reserve(n_out_hint);
+                result_.metadata.symbol_sizes.reserve(n_out_hint);
+                result_.metadata.cum_set_sizes.reserve(n_out_hint);
+                result_.metadata.is_degenerate.reserve(n_out_hint);
+                // string_lengths is per string, not per symbol; a merged group can
+                // produce more strings than it consumed, so seed it with the input's
+                // string count and let it grow from there if the merge expands.
+                // (Measured: keeping this reserve is worth ~7% peak RSS at 50-200 MB
+                // and is neutral at 800 MB.)
+                result_.metadata.string_lengths.reserve(in_meta_.string_lengths.size());
+            }
             // min_context_length starts at UINT32_MAX so the first real context
             // length (which may be small) correctly replaces it via std::min logic.
             result_.metadata.min_context_length = UINT32_MAX;
@@ -630,11 +648,11 @@ namespace {
             result_.metadata.num_common_chars = 0;
             result_.metadata.total_change_size = 0;
             result_.metadata.num_empty_strings = 0;
-            // The cum_* arrays carry a leading index-0 entry for the state
-            // *before* any symbol; per-symbol entries are appended as symbols
-            // are written, giving final length n+1.
-            result_.metadata.cum_common_positions.push_back(0);
-            result_.metadata.cum_degenerate_counts.push_back(0);
+            // cum_common_positions / cum_degenerate_counts are deliberately left
+            // empty: they are lazy (see EDS::Metadata) and the merge never looks
+            // up positions, so building them here would cost 12 bytes per output
+            // symbol for nothing. EDS::ensure_position_index() fills them if a
+            // later caller needs them.
         }
 
         // Consume one position-ordered batch of merge metadata.  Emits every
@@ -689,8 +707,6 @@ namespace {
         StreamResult result_;
         size_t total_context_length_ = 0;   // used to compute avg at the end
         size_t num_context_blocks_ = 0;     // number of non-degenerate symbols seen
-        Position cumulative_common_ = 0;    // cumulative non-degenerate char count
-        int cumulative_degenerate_ = 0;     // cumulative degenerate string count
 
         // SEDS copy-batch state (see the header comment above): the pending
         // run of consecutive unmodified symbols' source entries, flushed in a
@@ -736,21 +752,16 @@ namespace {
             if (is_deg) {
                 result_.metadata.num_degenerate_symbols++;
                 result_.metadata.total_change_size += (sym_size - 1);
-                cumulative_degenerate_ += static_cast<int>(sym_size);
             } else {
                 Length ctx_len = result_.metadata.string_lengths.back();
                 result_.metadata.num_common_chars += ctx_len;
                 total_context_length_ += ctx_len;
                 num_context_blocks_++;
-                cumulative_common_ += static_cast<Position>(ctx_len);
                 if (ctx_len < result_.metadata.min_context_length)
                     result_.metadata.min_context_length = ctx_len;
                 if (ctx_len > result_.metadata.max_context_length)
                     result_.metadata.max_context_length = ctx_len;
             }
-
-            result_.metadata.cum_common_positions.push_back(cumulative_common_);
-            result_.metadata.cum_degenerate_counts.push_back(cumulative_degenerate_);
 
             result_.m += sym_size;
             result_.n++;
@@ -1091,8 +1102,15 @@ static void leds_linear_transform(
         // BATCH_SIZE window (important for dense/exponential CARTESIAN regions
         // where valid_indices_flat dominates memory) — batch_metadata is freed
         // at the end of each loop iteration.
+        // Every group of `count` positions collapses to a single output symbol,
+        // so the output symbol count is known exactly before any writing.
+        size_t positions_consumed_total = 0;
+        for (const auto& g : groups) positions_consumed_total += g.count;
+        const size_t n_out_exact = total_symbols - (positions_consumed_total - total_groups);
+
         MergeStreamWriter writer(eds, eds_out_stream,
-                                 has_sources ? &seds_out_stream : nullptr);
+                                 has_sources ? &seds_out_stream : nullptr,
+                                 n_out_exact);
 
         for (size_t batch_start = 0; batch_start < groups.size(); batch_start += BATCH_SIZE) {
             print_bar(batch_start);
