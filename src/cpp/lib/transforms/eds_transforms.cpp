@@ -3,6 +3,8 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <limits>
+#include <vector>
 #include <filesystem>
 #include <atomic>
 #include <unordered_map>
@@ -96,7 +98,8 @@ namespace {
         const EDS::Metadata& meta,
         size_t n,
         size_t i,
-        Length context_length
+        Length context_length,
+        const std::vector<Length>& ctx_run_len
     ) {
         const auto& is_degenerate = meta.is_degenerate;
 
@@ -105,13 +108,18 @@ namespace {
         bool adj_degen   = (is_degenerate[i] && is_degenerate[i + 1]);
         bool adj_common  = (!is_degenerate[i] && !is_degenerate[i + 1]);
 
+        // "Short context" is judged against the whole contiguous run of common
+        // symbols the position belongs to (ctx_run_len), NOT the single symbol's
+        // length. VCF/MSA-derived EDS fragment one deterministic context into
+        // several adjacent common symbols; measuring a single short fragment made
+        // the greedy chain bridge across an otherwise long-enough context, and made
+        // a from-scratch build disagree with an incremental one (l=B from l=A vs
+        // from raw EDS). Using the run length keeps both paths identical.
         if (!is_degenerate[i] && i > 0 && i < n - 1) {
-            size_t g = meta.cum_set_sizes[i];
-            if (meta.string_lengths[g] < context_length) left_short = true;
+            if (ctx_run_len[i] < context_length) left_short = true;
         }
         if (!is_degenerate[i + 1] && (i + 1) > 0 && (i + 1) < n - 1) {
-            size_t g = meta.cum_set_sizes[i + 1];
-            if (meta.string_lengths[g] < context_length) right_short = true;
+            if (ctx_run_len[i + 1] < context_length) right_short = true;
         }
 
         if (!(left_short || right_short || adj_degen || adj_common))
@@ -151,14 +159,32 @@ namespace {
         // re-fetched eds.get_metadata() several times per call.
         const auto& meta = eds.get_metadata();
 
+        // Precompute the contiguous common-run length for every symbol: each
+        // maximal run of adjacent non-degenerate symbols gets the sum of its
+        // symbol lengths, assigned to every member (degenerate symbols get 0).
+        // needs_merge() uses this so a context fragmented into several common
+        // symbols is treated as one context (see the note there).
+        std::vector<Length> ctx_run_len(n, 0);
+        for (size_t p = 0; p < n; ) {
+            if (meta.is_degenerate[p]) { ++p; continue; }
+            size_t q = p;
+            Length run = 0;
+            while (q < n && !meta.is_degenerate[q]) {
+                run += meta.string_lengths[meta.cum_set_sizes[q]];
+                ++q;
+            }
+            for (size_t r = p; r < q; ++r) ctx_run_len[r] = run;
+            p = q;
+        }
+
         size_t i = 0;
         while (i + 1 < n) {
-            auto [merge, reason] = needs_merge(meta, n, i, context_length);
+            auto [merge, reason] = needs_merge(meta, n, i, context_length, ctx_run_len);
             if (merge) {
                 size_t group_start = i;
                 // Extend the chain as far as consecutive pairs also need merging.
                 while (i + 2 < n) {
-                    auto [merge_next, ignored] = needs_merge(meta, n, i + 1, context_length);
+                    auto [merge_next, ignored] = needs_merge(meta, n, i + 1, context_length, ctx_run_len);
                     if (!merge_next) break;
                     ++i;
                 }
