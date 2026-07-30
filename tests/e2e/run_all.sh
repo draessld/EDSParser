@@ -11,7 +11,9 @@ SUITES=(
     test_msa2eds.sh
     test_vcf2eds.sh
     test_eds2leds.sh
+    test_leds_incremental.sh
     test_source_transform.sh
+    test_seds_edz.sh
     test_stats.sh
     test_genpatterns.sh
     test_genrandomeds.sh
