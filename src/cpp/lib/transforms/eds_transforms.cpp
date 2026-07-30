@@ -868,6 +868,90 @@ namespace {
 
 } // anonymous namespace
 
+// Worst-case peak-RAM estimate for the merge, from metadata only. See header.
+// Uses select_merge_groups() (internal linkage, same TU) to get the exact groups
+// the transform's first iteration would form, then bounds each group's metadata.
+MergeMemoryEstimate estimate_worst_case_merge_memory(
+    const EDS& eds,
+    Length context_length,
+    unsigned long long path_cap,
+    size_t batch_size
+) {
+    MergeMemoryEstimate est;
+    est.batch_size = batch_size ? batch_size : 1;
+    est.path_cap  = path_cap;
+
+    auto groups = select_merge_groups(eds, context_length);
+    est.num_groups = groups.size();
+    if (groups.empty()) return est;
+
+    const auto& meta = eds.get_metadata();
+    constexpr unsigned long long SAT = std::numeric_limits<unsigned long long>::max();
+    constexpr unsigned long long COMBO_CAP = 1ULL << 60;  // stop multiplying past this
+    // Bytes held in RAM per output string of a merged group: one row of
+    // valid_indices_flat (group_count size_t's) plus a rough per-string source-set
+    // cost (PathSet: small bitset/vector — 48 B is a deliberate over-estimate).
+    constexpr unsigned long long PATHSET_BYTES = 48;
+
+    std::vector<unsigned long long> group_bytes(groups.size());
+    bool any_sat = false;
+
+    for (size_t gi = 0; gi < groups.size(); ++gi) {
+        const auto& g = groups[gi];
+
+        unsigned long long combos = 1;
+        bool sat = false;
+        for (size_t p = g.start; p < g.start + g.count; ++p) {
+            unsigned long long card = meta.symbol_sizes[p];
+            if (card < 1) card = 1;
+            if (combos > COMBO_CAP / card) { sat = true; break; }
+            combos *= card;
+        }
+        // Linear merge can't exceed the number of source paths.
+        if (path_cap > 0) {
+            combos = sat ? path_cap : std::min(combos, path_cap);
+            sat = false;  // capped ⇒ bounded
+        }
+
+        unsigned long long per = static_cast<unsigned long long>(g.count) * sizeof(size_t)
+                                 + PATHSET_BYTES;
+        unsigned long long gb;
+        if (sat)                       { gb = SAT; any_sat = true; }
+        else if (combos > SAT / per)   { gb = SAT; any_sat = true; }
+        else                           { gb = combos * per; }
+        group_bytes[gi] = gb;
+
+        if (!sat && est.total_output_strings != SAT) {
+            est.total_output_strings = (est.total_output_strings > SAT - combos)
+                ? SAT : est.total_output_strings + combos;
+        }
+        if (gb >= est.peak_group_bytes) {
+            est.peak_group_bytes   = gb;
+            est.peak_group_start   = g.start;
+            est.peak_group_count   = g.count;
+            est.peak_group_combos  = sat ? SAT : combos;
+        }
+    }
+
+    est.saturated = any_sat;
+    if (any_sat) { est.peak_batch_bytes = SAT; return est; }
+
+    // Peak RAM ≈ the largest of the transform's non-overlapping BATCH_SIZE windows.
+    const size_t batch = static_cast<size_t>(est.batch_size);
+    unsigned long long peak = 0;
+    for (size_t bs = 0; bs < group_bytes.size(); bs += batch) {
+        size_t be = std::min(bs + batch, group_bytes.size());
+        unsigned long long s = 0;
+        for (size_t k = bs; k < be; ++k) {
+            if (s > SAT - group_bytes[k]) { s = SAT; break; }
+            s += group_bytes[k];
+        }
+        peak = std::max(peak, s);
+    }
+    est.peak_batch_bytes = peak;
+    return est;
+}
+
 /**
  * Convert EDS to l-EDS using linear merging with phasing preservation.
  *

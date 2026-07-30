@@ -43,6 +43,41 @@ TransformComplexity estimate_leds_complexity(
 );
 
 /**
+ * Worst-case peak-RAM estimate for the l-EDS merge, computed from metadata only
+ * (no merging performed). Lets a caller refuse a transform up front instead of
+ * discovering the blow-up mid-run.
+ *
+ * For each merge group the merge produces `merged_size` output strings and holds
+ * `merged_size * (group_count * sizeof(size_t) + per-string source overhead)`
+ * bytes of metadata in RAM. merged_size is bounded by the CARTESIAN product of the
+ * group's symbol cardinalities; a LINEAR (phased) merge additionally cannot exceed
+ * the number of source paths, so pass `path_cap = num_paths` to get the realistic
+ * linear bound (path_cap == 0 assumes pure cartesian, no cap).
+ *
+ * peak_batch_bytes is the decision metric: the transform computes metadata one
+ * batch of `batch_size` groups at a time, so peak RAM ≈ the largest batch's total.
+ */
+struct MergeMemoryEstimate {
+    size_t             num_groups          = 0;
+    unsigned long long peak_batch_bytes    = 0;   // max metadata RAM over any batch
+    unsigned long long peak_group_bytes    = 0;   // largest single group's metadata
+    unsigned long long peak_group_combos   = 0;   // output strings in the peak group
+    size_t             peak_group_start    = 0;
+    size_t             peak_group_count    = 0;
+    unsigned long long total_output_strings = 0;  // Σ merged_size (informational)
+    bool               saturated           = false; // a cartesian product overflowed → unbounded
+    unsigned long long batch_size          = 1000;
+    unsigned long long path_cap            = 0;
+};
+
+MergeMemoryEstimate estimate_worst_case_merge_memory(
+    const EDS& eds,
+    Length context_length,
+    unsigned long long path_cap = 0,
+    size_t batch_size = 1000
+);
+
+/**
  * Convert EDS to l-EDS using linear merging with phasing preservation
  *
  * @param input EDS input stream

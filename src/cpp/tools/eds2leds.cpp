@@ -1,4 +1,6 @@
 #include "transforms/eds_transforms.hpp"
+#include "formats/eds.hpp"
+#include "formats/sources.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>
 #include <iostream>
@@ -6,12 +8,58 @@
 #include <iomanip>
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <cctype>
+#include <cstdlib>
+#include <limits>
 #include <unistd.h>
 
 namespace po = boost::program_options;
 using namespace edsparser;
 
+// Distinct exit code so orchestrators can tell "would exceed memory budget" apart
+// from an ordinary failure (e.g. mark the chromosome too-intensive and move on).
+static constexpr int EXIT_MEMORY_EXCEEDED = 3;
+
 namespace {
+
+// Parse a human-readable byte size: "450G", "450GB", "2T", "512M", "1024" (bytes).
+// Binary units (1G = 1024^3). Returns 0 for an empty string; throws on garbage.
+unsigned long long parse_size(const std::string& s) {
+    if (s.empty()) return 0;
+    char* end = nullptr;
+    double val = std::strtod(s.c_str(), &end);
+    if (end == s.c_str() || val < 0)
+        throw std::runtime_error("invalid --max-memory value: '" + s + "'");
+    std::string suf(end);
+    size_t b = suf.find_first_not_of(" \t");
+    suf = (b == std::string::npos) ? "" : suf.substr(b);
+    unsigned long long mult = 1;
+    if (!suf.empty()) {
+        switch (std::toupper(static_cast<unsigned char>(suf[0]))) {
+            case 'K': mult = 1ULL << 10; break;
+            case 'M': mult = 1ULL << 20; break;
+            case 'G': mult = 1ULL << 30; break;
+            case 'T': mult = 1ULL << 40; break;
+            case 'B': mult = 1;          break;  // bare "B"
+            default:
+                throw std::runtime_error("invalid --max-memory unit in: '" + s + "'");
+        }
+    }
+    return static_cast<unsigned long long>(val * static_cast<double>(mult));
+}
+
+std::string human_bytes(unsigned long long b) {
+    if (b == std::numeric_limits<unsigned long long>::max()) return "unbounded";
+    const char* u[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB"};
+    double v = static_cast<double>(b);
+    int i = 0;
+    while (v >= 1024.0 && i < 5) { v /= 1024.0; ++i; }
+    std::ostringstream o;
+    o << std::fixed << std::setprecision(1) << v << " " << u[i];
+    return o.str();
+}
+
 // Removes a temp symlink (and its containing directory) created to force
 // EDZ format detection on a sources file whose extension isn't ".edz".
 // detect_format() dispatches purely on path extension, so this is the
@@ -53,6 +101,7 @@ int main(int argc, char** argv) {
         int num_threads;
         bool compact_mode = true;  // Default to compact format
         bool full_mode = false;
+        std::string max_memory_str;
 
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
@@ -63,7 +112,11 @@ int main(int argc, char** argv) {
             ("seds,s", po::value<std::filesystem::path>(&sources_file), "Input source file (.seds/.edz) for linear (phasing-aware) merging; format auto-detected from extension/content")
             ("edz,z", po::value<std::filesystem::path>(&sources_edz_file), "Input source file for linear merging, explicitly treated as binary EDZ format regardless of its extension (mutually exclusive with -s)")
             ("full", po::bool_switch(&full_mode), "Use full output format with brackets on all symbols (default: compact)")
-            ("threads,t", po::value<int>(&num_threads)->default_value(1), "Number of threads for parallel processing");
+            ("threads,t", po::value<int>(&num_threads)->default_value(1), "Number of threads for parallel processing")
+            ("max-memory", po::value<std::string>(&max_memory_str),
+                "Pre-flight guard: estimate worst-case merge RAM from metadata and refuse "
+                "the transform (exit 3) if it exceeds this size (e.g. 450G, 512M, 2T). "
+                "With sources the bound uses num_paths (linear); without, the cartesian product.");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -192,6 +245,60 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Output mode: " << (compact_mode ? "compact" : "full") << "\n";
         std::cout << "  Threads: " << num_threads << (num_threads == 1 ? " (sequential)" : " (parallel)") << "\n";
+
+        // ===== PRE-FLIGHT MEMORY GUARD =====
+        // Estimate worst-case merge RAM from metadata only (no merging yet) and bail
+        // out before doing expensive work if it would exceed the budget.
+        if (vm.count("max-memory")) {
+            unsigned long long budget = parse_size(max_memory_str);
+            if (budget == 0) {
+                std::cerr << "Error: --max-memory must be > 0 (got '" << max_memory_str << "')\n";
+                print_performance();
+                return 1;
+            }
+
+            // A linear (phased) merge can't produce more strings than there are source
+            // paths; use that as the cap. Without sources, assume cartesian (no cap).
+            unsigned long long path_cap = 0;
+            if (!sources_file.empty()) {
+                try {
+                    auto src = Sources::load(sources_file);
+                    path_cap = static_cast<unsigned long long>(src->num_paths());
+                } catch (const std::exception& e) {
+                    std::cerr << "  [max-memory] warning: could not read source paths ("
+                              << e.what() << "); using the cartesian (uncapped) bound\n";
+                }
+            }
+
+            EDS probe = EDS::load(input_file);  // metadata-only, cheap
+            auto est = estimate_worst_case_merge_memory(
+                probe, context_length, path_cap);
+
+            std::cout << "  Memory pre-flight: est. peak "
+                      << human_bytes(est.peak_batch_bytes)
+                      << " (budget " << human_bytes(budget) << ", "
+                      << est.num_groups << " merge groups, "
+                      << (path_cap ? "linear cap " + std::to_string(path_cap) + " paths"
+                                   : "cartesian bound")
+                      << ")\n";
+
+            if (est.saturated || est.peak_batch_bytes > budget) {
+                std::cerr << "Error: estimated worst-case merge memory "
+                          << human_bytes(est.peak_batch_bytes)
+                          << " exceeds --max-memory " << human_bytes(budget) << ".\n";
+                std::cerr << "  Worst merge group: " << est.peak_group_count
+                          << " symbols at position " << est.peak_group_start
+                          << " → up to " << (est.peak_group_combos ==
+                                 std::numeric_limits<unsigned long long>::max()
+                                 ? std::string("unbounded")
+                                 : std::to_string(est.peak_group_combos))
+                          << " output strings (" << human_bytes(est.peak_group_bytes) << ").\n";
+                std::cerr << "  Skipping (too intensive). Retry with a larger --max-memory, "
+                             "a larger context length, or on a bigger machine.\n";
+                print_performance();
+                return EXIT_MEMORY_EXCEEDED;
+            }
+        }
 
         // Open input file
         std::ifstream input(input_file);

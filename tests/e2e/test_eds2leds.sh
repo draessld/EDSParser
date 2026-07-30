@@ -177,6 +177,49 @@ test_raw_copy_passthrough_roundtrip() {
     echo -e "  ${GREEN}PASS${NC}: raw-copy pass-through yields valid, idempotent l-EDS"
 }
 
+# --max-memory pre-flight guard: a generous budget must not block the transform.
+test_max_memory_allows_under_budget() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/mm_ok.leds" -l 3 --max-memory 450G >/dev/null 2>&1
+    assert_exit_code 0 $? "exits 0 when estimate is under budget" || return 1
+    assert_file_equal "$TMPDIR/mm_ok.leds" "$EXPECTED_DIR/small.linear.l3.leds" \
+        "output unchanged by the (passing) memory guard" || return 1
+}
+
+# A tiny budget must refuse the transform with the dedicated exit code 3 and NOT
+# write output.
+test_max_memory_refuses_over_budget() {
+    rm -f "$TMPDIR/mm_no.leds"
+    local out
+    out=$("$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/mm_no.leds" -l 10 --max-memory 1 2>&1)
+    assert_exit_code 3 $? "exits 3 (memory-exceeded) on a tiny budget" || return 1
+    assert_contains "$out" "exceeds --max-memory" "prints the over-budget reason" || return 1
+    [ ! -s "$TMPDIR/mm_no.leds" ] || { echo -e "  ${RED}FAIL${NC}: refused run must not write output"; return 1; }
+}
+
+# Same input, cartesian (no sources) vs linear (sources): the cartesian bound is
+# the product of cardinalities and is vastly larger, so it must be refused where
+# the linear (num_paths-capped) estimate is not.
+test_max_memory_cartesian_vs_linear() {
+    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    "$GEN" --ref-size-mb 1 -v 0.1 --min-context 0 --seed 7 -o "$TMPDIR/mm.eds" >/dev/null 2>&1
+    assert_file_exists "$TMPDIR/mm.eds" "generated dense EDS" || return 1
+    # linear: num_paths cap keeps it small → passes a modest budget
+    "$TOOL" -i "$TMPDIR/mm.eds" -s "$TMPDIR/mm.seds" -o "$TMPDIR/mm_lin.leds" -l 20 --max-memory 100G >/dev/null 2>&1
+    assert_exit_code 0 $? "linear estimate passes 100G" || return 1
+    # cartesian: product blows past the same budget → refused
+    "$TOOL" -i "$TMPDIR/mm.eds" -o "$TMPDIR/mm_cart.leds" -l 20 --max-memory 100G >/dev/null 2>&1
+    assert_exit_code 3 $? "cartesian estimate refused at 100G" || return 1
+}
+
+# Malformed size string is a plain usage error (exit 1), not the memory code.
+test_max_memory_bad_value() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/mm_bad.leds" -l 3 --max-memory nonsense >/dev/null 2>&1
+    assert_exit_code 1 $? "invalid --max-memory value exits 1" || return 1
+}
+
 run_test "basic EDS→l-EDS (cartesian)"          test_basic_cartesian
 run_test "EDS→l-EDS with sources (linear)"      test_linear_with_sources
 run_test "larger context length (-l 5)"         test_larger_context_length
@@ -193,5 +236,9 @@ run_test "-s fails on misnamed EDZ file"         test_seds_autodetect_fails_on_m
 run_test "raw-copy pass-through round-trip"      test_raw_copy_passthrough_roundtrip
 run_test "missing -l exits non-zero"            test_missing_context_length_fails
 run_test "missing input exits non-zero"         test_missing_input_fails
+run_test "--max-memory allows under budget"     test_max_memory_allows_under_budget
+run_test "--max-memory refuses over budget (exit 3)" test_max_memory_refuses_over_budget
+run_test "--max-memory cartesian vs linear bound" test_max_memory_cartesian_vs_linear
+run_test "--max-memory rejects bad value"        test_max_memory_bad_value
 
 print_summary
