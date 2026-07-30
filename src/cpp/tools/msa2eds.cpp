@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
+#include <limits>
 
 namespace po = boost::program_options;
 using namespace edsparser;
@@ -31,7 +32,9 @@ int main(int argc, char** argv) {
         std::filesystem::path input_file;
         std::filesystem::path output_file;
         std::filesystem::path sources_file;
-        Length context_length;
+        // Parsed as signed so a negative -l is caught below instead of wrapping
+        // to a huge value (Length is unsigned).
+        long long context_length_arg = 0;
 
         po::options_description desc("Transform MSA (Multiple Sequence Alignment) to EDS/l-EDS");
         desc.add_options()
@@ -39,7 +42,7 @@ int main(int argc, char** argv) {
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input MSA file (.msa) in FASTA format with gaps as '-'")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
             ("seds,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
-            ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)");
+            ("context-length,l", po::value<long long>(&context_length_arg)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -97,12 +100,15 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Validate context length
-        if (context_length < 0) {
-            std::cerr << "Error: Context length must be >= 0\n";
+        // Validate context length before narrowing to the unsigned Length type.
+        if (context_length_arg < 0 ||
+            context_length_arg > static_cast<long long>(std::numeric_limits<Length>::max())) {
+            std::cerr << "Error: Context length must be between 0 and "
+                      << std::numeric_limits<Length>::max() << "\n";
             print_performance();
             return 1;
         }
+        const Length context_length = static_cast<Length>(context_length_arg);
 
         // Open input MSA file
         std::ifstream msa_in(input_file);
