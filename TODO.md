@@ -31,7 +31,45 @@
   that flag would bypass the fused path. Interacts with the *"l-EDS merge output never writes sparse
   or EDZ sources"* item below — a fused writer should honor the requested source format from the start.
 
-### l-EDS (`-l`) merge output never writes sparse or EDZ sources
+### eds2leds peak RSS is O(input symbols), not constant
+
+- **Status (2026-07-30):** cut from ~139 to ~74 bytes per input symbol (uint64 byte
+  offsets instead of `std::streampos`, lazy `cum_*` position arrays, exact `reserve` /
+  `shrink_to_fit`). Measured on synthetic EDS, `eds2leds -l 10` linear: 322→162 MB at
+  1.98M symbols, 1153→593 MB at 7.9M symbols, 4404→2380 MB at 31.7M symbols. Output
+  byte-identical. **It is still linear in input size** — a whole-genome EDS would still
+  need tens of GB.
+- **What still scales with n:** input `EDS::Metadata` (~23 B/symbol: `base_positions` 8,
+  `symbol_sizes` 4, `cum_set_sizes` 4, `string_lengths` 4/string), the output metadata
+  built inline by `MergeStreamWriter` (~19 B/symbol), the `Sources` byte-offset index
+  (8 B/string), `ctx_run_len` (4 B/symbol), and the `groups` vector (~16 B/group).
+- **Why it can be constant:** every phase of an iteration already walks positions
+  strictly left-to-right — `select_merge_groups()` scans in order, `compute_merge_metadata()`
+  consumes groups in order, `MergeStreamWriter` has a monotone `cursor_`. The per-symbol
+  index exists only because `EDS::read_symbol(pos)` is a random-access API. A sequential
+  symbol reader (parse forward, track the stream offset, keep a bounded lookahead window
+  — `needs_merge` needs at most `context_length` characters of context ahead) would let an
+  iteration run in O(batch + lookahead) instead of O(n).
+- **Blockers to work through:** (1) `EDS::from_metadata()` hands the next iteration a full
+  metadata struct — a streaming design must instead re-stream the temp file; (2)
+  `compute_merge_metadata()` parallelises over groups via OpenMP and indexes metadata
+  arrays by absolute position — it would need per-batch, position-relative slices; (3)
+  the raw-copy pass-through computes byte spans from `base_positions[pos+1] - base_positions[pos]`,
+  which a sequential reader knows anyway as it parses. Interacts with the single-pass
+  `vcf2eds -l` item above — both want the same streaming merge core.
+- **Cheaper intermediate step:** `ctx_run_len` (4 B/symbol) can be computed on the fly
+  inside `select_merge_groups()`'s existing left-to-right walk instead of being
+  precomputed into a full-length vector.
+
+### l-EDS (`-l`) merge output never writes sparse or EDZ sources *(partly addressed)*
+
+- **Addressed 2026-07-30 for `eds2leds`:** `--source-format {seds,seds-sparse,edz,edz-sparse,edz-compressed}`
+  re-encodes the merged sources once at the end via `Sources::save_as()` and deletes the
+  text file, so the *final artifact* can now be compact — edz-compressed measured 4.7×
+  smaller than SEDS at 500 paths and 5.9× at 2504 paths. What is described below is still
+  true of the pipeline itself: it writes dense text SEDS for every iteration and for the
+  pre-conversion output, so peak *disk* is unchanged and the conversion costs one extra
+  pass. `vcf2eds -l` still has no equivalent flag.
 
 - **Location:** `eds_to_leds_linear()` in `src/cpp/lib/transforms/eds_transforms.cpp` (both the
   stream-based and path-based overloads) — the merged-output sources writer at ~L735-745 is a

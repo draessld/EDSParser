@@ -138,6 +138,23 @@ test_garbage_seds_text_rejected() {
     [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: garbage SEDS accepted (exit 0)"; return 1; }
 }
 
+# Every EDZ variant shares the .edz extension and identifies itself through the
+# header flags, so -z (which forces "this is EDZ") must accept a compressed one
+# rather than rejecting it for having the compression flag set.  Regression: -z
+# used to hard-force the uncompressed parser, making EDZ_COMPRESSED sources —
+# e.g. eds2leds --source-format edz-compressed output — unreadable via -z.
+test_stats_z_accepts_compressed_edz() {
+    "$XFORM" -i "$DATA_DIR/small.seds" -o "$TMPDIR/comp.edz" --compress >/dev/null 2>&1 || {
+        echo "  SKIP: built without zstd"; return 0; }
+    local via_z via_s
+    via_z=$("$STATS" -i "$DATA_DIR/small.eds" -z "$TMPDIR/comp.edz" 2>&1)
+    assert_exit_code 0 $? "stats -z loads EDZ_COMPRESSED" || return 1
+    via_z=$(echo "$via_z" | grep -i "Total paths")
+    via_s=$("$STATS" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" 2>&1 | grep -i "Total paths")
+    [ -n "$via_z" ] && [ "$via_z" = "$via_s" ] || {
+        echo -e "  ${RED}FAIL${NC}: compressed EDZ path count '$via_z' != SEDS '$via_s'"; return 1; }
+}
+
 # ── 5. msa2eds dense SEDS is consumable downstream ────────────────────────────
 # test_msa2eds only golden-diffs the .seds bytes; it never feeds them back to a
 # consumer.  Confirm the dense text SEDS msa2eds writes loads cleanly (cardinality
@@ -162,6 +179,7 @@ run_test "legacy trailerless SEDS loads"                test_legacy_trailerless_
 run_test "legacy trailerless SEDS drives linear merge"  test_legacy_trailerless_linear_merge
 run_test "universal/complement expand to 5 paths"       test_complement_and_universal_expand_to_correct_path_count
 run_test "path count agrees across SEDS and EDZ"        test_complement_path_count_matches_across_seds_and_edz
+run_test "stats -z accepts EDZ_COMPRESSED"              test_stats_z_accepts_compressed_edz
 run_test "truncated EDZ rejected"                       test_truncated_edz_rejected
 run_test "garbage SEDS text rejected"                   test_garbage_seds_text_rejected
 run_test "msa2eds dense SEDS loadable downstream"       test_msa_seds_loadable_downstream

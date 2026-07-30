@@ -220,6 +220,64 @@ test_max_memory_bad_value() {
     assert_exit_code 1 $? "invalid --max-memory value exits 1" || return 1
 }
 
+# --source-format: the merge always writes dense text SEDS internally, then
+# re-encodes once at the end. The re-encoded file must name itself correctly, be
+# smaller for the compressed variant, and carry exactly the same source sets.
+test_source_format_edz() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/sf.leds" -l 3 --source-format edz >/dev/null 2>&1
+    assert_exit_code 0 $? "exits 0 with --source-format edz" || return 1
+    assert_file_exists "$TMPDIR/sf.edz" "sources written as .edz" || return 1
+    [ ! -e "$TMPDIR/sf.seds" ] || { echo -e "  ${RED}FAIL${NC}: text SEDS left behind"; return 1; }
+    # The l-EDS itself must not depend on the source encoding.
+    assert_file_equal "$TMPDIR/sf.leds" "$EXPECTED_DIR/small.linear.l3.leds" \
+        "l-EDS unchanged by source format" || return 1
+}
+
+# Round-trip: EDZ output → SEDS must reproduce every source set (--verify expands
+# complement/universal spellings before comparing, so encoding differences are OK).
+test_source_format_edz_roundtrip() {
+    local XFORM; XFORM=$(find_tool "edsparser-source-transform") || {
+        echo "  SKIP: edsparser-source-transform not found"; return 0; }
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/rt.leds" -l 3 --source-format edz >/dev/null 2>&1
+    local out
+    out=$("$XFORM" -i "$TMPDIR/rt.edz" -o "$TMPDIR/rt_back.seds" --verify 2>&1)
+    assert_exit_code 0 $? "EDZ merge output converts back to SEDS" || return 1
+    assert_contains "$out" "Verification passed" "all source sets survive the round-trip" || return 1
+}
+
+# edz-compressed must be accepted (zstd builds), produce a .edz, and be readable
+# by a consumer tool — the format is only useful if something can load it back.
+test_source_format_edz_compressed() {
+    local STATS; STATS=$(find_tool "edsparser-stats") || {
+        echo "  SKIP: edsparser-stats not found"; return 0; }
+    local out
+    out=$("$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/sc.leds" -l 3 --source-format edz-compressed 2>&1)
+    if echo "$out" | grep -q "requires a zstd-enabled build"; then
+        echo "  SKIP: built without zstd"; return 0
+    fi
+    assert_file_exists "$TMPDIR/sc.edz" "compressed sources written as .edz" || return 1
+    assert_contains "$out" "re-encoded as edz-compressed" "reports the re-encode" || return 1
+
+    # Same path universe whether read from the compressed EDZ or the text SEDS.
+    cp "$TMPDIR/sc.leds" "$TMPDIR/sc_as.eds"
+    local via_edz via_seds
+    via_edz=$("$STATS" -i "$TMPDIR/sc_as.eds" -z "$TMPDIR/sc.edz" 2>&1 | grep -i "Total paths")
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/sc_txt.leds" -l 3 >/dev/null 2>&1
+    via_seds=$("$STATS" -i "$TMPDIR/sc_as.eds" -s "$TMPDIR/sc_txt.seds" 2>&1 | grep -i "Total paths")
+    [ -n "$via_edz" ] && [ "$via_edz" = "$via_seds" ] || {
+        echo -e "  ${RED}FAIL${NC}: path count differs (edz='$via_edz' seds='$via_seds')"; return 1; }
+}
+
+test_source_format_rejects_unknown() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
+        -o "$TMPDIR/bad.leds" -l 3 --source-format nonsense >/dev/null 2>&1
+    assert_exit_code 1 $? "unknown --source-format exits 1" || return 1
+}
+
 run_test "basic EDS→l-EDS (cartesian)"          test_basic_cartesian
 run_test "EDS→l-EDS with sources (linear)"      test_linear_with_sources
 run_test "larger context length (-l 5)"         test_larger_context_length
@@ -240,5 +298,9 @@ run_test "--max-memory allows under budget"     test_max_memory_allows_under_bud
 run_test "--max-memory refuses over budget (exit 3)" test_max_memory_refuses_over_budget
 run_test "--max-memory cartesian vs linear bound" test_max_memory_cartesian_vs_linear
 run_test "--max-memory rejects bad value"        test_max_memory_bad_value
+run_test "--source-format edz writes .edz"       test_source_format_edz
+run_test "--source-format edz round-trips"       test_source_format_edz_roundtrip
+run_test "--source-format edz-compressed"        test_source_format_edz_compressed
+run_test "--source-format rejects unknown value" test_source_format_rejects_unknown
 
 print_summary

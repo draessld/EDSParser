@@ -405,13 +405,31 @@ int main(int argc, char** argv) {
             // -z bypasses extension-based format detection and forces EDZ parsing
             // (parse_edz() still auto-detects EDZ_SPARSE vs dense EDZ from the
             // file's own header flags, so this is safe for both).
+            //
+            // EDZ_COMPRESSED is the exception: it has its own header layout, and
+            // parse_edz() rejects it outright ("compression flag is set"). Since
+            // every EDZ variant shares the .edz extension and is self-describing
+            // via those flags, peek at the header and pick the compressed parser
+            // rather than failing on a file the user explicitly said is EDZ.
             if (!std::filesystem::exists(sources_edz_file)) {
                 std::cerr << "Error: Source file '" << sources_edz_file << "' not found\n";
                 print_perf_stderr();
                 return 1;
             }
+            Sources::Format edz_variant = Sources::Format::EDZ;
+            {
+                std::ifstream probe(sources_edz_file, std::ios::binary);
+                char magic[4] = {};
+                uint16_t flags = 0;
+                probe.read(magic, 4);
+                probe.read(reinterpret_cast<char*>(&flags), sizeof(flags));
+                if (probe && magic[0] == 'E' && magic[1] == 'D' &&
+                    magic[2] == 'Z' && magic[3] == '\0' && (flags & 0x0001)) {
+                    edz_variant = Sources::Format::EDZ_COMPRESSED;
+                }
+            }
             eds = EDS::load(input_file);
-            auto sources = Sources::load(sources_edz_file, Sources::Format::EDZ);
+            auto sources = Sources::load(sources_edz_file, edz_variant);
             if (!eds.empty() && sources->cardinality() != eds.cardinality()) {
                 std::cerr << "Error: Sources cardinality (" << sources->cardinality()
                           << ") does not match EDS cardinality (" << eds.cardinality() << ")\n";

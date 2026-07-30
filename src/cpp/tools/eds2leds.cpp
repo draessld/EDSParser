@@ -49,6 +49,30 @@ unsigned long long parse_size(const std::string& s) {
     return static_cast<unsigned long long>(val * static_cast<double>(mult));
 }
 
+// --source-format value → Sources::Format. The merge pipeline itself always
+// writes dense text SEDS (it streams entries as it merges and has no binary
+// writer); anything else is produced by re-encoding that file once at the end.
+// Returns false for an unrecognised name.
+bool parse_source_format(const std::string& s, Sources::Format& out) {
+    if (s == "seds")           { out = Sources::Format::SEDS;           return true; }
+    if (s == "seds-sparse")    { out = Sources::Format::SEDS_SPARSE;    return true; }
+    if (s == "edz")            { out = Sources::Format::EDZ;            return true; }
+    if (s == "edz-sparse")     { out = Sources::Format::EDZ_SPARSE;     return true; }
+    if (s == "edz-compressed") { out = Sources::Format::EDZ_COMPRESSED; return true; }
+    return false;
+}
+
+// Extension the given source format is stored under. All EDZ variants share
+// ".edz" (they are distinguished by header flags, not by name).
+const char* source_format_extension(Sources::Format f) {
+    switch (f) {
+        case Sources::Format::EDZ:
+        case Sources::Format::EDZ_SPARSE:
+        case Sources::Format::EDZ_COMPRESSED: return ".edz";
+        default:                              return ".seds";
+    }
+}
+
 std::string human_bytes(unsigned long long b) {
     if (b == std::numeric_limits<unsigned long long>::max()) return "unbounded";
     const char* u[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB"};
@@ -102,6 +126,7 @@ int main(int argc, char** argv) {
         bool compact_mode = true;  // Default to compact format
         bool full_mode = false;
         std::string max_memory_str;
+        std::string source_format_str;
 
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
@@ -113,6 +138,12 @@ int main(int argc, char** argv) {
             ("edz,z", po::value<std::filesystem::path>(&sources_edz_file), "Input source file for linear merging, explicitly treated as binary EDZ format regardless of its extension (mutually exclusive with -s)")
             ("full", po::bool_switch(&full_mode), "Use full output format with brackets on all symbols (default: compact)")
             ("threads,t", po::value<int>(&num_threads)->default_value(1), "Number of threads for parallel processing")
+            ("source-format", po::value<std::string>(&source_format_str)->default_value("seds"),
+                "Format for the output sources file: seds (default, dense text), "
+                "seds-sparse, edz, edz-sparse, edz-compressed. Non-SEDS formats are "
+                "produced by re-encoding the merged sources once at the end; EDZ "
+                "variants are written as <output>.edz. edz-compressed needs a "
+                "zstd-enabled build and is typically several times smaller than SEDS.")
             ("max-memory", po::value<std::string>(&max_memory_str),
                 "Pre-flight guard: estimate worst-case merge RAM from metadata and refuse "
                 "the transform (exit 3) if it exceeds this size (e.g. 450G, 512M, 2T). "
@@ -229,6 +260,26 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Validate the requested output source format up front — failing after a
+        // multi-hour merge because zstd is missing would be cruel.
+        Sources::Format out_source_format = Sources::Format::SEDS;
+        if (!parse_source_format(source_format_str, out_source_format)) {
+            std::cerr << "Error: unknown --source-format '" << source_format_str
+                      << "' (expected seds, seds-sparse, edz, edz-sparse, edz-compressed)\n";
+            print_performance();
+            return 1;
+        }
+        if (out_source_format == Sources::Format::EDZ_COMPRESSED &&
+            !Sources::edz_compressed_available()) {
+            std::cerr << "Error: --source-format edz-compressed requires a zstd-enabled build\n";
+            print_performance();
+            return 1;
+        }
+        if (source_format_str != "seds" && sources_file.empty()) {
+            std::cerr << "Warning: --source-format has no effect without sources "
+                         "(-s/-z); a cartesian merge writes no source file\n";
+        }
+
         // Generate output filename if not provided
         if (output_file.empty()) {
             std::string base_name = input_file.stem().string();
@@ -328,15 +379,24 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Cannot open sources file: " + sources_file.string());
             }
 
-            // Generate output sources filename (same stem as output .leds, .seds extension).
+            // Generate output sources filename (same stem as output .leds; the
+            // extension follows the requested format — .edz for EDZ variants).
             output_sources = output_file;
-            output_sources.replace_extension(".seds");
+            output_sources.replace_extension(source_format_extension(out_source_format));
 
             // Guard against self-overwrite: if output_sources resolves to the same file as
             // sources_file, opening it for writing (O_TRUNC) would zero out the input before
             // eds_to_leds_linear can copy it to its temp directory.  Detect this and write
             // to a temp path instead, then rename to the final destination afterwards.
             actual_sources_out_path = output_sources;
+            // The merge pipeline can only write dense text SEDS, so for any other
+            // requested format it writes to a temp file that is re-encoded into
+            // output_sources afterwards.
+            if (out_source_format != Sources::Format::SEDS) {
+                actual_sources_out_path =
+                    output_sources.parent_path() /
+                    (output_sources.stem().string() + ".eds2leds_tmp.seds");
+            }
             try {
                 if (std::filesystem::exists(output_sources) &&
                     std::filesystem::equivalent(output_sources, sources_file)) {
@@ -387,8 +447,26 @@ int main(int argc, char** argv) {
             // Close the stream before rename (file must be closed on some platforms).
             sources_out.reset();
 
-            // If we wrote to a temp file to avoid self-overwrite, rename it now.
-            if (rename_sources_after) {
+            // Re-encode the merged sources into the requested format, then drop the
+            // text file. Conversion is entry-by-entry (Sources::save_as streams via
+            // read_source), so it costs one extra pass over the sources — worth it:
+            // edz-compressed measured ~4× smaller than the text SEDS it replaces.
+            if (out_source_format != Sources::Format::SEDS && !output_sources.empty()) {
+                auto text_size = std::filesystem::file_size(actual_sources_out_path);
+                auto merged = Sources::load(actual_sources_out_path, Sources::Format::SEDS);
+                merged->save_as(output_sources, out_source_format);
+                std::filesystem::remove(actual_sources_out_path);
+
+                auto final_size = std::filesystem::file_size(output_sources);
+                std::cout << "  Sources re-encoded as " << source_format_str << ": "
+                          << human_bytes(text_size) << " → " << human_bytes(final_size);
+                if (final_size > 0)
+                    std::cout << " (" << std::fixed << std::setprecision(1)
+                              << (static_cast<double>(text_size) / static_cast<double>(final_size))
+                              << "× smaller)";
+                std::cout << "\n";
+            } else if (rename_sources_after) {
+                // We wrote to a temp file to avoid self-overwrite; rename it now.
                 std::filesystem::rename(actual_sources_out_path, output_sources);
             }
 
