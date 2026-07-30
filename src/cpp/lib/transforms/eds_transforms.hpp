@@ -118,6 +118,52 @@ void eds_to_leds_linear(
 );
 
 /**
+ * Block-wise l-EDS transform — bounds peak RAM by the block size instead of the
+ * file size.
+ *
+ * WHY THIS IS EXACT.  A maximal run of common (non-degenerate) symbols whose
+ * total length is >= context_length is a *barrier* that no merge can cross:
+ *   - needs_merge() measures "short context" over the whole contiguous common run
+ *     (ctx_run), so such a run is never short and neither neighbour can absorb it;
+ *   - the only merging that happens inside the run is the concatenation of
+ *     adjacent commons, which stays within the run and keeps it >= context_length.
+ * Therefore the merge of everything left of a barrier is independent of everything
+ * right of it, in every iteration. Cutting at the LAST symbol of such a run (the
+ * next symbol is degenerate by construction) and duplicating that one symbol into
+ * the following block yields blocks that can be merged in isolation. Dropping the
+ * duplicated leading symbol when concatenating reproduces the whole-file result
+ * byte for byte — verified against the whole-file transform in the e2e suite.
+ *
+ * Peak RAM is then O(largest block), not O(file): the per-symbol index only ever
+ * covers one block. (The input sources index is still built once for the whole
+ * file — 8 bytes per string — so the ceiling applies to the EDS side; see TODO.md.)
+ *
+ * Falls back to the whole-file transform, with a warning on stderr, when the
+ * input yields no cut point — e.g. variation so dense that no common run reaches
+ * context_length. In that case memory is unchanged.
+ *
+ * @param input_eds_path  Input EDS file
+ * @param output          l-EDS output stream
+ * @param context_length  Minimum context length
+ * @param input_seds_path Sources file, or nullptr for a cartesian merge
+ * @param phasing_output  Output stream for merged sources (dense text SEDS)
+ * @param block_bytes     Target block size in input EDS bytes; cuts land at the
+ *                        first barrier at or beyond this much accumulated input
+ * @param num_threads     Threads per block
+ * @param compact         Compact output format
+ */
+void eds_to_leds_blocked(
+    const std::filesystem::path& input_eds_path,
+    std::ostream& output,
+    Length context_length,
+    const std::filesystem::path* input_seds_path,
+    std::ostream* phasing_output,
+    uint64_t block_bytes,
+    size_t num_threads = 1,
+    bool compact = true
+);
+
+/**
  * Convert EDS to l-EDS using cartesian merging
  *
  * @param num_threads Number of threads for parallel processing (default: 1)

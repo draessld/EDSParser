@@ -127,6 +127,7 @@ int main(int argc, char** argv) {
         bool full_mode = false;
         std::string max_memory_str;
         std::string source_format_str;
+        std::string block_size_str;
 
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
@@ -144,6 +145,13 @@ int main(int argc, char** argv) {
                 "produced by re-encoding the merged sources once at the end; EDZ "
                 "variants are written as <output>.edz. edz-compressed needs a "
                 "zstd-enabled build and is typically several times smaller than SEDS.")
+            ("block-size", po::value<std::string>(&block_size_str),
+                "Process the input in blocks of about this many EDS bytes (e.g. 200M, 1G) "
+                "so peak RAM is bounded by the block instead of the file. Cuts land only "
+                "where no merge can cross — a run of common symbols totalling >= -l — so "
+                "the output is identical to a whole-file run. Slower (each block is sliced "
+                "to a temp file first); falls back to whole-file if the input has no such "
+                "run at a block boundary.")
             ("max-memory", po::value<std::string>(&max_memory_str),
                 "Pre-flight guard: estimate worst-case merge RAM from metadata and refuse "
                 "the transform (exit 3) if it exceeds this size (e.g. 450G, 512M, 2T). "
@@ -260,6 +268,17 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Block size: 0 / absent disables block mode.
+        unsigned long long block_bytes = 0;
+        if (vm.count("block-size")) {
+            block_bytes = parse_size(block_size_str);
+            if (block_bytes == 0) {
+                std::cerr << "Error: --block-size must be > 0 (got '" << block_size_str << "')\n";
+                print_performance();
+                return 1;
+            }
+        }
+
         // Validate the requested output source format up front — failing after a
         // multi-hour merge because zstd is missing would be cruel.
         Sources::Format out_source_format = Sources::Format::SEDS;
@@ -296,6 +315,9 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Output mode: " << (compact_mode ? "compact" : "full") << "\n";
         std::cout << "  Threads: " << num_threads << (num_threads == 1 ? " (sequential)" : " (parallel)") << "\n";
+        if (block_bytes > 0)
+            std::cout << "  Block size: " << human_bytes(block_bytes)
+                      << " of input EDS per block (bounded memory)\n";
 
         // ===== PRE-FLIGHT MEMORY GUARD =====
         // Estimate worst-case merge RAM from metadata only (no merging yet) and bail
@@ -419,8 +441,21 @@ int main(int argc, char** argv) {
         }
 
         try {
-            // Call library function based on auto-detected method
-            if (!sources_file.empty()) {
+            // Block mode drives the same merge core one block at a time; it needs
+            // the input as a path (it slices byte ranges out of it) and handles both
+            // linear and cartesian internally.
+            if (block_bytes > 0) {
+                edsparser::eds_to_leds_blocked(
+                    input_file,
+                    output,
+                    context_length,
+                    sources_file.empty() ? nullptr : &sources_file,
+                    sources_out ? &*sources_out : nullptr,
+                    block_bytes,
+                    static_cast<size_t>(num_threads),
+                    compact_mode
+                );
+            } else if (!sources_file.empty()) {
                 // LINEAR merging: phasing-aware using source information.
                 // Use the path-based overload so detect_format() sees the real extension
                 // (.edz or .seds) and picks the correct parser.

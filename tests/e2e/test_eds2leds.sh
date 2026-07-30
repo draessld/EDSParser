@@ -278,6 +278,56 @@ test_source_format_rejects_unknown() {
     assert_exit_code 1 $? "unknown --source-format exits 1" || return 1
 }
 
+# --block-size: cuts land only at barriers (a run of common symbols totalling
+# >= l, which no merge can cross), so block-wise output MUST equal whole-file
+# output byte for byte — that equality is the whole correctness argument for the
+# feature. Checked for linear (with sources) and cartesian (without).
+test_block_size_matches_whole_file() {
+    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    "$GEN" --ref-size-mb 2 -v 0.02 --min-context 0 --seed 5 -o "$TMPDIR/blk.eds" >/dev/null 2>&1
+    assert_file_exists "$TMPDIR/blk.eds" "generated block-mode input" || return 1
+
+    local l
+    for l in 5 10; do
+        "$TOOL" -i "$TMPDIR/blk.eds" -s "$TMPDIR/blk.seds" -l $l \
+            -o "$TMPDIR/whole_l$l.leds" >/dev/null 2>&1 || return 1
+        local out
+        out=$("$TOOL" -i "$TMPDIR/blk.eds" -s "$TMPDIR/blk.seds" -l $l \
+            -o "$TMPDIR/blocked_l$l.leds" --block-size 200K 2>&1) || return 1
+        assert_contains "$out" "block mode:" "block mode engaged at l=$l" || return 1
+        cmp -s "$TMPDIR/whole_l$l.leds" "$TMPDIR/blocked_l$l.leds" || {
+            echo -e "  ${RED}FAIL${NC}: l=$l .leds differs between block and whole-file"; return 1; }
+        cmp -s "$TMPDIR/whole_l$l.seds" "$TMPDIR/blocked_l$l.seds" || {
+            echo -e "  ${RED}FAIL${NC}: l=$l .seds differs between block and whole-file"; return 1; }
+    done
+
+    # Cartesian: no sources involved, same equality must hold.
+    "$TOOL" -i "$TMPDIR/blk.eds" -l 10 -o "$TMPDIR/whole_cart.leds" >/dev/null 2>&1 || return 1
+    "$TOOL" -i "$TMPDIR/blk.eds" -l 10 -o "$TMPDIR/blocked_cart.leds" \
+        --block-size 200K >/dev/null 2>&1 || return 1
+    cmp -s "$TMPDIR/whole_cart.leds" "$TMPDIR/blocked_cart.leds" || {
+        echo -e "  ${RED}FAIL${NC}: cartesian .leds differs between block and whole-file"; return 1; }
+}
+
+# With l larger than every common run there is no legal cut, so block mode must
+# fall back to whole-file processing (and say so) rather than cutting unsafely.
+test_block_size_falls_back_without_cuts() {
+    printf '{A,C}TT{G,T}AA{C,G}' > "$TMPDIR/nocut.eds"
+    printf '{1}{2}{0}{1}{2}{0}{1}{2}' > "$TMPDIR/nocut.seds"
+    local out
+    out=$("$TOOL" -i "$TMPDIR/nocut.eds" -s "$TMPDIR/nocut.seds" -l 50 \
+        -o "$TMPDIR/nocut.leds" --block-size 1K 2>&1)
+    assert_exit_code 0 $? "still succeeds when no cut point exists" || return 1
+    assert_contains "$out" "no cut point found" "reports the whole-file fallback" || return 1
+    assert_not_empty "$TMPDIR/nocut.leds" "fallback still produces output" || return 1
+}
+
+test_block_size_rejects_zero() {
+    "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" -l 3 \
+        -o "$TMPDIR/bz.leds" --block-size 0 >/dev/null 2>&1
+    assert_exit_code 1 $? "--block-size 0 exits 1" || return 1
+}
+
 run_test "basic EDS→l-EDS (cartesian)"          test_basic_cartesian
 run_test "EDS→l-EDS with sources (linear)"      test_linear_with_sources
 run_test "larger context length (-l 5)"         test_larger_context_length
@@ -302,5 +352,8 @@ run_test "--source-format edz writes .edz"       test_source_format_edz
 run_test "--source-format edz round-trips"       test_source_format_edz_roundtrip
 run_test "--source-format edz-compressed"        test_source_format_edz_compressed
 run_test "--source-format rejects unknown value" test_source_format_rejects_unknown
+run_test "--block-size == whole-file output"     test_block_size_matches_whole_file
+run_test "--block-size falls back without cuts"  test_block_size_falls_back_without_cuts
+run_test "--block-size rejects 0"                test_block_size_rejects_zero
 
 print_summary

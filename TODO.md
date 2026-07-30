@@ -31,19 +31,42 @@
   that flag would bypass the fused path. Interacts with the *"l-EDS merge output never writes sparse
   or EDZ sources"* item below — a fused writer should honor the requested source format from the start.
 
-### eds2leds peak RSS is O(input symbols), not constant
+### eds2leds memory ceiling — block mode lands, sources index is the remaining floor
 
-- **Status (2026-07-30):** cut from ~139 to ~74 bytes per input symbol (uint64 byte
-  offsets instead of `std::streampos`, lazy `cum_*` position arrays, exact `reserve` /
-  `shrink_to_fit`). Measured on synthetic EDS, `eds2leds -l 10` linear: 322→162 MB at
-  1.98M symbols, 1153→593 MB at 7.9M symbols, 4404→2380 MB at 31.7M symbols. Output
-  byte-identical. **It is still linear in input size** — a whole-genome EDS would still
-  need tens of GB.
-- **What still scales with n:** input `EDS::Metadata` (~23 B/symbol: `base_positions` 8,
+- **Status (2026-07-30), two steps done:**
+  1. *Constant-factor work:* ~139 → ~74 bytes per input symbol (uint64 byte offsets
+     instead of `std::streampos`, lazy `cum_*` arrays, exact `reserve`/`shrink_to_fit`).
+     Whole-file `-l 10` linear: 322→162 MB at 1.98M symbols, 4404→2380 MB at 31.7M.
+     This shrank the constant but left peak RSS **linear in file size**.
+  2. *`--block-size` block mode:* the actual ceiling. Barrier cuts (a common run
+     totalling ≥ l can never be crossed by a merge) let each block be merged in
+     isolation with the unchanged merge core, output byte-identical to whole-file.
+     On the 949 MB / 31.7M-symbol input at `-l 10`: 2380 MB whole-file → 1071 MB
+     (200M blocks) → 644 MB (50M) → 540 MB (10M) linear, and **80 MB (10M blocks)
+     cartesian** — the cartesian figure is independent of file size, i.e. a genuine
+     ceiling. Cost: ~2.7× wall-clock (54 s → 145 s), which is the intended trade.
+- **Remaining floor (linear mode only): the whole-file `Sources` index.** Block mode
+  loads one `Sources` for the entire input to slice each block's entries, costing
+  8 B/string — 509 MB for that input's 63.7M strings, which is exactly the 540 MB
+  measured. Blocks below ~50 MB therefore stop helping. Two ways out:
+  - *Streaming source slice:* one sequential pass over the sources file writing each
+    block's slice, with no index at all. Needs per-format sequential decode: text SEDS
+    (brace scan), sparse text (presence bitvec, m/8 bytes — bounded), EDZ dense (fixed
+    `⌈paths/8⌉` records, pure arithmetic), EDZ sparse (bitvec + records), EDZ_COMPRESSED
+    (decompress blocks in order). Gives a true ceiling for linear mode too.
+  - *Sampled index:* keep every 16th–32nd entry offset and scan forward (8 → 0.25-0.5
+    B/string, so 509 MB → 16-32 MB). Less code, touches the hot `read_source` /
+    `copy_range_to_stream` paths, and helps every tool rather than just block mode.
+- **Block mode limits worth documenting for users:** cut availability is data-dependent
+  — at large l, or in regions of dense variation, barriers thin out and blocks grow
+  (with a clean whole-file fallback when none exist). Real 1000G data at l=10 has
+  barriers everywhere (average context 40-60 bp).
+- **What still scales with n in whole-file mode:** input `EDS::Metadata` (~23 B/symbol: `base_positions` 8,
   `symbol_sizes` 4, `cum_set_sizes` 4, `string_lengths` 4/string), the output metadata
   built inline by `MergeStreamWriter` (~19 B/symbol), the `Sources` byte-offset index
   (8 B/string), and the `groups` vector (~16 B/group).
-- **Why it can be constant:** every phase of an iteration already walks positions
+- **Sequential-reader rewrite (still open, now lower priority — block mode gets the
+  ceiling far more cheaply):** every phase of an iteration already walks positions
   strictly left-to-right — `select_merge_groups()` scans in order, `compute_merge_metadata()`
   consumes groups in order, `MergeStreamWriter` has a monotone `cursor_`. The per-symbol
   index exists only because `EDS::read_symbol(pos)` is a random-access API. A sequential

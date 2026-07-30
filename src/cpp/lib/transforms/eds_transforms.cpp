@@ -1,4 +1,6 @@
 #include "eds_transforms.hpp"
+#include "formats/sources.hpp"
+#include <memory>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -1520,6 +1522,398 @@ void eds_to_leds_cartesian(
 
     // Temp directory is removed by temp_guard (RAII) when this function returns,
     // covering both the normal path here and any exception thrown above.
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLOCK-WISE TRANSFORM — bound peak RAM by block size instead of file size
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// See eds_to_leds_blocked() in the header for why cutting is exact. In short: a
+// maximal common run of total length >= context_length can never be absorbed by
+// a neighbour and can never grow past its own boundaries, so it separates the
+// merge problem into two independent halves. We cut at the LAST symbol of such a
+// run (the next symbol is degenerate by construction), duplicate that symbol
+// into the following block, merge each block on its own, and drop the duplicate
+// when concatenating.
+namespace {
+
+    struct EdsBlock {
+        uint64_t eds_begin = 0, eds_end = 0;   // byte range in the input EDS
+        size_t   str_begin = 0, str_end = 0;   // source-entry (string) range
+    };
+
+    // Streaming symbol scan: invokes on_symbol(begin, end, size, common_len) for
+    // every symbol in file order while holding nothing per symbol. `common_len` is
+    // the string length for single-alternative (common) symbols, 0 otherwise.
+    template <class OnSymbol>
+    void scan_eds_symbols(const std::filesystem::path& path, OnSymbol&& on_symbol) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open EDS file: " + path.string());
+
+        constexpr size_t CHUNK = 1u << 16;
+        std::vector<char> buf(CHUNK);
+        uint64_t file_off = 0;
+
+        enum class St { BETWEEN, IN_BRACKET, IN_BARE };
+        St st = St::BETWEEN;
+        uint64_t sym_begin = 0;
+        size_t   alts = 1;      // alternatives seen so far inside the bracket
+        size_t   content = 0;   // content bytes (commas excluded)
+        auto is_ws = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+
+        while (in) {
+            in.read(buf.data(), static_cast<std::streamsize>(CHUNK));
+            const std::streamsize n = in.gcount();
+            if (n <= 0) break;
+            for (std::streamsize i = 0; i < n; ++i) {
+                const char c = buf[static_cast<size_t>(i)];
+                const uint64_t off = file_off + static_cast<uint64_t>(i);
+                switch (st) {
+                    case St::BETWEEN:
+                        if (c == '{') { st = St::IN_BRACKET; sym_begin = off; alts = 1; content = 0; }
+                        else if (!is_ws(c)) { st = St::IN_BARE; sym_begin = off; content = 1; }
+                        break;
+                    case St::IN_BRACKET:
+                        if (c == '}') {
+                            on_symbol(sym_begin, off + 1, alts,
+                                      static_cast<Length>(alts == 1 ? content : 0));
+                            st = St::BETWEEN;
+                        } else if (c == ',') { ++alts; }
+                        else { ++content; }
+                        break;
+                    case St::IN_BARE:
+                        if (c == '{') {
+                            on_symbol(sym_begin, off, 1, static_cast<Length>(content));
+                            st = St::IN_BRACKET; sym_begin = off; alts = 1; content = 0;
+                        } else if (is_ws(c)) {
+                            on_symbol(sym_begin, off, 1, static_cast<Length>(content));
+                            st = St::BETWEEN;
+                        } else { ++content; }
+                        break;
+                }
+            }
+            file_off += static_cast<uint64_t>(n);
+        }
+        if (st == St::IN_BRACKET)
+            throw std::runtime_error("Unmatched '{' in EDS file: " + path.string());
+        if (st == St::IN_BARE)
+            on_symbol(sym_begin, file_off, 1, static_cast<Length>(content));
+    }
+
+    // Plan the block boundaries in one streaming pass. Memory: O(#blocks).
+    std::vector<EdsBlock> plan_blocks(const std::filesystem::path& eds_path,
+                                      Length context_length,
+                                      uint64_t block_bytes) {
+        std::vector<EdsBlock> blocks;
+        EdsBlock cur;                 // block under construction (starts at byte 0)
+        size_t   str_idx = 0;         // running string index
+
+        bool     in_run = false;      // inside a common run
+        uint64_t run_len = 0;         // its accumulated length
+        uint64_t last_begin = 0, last_end = 0;   // the run's last symbol
+        size_t   last_str = 0;
+        uint64_t end_of_input = 0;
+
+        scan_eds_symbols(eds_path, [&](uint64_t begin, uint64_t end,
+                                       size_t size, Length clen) {
+            if (size == 1) {
+                if (!in_run) { in_run = true; run_len = 0; }
+                run_len += clen;
+                last_begin = begin; last_end = end; last_str = str_idx;
+            } else {
+                // A degenerate symbol ends the run. If the run reached the context
+                // length it is a barrier, and its last symbol is a legal cut — take
+                // it once the block has accumulated enough input bytes.
+                if (in_run && run_len >= context_length &&
+                    (last_end - cur.eds_begin) >= block_bytes) {
+                    cur.eds_end = last_end;
+                    cur.str_end = last_str + 1;
+                    blocks.push_back(cur);
+                    cur.eds_begin = last_begin;   // duplicate the barrier symbol
+                    cur.str_begin = last_str;
+                }
+                in_run = false;
+            }
+            str_idx += size;
+            end_of_input = end;
+        });
+
+        cur.eds_end = end_of_input;
+        cur.str_end = str_idx;
+        blocks.push_back(cur);
+        return blocks;
+    }
+
+    // Copy byte range [begin, end) of `src` into a fresh file at `dst`.
+    void copy_byte_range(const std::filesystem::path& src, uint64_t begin, uint64_t end,
+                         const std::filesystem::path& dst) {
+        std::ifstream in(src, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open EDS file: " + src.string());
+        std::ofstream out(dst, std::ios::binary);
+        if (!out) throw std::runtime_error("Cannot create block file: " + dst.string());
+        in.seekg(static_cast<std::streamoff>(begin));
+
+        constexpr size_t CHUNK = 1u << 20;
+        std::vector<char> buf(CHUNK);
+        uint64_t remaining = end - begin;
+        while (remaining > 0 && in) {
+            const size_t want = static_cast<size_t>(std::min<uint64_t>(remaining, CHUNK));
+            in.read(buf.data(), static_cast<std::streamsize>(want));
+            const std::streamsize got = in.gcount();
+            if (got <= 0) break;
+            out.write(buf.data(), got);
+            remaining -= static_cast<uint64_t>(got);
+        }
+        if (remaining != 0)
+            throw std::runtime_error("Short read slicing EDS block from " + src.string());
+    }
+
+    // Write source entries [begin, end) as a dense text SEDS file. Uses
+    // read_source(), which is format-agnostic, so every input source format
+    // (SEDS/SEDS_SPARSE/EDZ/EDZ_SPARSE/EDZ_COMPRESSED) can feed block mode.
+    void write_source_slice(const Sources& src, size_t begin, size_t end,
+                            const std::filesystem::path& dst) {
+        std::ofstream out(dst);
+        if (!out) throw std::runtime_error("Cannot create block sources file: " + dst.string());
+        std::string buf;
+        buf.reserve(64);
+        for (size_t i = begin; i < end; ++i) {
+            const PathSet ps = src.read_source(i);
+            buf.clear();
+            buf += '{';
+            for (size_t j = 0; j < ps.size(); ++j) {
+                if (j > 0) buf += ',';
+                buf += std::to_string(ps[j]);
+            }
+            buf += '}';
+            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+        }
+        Sources::write_seds_dense_finalize(out, end - begin, src.num_paths());
+    }
+
+    // Byte length of the first symbol in a block's l-EDS output: a bracketed group,
+    // or the leading bare run of a compact common symbol.
+    size_t first_symbol_bytes(const std::string& head) {
+        if (head.empty()) return 0;
+        if (head[0] == '{') {
+            const size_t close = head.find('}');
+            if (close == std::string::npos)
+                throw std::runtime_error("Malformed block output: unterminated symbol");
+            return close + 1;
+        }
+        const size_t brace = head.find('{');
+        return (brace == std::string::npos) ? head.size() : brace;
+    }
+
+    // Append a block's .leds output to `out`, dropping the duplicated leading
+    // barrier symbol (for every block after the first) and the trailing newline
+    // (one newline is written once at the very end).
+    void append_block_leds(const std::filesystem::path& block_out, std::ostream& out,
+                           bool drop_first_symbol) {
+        std::ifstream in(block_out, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open block output: " + block_out.string());
+        const auto size = static_cast<uint64_t>(std::filesystem::file_size(block_out));
+
+        uint64_t skip = 0;
+        if (drop_first_symbol) {
+            std::string head(static_cast<size_t>(std::min<uint64_t>(size, 65536)), '\0');
+            in.read(&head[0], static_cast<std::streamsize>(head.size()));
+            head.resize(static_cast<size_t>(in.gcount()));
+            skip = first_symbol_bytes(head);
+            in.clear();
+        }
+
+        // Drop exactly one trailing '\n' if present.
+        uint64_t stop = size;
+        if (stop > skip) {
+            in.seekg(static_cast<std::streamoff>(stop - 1));
+            char last = '\0';
+            in.get(last);
+            if (last == '\n') --stop;
+            in.clear();
+        }
+
+        in.seekg(static_cast<std::streamoff>(skip));
+        constexpr size_t CHUNK = 1u << 20;
+        std::vector<char> buf(CHUNK);
+        uint64_t remaining = (stop > skip) ? (stop - skip) : 0;
+        while (remaining > 0 && in) {
+            const size_t want = static_cast<size_t>(std::min<uint64_t>(remaining, CHUNK));
+            in.read(buf.data(), static_cast<std::streamsize>(want));
+            const std::streamsize got = in.gcount();
+            if (got <= 0) break;
+            out.write(buf.data(), got);
+            remaining -= static_cast<uint64_t>(got);
+        }
+    }
+
+    // Append a block's merged .seds body to `out`, dropping the duplicated leading
+    // entry (blocks after the first) and the block's own 20-byte "SEDN" trailer —
+    // one trailer covering the whole file is written at the end. Returns the number
+    // of entries appended.
+    size_t append_block_sources(const std::filesystem::path& block_seds, std::ostream& out,
+                                bool drop_first_entry, bool is_last_block) {
+        std::ifstream in(block_seds, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open block sources: " + block_seds.string());
+        const auto size = static_cast<uint64_t>(std::filesystem::file_size(block_seds));
+
+        // Trailer: "SEDN"(4) | cardinality(8) | num_paths(8).
+        constexpr uint64_t TRAILER = 20;
+        uint64_t body_end = size;
+        size_t entries = 0;
+        if (size >= TRAILER) {
+            in.seekg(static_cast<std::streamoff>(size - TRAILER));
+            char magic[4] = {};
+            in.read(magic, 4);
+            if (magic[0] == 'S' && magic[1] == 'E' && magic[2] == 'D' && magic[3] == 'N') {
+                uint64_t card = 0;
+                in.read(reinterpret_cast<char*>(&card), sizeof(card));
+                entries = static_cast<size_t>(card);
+                body_end = size - TRAILER;
+            }
+            in.clear();
+        }
+        // Non-final blocks also shed a newline sitting just before the trailer, so
+        // the concatenated body reads as one continuous entry list; the final block
+        // keeps its own separator so the result matches a whole-file run byte for byte.
+        if (!is_last_block && body_end > 0) {
+            in.seekg(static_cast<std::streamoff>(body_end - 1));
+            char last = '\0';
+            in.get(last);
+            if (last == '\n') --body_end;
+            in.clear();
+        }
+
+        uint64_t skip = 0;
+        if (drop_first_entry) {
+            in.seekg(0);
+            std::string head(static_cast<size_t>(std::min<uint64_t>(body_end, 4096)), '\0');
+            in.read(&head[0], static_cast<std::streamsize>(head.size()));
+            head.resize(static_cast<size_t>(in.gcount()));
+            const size_t close = head.find('}');
+            if (close == std::string::npos)
+                throw std::runtime_error("Malformed block sources: no entry to drop");
+            skip = close + 1;
+            if (entries > 0) --entries;
+            in.clear();
+        }
+
+        in.seekg(static_cast<std::streamoff>(skip));
+        constexpr size_t CHUNK = 1u << 20;
+        std::vector<char> buf(CHUNK);
+        uint64_t remaining = (body_end > skip) ? (body_end - skip) : 0;
+        while (remaining > 0 && in) {
+            const size_t want = static_cast<size_t>(std::min<uint64_t>(remaining, CHUNK));
+            in.read(buf.data(), static_cast<std::streamsize>(want));
+            const std::streamsize got = in.gcount();
+            if (got <= 0) break;
+            out.write(buf.data(), got);
+            remaining -= static_cast<uint64_t>(got);
+        }
+        return entries;
+    }
+
+} // namespace
+
+void eds_to_leds_blocked(
+    const std::filesystem::path& input_eds_path,
+    std::ostream& output,
+    Length context_length,
+    const std::filesystem::path* input_seds_path,
+    std::ostream* phasing_output,
+    uint64_t block_bytes,
+    size_t num_threads,
+    bool compact
+) {
+    if (context_length == 0)
+        throw std::invalid_argument("context_length must be > 0 for l-EDS transformation");
+
+    auto run_whole_file = [&]() {
+        if (input_seds_path) {
+            eds_to_leds_linear(input_eds_path, output, context_length, input_seds_path,
+                               phasing_output, num_threads, compact);
+        } else {
+            std::ifstream in(input_eds_path);
+            if (!in) throw std::runtime_error("Cannot open input file: " + input_eds_path.string());
+            eds_to_leds_cartesian(in, output, context_length, num_threads, compact);
+        }
+    };
+
+    if (block_bytes == 0) { run_whole_file(); return; }
+
+    const auto blocks = plan_blocks(input_eds_path, context_length, block_bytes);
+    if (blocks.size() <= 1) {
+        std::cerr << "[l-EDS] block mode: no cut point found (needs a run of common "
+                     "symbols totalling >= " << context_length
+                  << " at a block boundary) — falling back to whole-file processing, "
+                     "memory will scale with input size\n";
+        run_whole_file();
+        return;
+    }
+
+    uint64_t largest = 0;
+    for (const auto& b : blocks) largest = std::max(largest, b.eds_end - b.eds_begin);
+    std::cerr << "[l-EDS] block mode: " << blocks.size() << " blocks, largest "
+              << (largest / (1024.0 * 1024.0)) << " MB of input; peak RAM is bounded "
+                 "by the largest block\n";
+
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path()
+        / ("edsparser_leds_blocks_" + std::to_string(getpid()));
+    std::filesystem::create_directories(temp_dir);
+    TempDirGuard temp_guard{temp_dir};
+
+    // The input sources are opened once; each block's slice is materialised as a
+    // dense text SEDS via read_source(), which every source format supports.
+    std::shared_ptr<Sources> sources;
+    if (input_seds_path) sources = Sources::load(*input_seds_path);
+
+    const std::filesystem::path block_eds  = temp_dir / "block.eds";
+    const std::filesystem::path block_seds = temp_dir / "block.seds";
+    const std::filesystem::path block_out  = temp_dir / "block_out.leds";
+    const std::filesystem::path block_out_seds = temp_dir / "block_out.seds";
+
+    size_t total_entries = 0;
+
+    for (size_t k = 0; k < blocks.size(); ++k) {
+        const auto& b = blocks[k];
+        const bool is_last = (k + 1 == blocks.size());
+
+        std::cerr << "[l-EDS] block " << (k + 1) << "/" << blocks.size() << " ("
+                  << ((b.eds_end - b.eds_begin) / (1024.0 * 1024.0)) << " MB)\n";
+
+        copy_byte_range(input_eds_path, b.eds_begin, b.eds_end, block_eds);
+        if (sources) write_source_slice(*sources, b.str_begin, b.str_end, block_seds);
+
+        {
+            std::ofstream out_eds(block_out);
+            if (!out_eds) throw std::runtime_error("Cannot create block output");
+            if (sources) {
+                std::ofstream out_seds(block_out_seds);
+                if (!out_seds) throw std::runtime_error("Cannot create block sources output");
+                eds_to_leds_linear(block_eds, out_eds, context_length, &block_seds,
+                                   &out_seds, num_threads, compact);
+            } else {
+                std::ifstream in_eds(block_eds);
+                eds_to_leds_cartesian(in_eds, out_eds, context_length, num_threads, compact);
+            }
+        }
+
+        append_block_leds(block_out, output, /*drop_first_symbol=*/k > 0);
+        if (sources && phasing_output)
+            total_entries += append_block_sources(block_out_seds, *phasing_output,
+                                                  /*drop_first_entry=*/k > 0, is_last);
+
+        std::error_code ec;
+        std::filesystem::remove(block_eds, ec);
+        std::filesystem::remove(block_seds, ec);
+        std::filesystem::remove(block_out, ec);
+        std::filesystem::remove(block_out_seds, ec);
+    }
+
+    output << '\n';
+    if (sources && phasing_output)
+        Sources::write_seds_dense_finalize(*phasing_output, total_entries,
+                                           sources->num_paths());
 }
 
 } // namespace edsparser
