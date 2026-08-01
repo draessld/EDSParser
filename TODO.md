@@ -31,6 +31,39 @@
   that flag would bypass the fused path. Interacts with the *"l-EDS merge output never writes sparse
   or EDZ sources"* item below — a fused writer should honor the requested source format from the start.
 
+### `--max-memory` / `--estimate-memory` under-predict 45x on VCF data (path cap is invalid)
+
+- **Measured 2026-08-01** on 1000G chr7, l=5, binary 6fbe246, threads=1:
+  predicted `RECOMMENDED_BUDGET_BYTES` 0.64 GiB, **actual peak 28.3 GiB**. Output
+  3.21 GB `.leds` + 6.5 GB `.seds` from a 179 MB `.eds` (17.9x expansion), 55.5M output
+  strings from ~20M input strings, converged in 1 iteration, 356 s. The whole gap is the
+  merge term, predicted at 4 MB.
+- **Root cause:** `estimate_worst_case_merge_memory()` caps each group's `merged_size` at
+  `path_cap = num_paths`, assuming a linear merge cannot produce more strings than there
+  are paths. False for VCF-derived sources, which are **sample-level, not
+  haplotype-level** (item 9c below): a het sample is marked present in *both* the ref and
+  the alt string at a site, so `intersect_sources()` rarely returns empty and a chain of k
+  adjacent degenerate sites survives up to 2^k combinations. chr7 iter 0: 218,016
+  adjacent-degenerate groups.
+- **Neither existing bound works:** with the cap the estimate is 45x low; without it the
+  raw cartesian product estimates ~TB for the same input and would refuse everything.
+- **Fix direction:** the surviving-combination count is data-dependent, so bound it by
+  *doing* the fold, cheaply and partially:
+  1. Rank groups by their cartesian bound; the peak batch is dominated by the largest.
+  2. For the top-K (K ~ a few thousand) run a **counting-only fold** over the sources —
+     the same iterative intersection as `compute_merge_metadata()` but tracking only the
+     surviving source sets and their count, with an abort once the count passes a limit
+     (e.g. 1e6) so estimating never itself blows up. Report `>= limit` in that case.
+  3. Use exact counts for those groups and the (capped) bound for the tail.
+- **Until then:** do not use `--max-memory` for admission control on VCF-derived input and
+  treat `run_leds.sh`'s `ADMIT_BUDGET_GB` as advisory. `MEM_KILL_GB` is the only guard that
+  does not depend on prediction quality. Emitting an explicit `UNRELIABLE=1` flag from
+  `--estimate-memory` whenever any group's cartesian product exceeded `path_cap` would at
+  least stop schedulers trusting a number that is known to be a guess.
+- **Note `--block-size` does not help this case:** it bounds the per-symbol index, not a
+  single group's merge metadata. A 2^k-combination group is the same size however the file
+  is cut. chr7 needs ~30 GB with or without block mode.
+
 ### eds2leds memory ceiling — block mode lands, sources index is the remaining floor
 
 - **Status (2026-07-30), two steps done:**
