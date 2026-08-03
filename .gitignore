@@ -91,8 +91,13 @@ Thumbs.db
 !tests/bench/docs/
 !tests/bench/docs/*.png
 
-# Experiment outputs - exclude all dataset content
-experiments/
+# Experiment outputs - track the scripts, exclude all dataset content and results
+experiments/*
+!experiments/scripts/
+!experiments/*.py
+!experiments/*.md
+experiments/scripts/*
+!experiments/scripts/*.sh
 data/site/
 site/
 
