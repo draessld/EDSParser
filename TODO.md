@@ -31,6 +31,68 @@
   that flag would bypass the fused path. Interacts with the *"l-EDS merge output never writes sparse
   or EDZ sources"* item below — a fused writer should honor the requested source format from the start.
 
+### Path count is THE bottleneck — run the sample-count experiment, then decide what to do about it
+
+This is the headline finding of 2026-08-01/02 and it reframes the memory work: peak RAM
+of the linear (phasing-aware) merge is governed by the **number of source paths**, not by
+genome size, and it grows super-linearly.
+
+- **Measured, same input, only the sample count changed** — yeast chromosome1
+  (230 kb, 35,091 variants, 1002 Yeast Genomes):
+  | samples | outcome |
+  |---|---|
+  | 1011 | **killed at a 20 GB cap**, still inside the first 1000-group merge batch |
+  | 50   | **43.7 MB peak, 0.34 s**, converged in 1 iteration |
+  A 20x cut in paths bought roughly 500x in memory.
+- **For scale:** 1000G chr7 at l=5 (2504 samples, 179 MB EDS) peaks at **28.3 GiB** and
+  expands 17.9x. Yeast is *denser* per bp than human (1 variant / 7 bp vs 1 / 38 bp) with
+  chains averaging 5.9 symbols vs 3.0, so a small genome is not automatically a cheap one.
+- **Mechanism** (see 9c): paths are sample-level, so a het sample sits in *both* the ref
+  and the alt string at a site; `intersect_sources()` almost never returns empty and a
+  chain of k adjacent degenerate sites survives up to 2^k combinations. More samples =>
+  more het carriers => fewer empty intersections => more surviving combinations.
+
+#### The experiment to run
+
+Tooling is ready: `experiments/scripts/make_sample_subset.sh` (seeded, *nested* subsets so
+the ladder is a fair comparison; also drops now-monomorphic sites with `-c1 -a`) and
+`experiments/scripts/run_subset_dataset.sh` (sequential, every run wrapped in a
+kernel-enforced `MemoryMax` scope, so a blow-up is a logged FAILED line rather than a dead
+machine).
+
+Sweep **path count x l x dataset** and record peak RSS, runtime, output size, and the
+input->output string expansion ratio:
+- path counts 50 / 100 / 250 / 500 / all, on 1000G chr21 (small) and chr7 (known-bad),
+  and on yeast chromosome1 + chromosome4;
+- l in 3 / 5 / 10 / 20.
+
+Deliverables: a cost-vs-paths curve (is it 2^k, or does it saturate?), the largest
+tractable path count per dataset at a given memory budget, and a calibration set for
+fixing `--estimate-memory`.
+
+#### What to do about it — the actual research question
+
+The experiment measures the problem; it does not solve it. Options, roughly in order of
+how fundamental they are:
+
+1. **Haplotype-resolved paths (9c).** Split each phased diploid sample into two paths so a
+   path is a single-chromosome walk. Intersections would then prune properly (a haplotype
+   takes exactly one allele per site), which should remove the 2^k explosion rather than
+   merely bounding it. This is a *modelling* change with a scientific justification
+   independent of performance, and it is the most likely real fix. 1000G phase 3 is phased,
+   so the data supports it; unphased inputs would need a documented fallback.
+2. **Do not materialise the product.** The blow-up is in *representing* every surviving
+   combination explicitly in `MergeMetadata`. A merged symbol whose strings are a filtered
+   cartesian product could stay implicit (factored per position + a source-compatibility
+   structure) and be expanded only on read. This changes the on-disk l-EDS model, so it is
+   a research contribution in its own right, not an optimisation.
+3. **Accept and document a limit.** Publish the tractable-path-count curve and treat
+   sample subsetting as the supported workflow. Cheapest, and honest, but it caps what the
+   index can claim about population-scale pangenomes.
+
+Option 1 first (it may make 2 unnecessary), with the experiment above as the before/after
+measurement in either case.
+
 ### `--max-memory` / `--estimate-memory` under-predict 45x on VCF data (path cap is invalid)
 
 - **Measured 2026-08-01** on 1000G chr7, l=5, binary 6fbe246, threads=1:
