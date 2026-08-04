@@ -37,16 +37,26 @@ This is the headline finding of 2026-08-01/02 and it reframes the memory work: p
 of the linear (phasing-aware) merge is governed by the **number of source paths**, not by
 genome size, and it grows super-linearly.
 
-- **Measured, same input, only the sample count changed** — yeast chromosome1
-  (230 kb, 35,091 variants, 1002 Yeast Genomes):
-  | samples | outcome |
-  |---|---|
-  | 1011 | **killed at a 20 GB cap**, still inside the first 1000-group merge batch |
-  | 50   | **43.7 MB peak, 0.34 s**, converged in 1 iteration |
-  A 20x cut in paths bought roughly 500x in memory.
-- **For scale:** 1000G chr7 at l=5 (2504 samples, 179 MB EDS) peaks at **28.3 GiB** and
-  expands 17.9x. Yeast is *denser* per bp than human (1 variant / 7 bp vs 1 / 38 bp) with
-  chains averaging 5.9 symbols vs 3.0, so a small genome is not automatically a cheap one.
+- **The 2026-08-02 sample-count measurement is void and must be redone.** It compared
+  yeast chromosome1 at 1011 samples (killed at a 20 GB cap) against 50 samples
+  (43.7 MB, 0.34 s) and concluded that a 20x cut in paths bought ~500x in memory. The
+  two runs did not execute the same code: above 63 paths the merge falls back to the
+  `PathSet` implementation, which handles complement source sets correctly, while at or
+  below 63 paths it took the bitset fast path, which until 20d8ff1 read every complement
+  set as universal and therefore never pruned. So the 1011-sample run was correct and the
+  50-sample run was not — the comparison says nothing reliable about path count. Redo the
+  ladder on the fixed binary before drawing the curve. The *direction* (more paths => more
+  het carriers => more surviving combinations) still follows from the mechanism below, but
+  no measured magnitude survives.
+- **Unaffected by that bug:** 1000G chr7 at l=5 (2504 samples, 179 MB EDS) peaks at
+  **28.3 GiB** and expands 17.9x — above 63 paths, so it ran the correct path. This
+  remains the reference case for the genuine explosion. Yeast is *denser* per bp than
+  human (1 variant / 7 bp vs 1 / 38 bp) with chains averaging 5.9 symbols vs 3.0, so a
+  small genome is not automatically a cheap one.
+- **Still real after the fix:** on synthetic 50-path data with clustered variants, the
+  haploidised VCF runs l=5..30 in ~0.1 s under 19 MB while its heterozygous diploid twin
+  is still killed at an 8 GB cap at every l. Heterozygosity, not path count alone, is what
+  drives the surviving-combination count.
 - **Mechanism** (see 9c): paths are sample-level, so a het sample sits in *both* the ref
   and the alt string at a site; `intersect_sources()` almost never returns empty and a
   chain of k adjacent degenerate sites survives up to 2^k combinations. More samples =>
@@ -69,6 +79,13 @@ input->output string expansion ratio:
 Deliverables: a cost-vs-paths curve (is it 2^k, or does it saturate?), the largest
 tractable path count per dataset at a given memory budget, and a calibration set for
 fixing `--estimate-memory`.
+
+**Run it on 20d8ff1 or later.** Every existing result at <= 63 paths predates the
+complement fix and measures the bug rather than the data — including the whole
+`experiments/results/yeast1011_50` sweep (50 samples), at *every* l and not only the
+rows marked OOM: those l-EDS files contain strings no strain carries, so their sizes,
+string-expansion ratios and peak-memory figures are all invalid. Regenerate before
+using any of it. Results at more than 63 paths (hgp1000, 2504 samples) are unaffected.
 
 #### What to do about it — the actual research question
 
