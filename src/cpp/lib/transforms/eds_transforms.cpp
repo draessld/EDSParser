@@ -243,17 +243,32 @@ namespace {
         const auto& metadata   = eds.get_metadata();
 
         // Bitset helpers (used in the per-group lambda below).
-        // Path IDs are 1-based; ID 0 is the sentinel "universal" source.
-        auto to_bits = [](const PathSet& s) -> uint64_t {
-            if (!s.empty() && s[0] == 0) return ~0ULL;
+        // Path IDs are 1-based; a leading ID 0 marks a COMPLEMENT set:
+        //   {0}       = universal (all paths)
+        //   {0,e1,e2} = all paths EXCEPT e1,e2
+        // Mapping every 0-led set to ~0ULL (as this did) turned "all except e"
+        // into "all", so intersections with it never pruned: the fold kept
+        // combinations no path carries and grew combinatorially instead of
+        // staying bounded by the path count.  The universe is also masked to
+        // num_paths so that an intersection which really covers no path tests
+        // as 0 rather than leaving the unused high bits set.
+        const size_t np = has_sources ? eds.get_sources_object()->num_paths() : 0;
+        const uint64_t universe = (np == 0 || np >= 64) ? ~0ULL : ((1ULL << np) - 1);
+
+        auto to_bits = [universe](const PathSet& s) -> uint64_t {
+            if (!s.empty() && s[0] == 0) {          // complement
+                uint64_t b = universe;
+                for (size_t i = 1; i < s.size(); ++i) b &= ~(1ULL << (s[i] - 1));
+                return b;
+            }
             uint64_t b = 0;
             for (int id : s) b |= (1ULL << (id - 1));
             return b;
         };
-        auto bits_to_set = [](uint64_t b) -> PathSet {
-            if (b == ~0ULL) return {0};
+        auto bits_to_set = [universe](uint64_t b) -> PathSet {
+            if (b == universe) return {0};
             PathSet s;
-            for (int k = 0; k < 63; ++k)
+            for (int k = 0; k < 64; ++k)
                 if (b & (1ULL << k)) s.push_back(k + 1);
             return s;
         };
@@ -318,9 +333,12 @@ namespace {
             }
 
             // Source accumulator for LINEAR mode.
-            // use_bits stays true as long as all path IDs fit in [1,63].
+            // use_bits stays true as long as all path IDs fit in [1,63].  The
+            // whole universe must fit too: a complement set {0,e...} denotes the
+            // paths it does *not* list, which cannot be represented in 64 bits
+            // when there are more than 63 of them.
             // If a position breaks the invariant we switch cur_bits → cur_src_sets.
-            bool use_bits = has_sources;
+            bool use_bits = has_sources && np >= 1 && np <= 63;
             std::vector<uint64_t> cur_bits;
             std::vector<PathSet>  cur_src_sets;
 
@@ -328,7 +346,7 @@ namespace {
                 std::vector<PathSet> src0(sz0);
                 for (size_t m = 0; m < sz0; ++m) {
                     src0[m] = get_src(g0 + m);
-                    if (use_bits && !src0[m].empty() && src0[m][0] != 0 && src0[m].back() > 63)
+                    if (use_bits && !src0[m].empty() && src0[m].back() > 63)
                         use_bits = false;
                 }
                 if (use_bits) {
@@ -352,7 +370,7 @@ namespace {
                     srcj.resize(szj);
                     for (size_t j = 0; j < szj; ++j) {
                         srcj[j] = get_src(gj + j);
-                        if (use_bits && !srcj[j].empty() && srcj[j][0] != 0 && srcj[j].back() > 63)
+                        if (use_bits && !srcj[j].empty() && srcj[j].back() > 63)
                             use_bits = false;
                     }
                     // If this position broke use_bits, convert cur_bits → cur_src_sets now.
