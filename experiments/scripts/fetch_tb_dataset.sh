@@ -4,8 +4,8 @@
 # Why Mtb: it is haploid and clonal, so one isolate is one path — the sample-level
 # path model that makes diploid panels explode (TODO 9c) simply does not apply —
 # and variable sites saturate as isolates accumulate, so contexts stay long.
-# Measured on the first 32 complete genomes: 14,548 sites, ctx_avg 346 bp, and
-# eds2leds at l=10..200 finishes in ~0.2 s under 40 MB. Contrast yeast at 50
+# Measured at 100 isolates: 21,023 sites, ctx_avg 241 bp, and eds2leds at
+# l=10..100 converges in 1 iteration in ~0.6 s under 69 MB. Contrast yeast at 50
 # samples, where l=20 is unreachable.
 #
 # Usage:
@@ -16,8 +16,19 @@
 #
 # Env overrides: JOBS (parallel callers, default 8), THREADS (minimap2 -t, default 2).
 #
+# Layout — a shared pool plus one directory per panel size, so panels coexist and
+# a larger panel reuses everything the smaller one already downloaded and called:
+#
+#   <base>/bin/            static tools
+#   <base>/asm/            downloaded assemblies      (pool, shared)
+#   <base>/calls/          per-isolate VCFs           (pool, shared)
+#   <base>/panel_<n>/vcf/  merged haploid VCF         (one dataset per panel size)
+#   <base>/panel_<n>/ref/  reference, named to match
+#
+# Each panel_<n> is exactly what run_subset_dataset.sh and collect_results.sh expect.
+#
 # Needs no root and no conda: minimap2 + k8 + paftools.js and the NCBI datasets CLI
-# are fetched as static binaries into <dest_base>/bin. bcftools is the one external
+# are fetched as static binaries into <base>/bin. bcftools is the one external
 # dependency; if the machine lacks it, build htslib+bcftools into $HOME with
 # `make install prefix=$HOME/.local`.
 #
@@ -37,9 +48,16 @@ TAXON="${TAXON:-1773}"           # Mycobacterium tuberculosis
 command -v bcftools >/dev/null || { echo "bcftools not on PATH" >&2; exit 1; }
 
 BIN="$BASE/bin"
-mkdir -p "$BIN" "$BASE"/{ref,asm,vcf} || exit 1
+mkdir -p "$BIN" "$BASE"/{ref,asm,calls} || exit 1
 cd "$BASE" || exit 1
 export PATH="$BIN:$PATH"
+
+# Pre-panel layout kept per-isolate calls in vcf/ next to the merged VCF. Move them
+# into the pool so an existing run is reused rather than recalled from scratch.
+if compgen -G "vcf/*.vcf.gz" >/dev/null; then
+    echo "=== migrating per-isolate calls from vcf/ to calls/ ==="
+    mv vcf/*.vcf.gz vcf/*.vcf.gz.csi calls/ 2>/dev/null
+fi
 
 # ── stage 0: static tools ────────────────────────────────────────────────────
 if [[ ! -x "$BIN/minimap2" ]]; then
@@ -66,7 +84,6 @@ fi
 # vcf/<c>.vcf with ref/<c>.fasta — so name both after the contig.
 CHROM=$(awk '/^>/{print substr($1,2); exit}' ref/H37Rv.fasta)
 [[ -n "$CHROM" ]] || { echo "could not read contig name from ref/H37Rv.fasta" >&2; exit 1; }
-cp -n ref/H37Rv.fasta "ref/${CHROM}.fasta"
 echo "    reference contig: $CHROM"
 
 # ── stage 2: accession list ──────────────────────────────────────────────────
@@ -75,14 +92,15 @@ if [[ ! -s all_acc.txt ]]; then
     datasets summary genome taxon "$TAXON" --assembly-level complete --as-json-lines \
         | dataformat tsv genome --fields accession | tail -n +2 > all_acc.txt || exit 1
 fi
-head -n "$N" all_acc.txt > acc.txt
-have=$(wc -l < acc.txt)
-echo "=== using $have isolates (of $(wc -l < all_acc.txt) available) ==="
+avail=$(wc -l < all_acc.txt)
+(( N > avail )) && { echo "    only $avail available, using all"; N=$avail; }
+head -n "$N" all_acc.txt > "acc_${N}.txt"
+echo "=== panel of $N isolates (of $avail available) ==="
 
 # ── stage 3: assemblies ──────────────────────────────────────────────────────
 missing=$(while read -r a; do
               find asm -path "*${a}*" -name '*.fna' -print -quit 2>/dev/null | grep -q . || echo "$a"
-          done < acc.txt)
+          done < "acc_${N}.txt")
 if [[ -n "$missing" ]]; then
     echo "=== downloading $(wc -l <<<"$missing") assemblies (~4.5 MB each) ==="
     printf '%s\n' "$missing" > acc_missing.txt
@@ -100,57 +118,65 @@ set -u
 acc="\$1"
 cd "$BASE" || exit 1
 export PATH="$BIN:\$PATH"
-[[ -s vcf/\$acc.vcf.gz ]] && exit 0
+[[ -s calls/\$acc.vcf.gz ]] && exit 0
 fna=\$(find asm -path "*\${acc}*" -name '*.fna' | head -1)
 [[ -z "\$fna" ]] && { echo "  [\$acc] no assembly found" >&2; exit 0; }
 minimap2 -cx asm5 --cs -t $THREADS ref/H37Rv.fasta "\$fna" 2>/dev/null \
   | sort -k6,6 -k8,8n \
-  | k8 "$BIN/paftools.js" call -f ref/H37Rv.fasta -s "\$acc" - 2>/dev/null > vcf/\$acc.raw.vcf
-if [[ -s vcf/\$acc.raw.vcf ]]; then
-    bcftools sort -Oz -o vcf/\$acc.vcf.gz vcf/\$acc.raw.vcf 2>/dev/null \
-      && bcftools index -f vcf/\$acc.vcf.gz
+  | k8 "$BIN/paftools.js" call -f ref/H37Rv.fasta -s "\$acc" - 2>/dev/null > calls/\$acc.raw.vcf
+if [[ -s calls/\$acc.raw.vcf ]]; then
+    bcftools sort -Oz -o calls/\$acc.vcf.gz calls/\$acc.raw.vcf 2>/dev/null \
+      && bcftools index -f calls/\$acc.vcf.gz
 fi
-rm -f vcf/\$acc.raw.vcf
+rm -f calls/\$acc.raw.vcf
 EOF
 chmod +x "$BASE/.call_one.sh"
 
-todo=$(while read -r a; do [[ -s "vcf/$a.vcf.gz" ]] || echo "$a"; done < acc.txt)
+todo=$(while read -r a; do [[ -s "calls/$a.vcf.gz" ]] || echo "$a"; done < "acc_${N}.txt")
 if [[ -n "$todo" ]]; then
     echo "=== calling variants for $(wc -l <<<"$todo") isolates (-j$JOBS, minimap2 -t$THREADS) ==="
     printf '%s\n' "$todo" | xargs -P "$JOBS" -n1 "$BASE/.call_one.sh"
 fi
-called=$(ls vcf/*.vcf.gz 2>/dev/null | wc -l)
-echo "    $called per-isolate VCFs present"
-(( called )) || { echo "no variant calls produced" >&2; exit 1; }
 
-# ── stage 5: merge + haploidise ──────────────────────────────────────────────
+# ── stage 5: merge + haploidise into panel_<N> ───────────────────────────────
 # -0 fills samples with no call at a site as reference, which is what a haploid
 # clone means. The awk keeps the first allele of each GT, so one isolate becomes
 # exactly one path: without it a "1/1" would place the isolate in two strings and
 # the linear merge would lose its pruning.
-echo "=== merging into vcf/${CHROM}.vcf ==="
-sed 's|^|vcf/|; s|$|.vcf.gz|' acc.txt | grep -Ff <(ls vcf/*.vcf.gz) - > merge_list.txt
-bcftools merge -0 -l merge_list.txt -Ov 2>/dev/null \
+PANEL="$BASE/panel_${N}"
+mkdir -p "$PANEL"/{vcf,ref}
+ln -sf "$BASE/ref/H37Rv.fasta" "$PANEL/ref/${CHROM}.fasta"
+
+sed 's|^|calls/|; s|$|.vcf.gz|' "acc_${N}.txt" > want.txt
+ls calls/*.vcf.gz 2>/dev/null | sort > have.txt
+comm -12 <(sort want.txt) have.txt > "merge_list_${N}.txt"
+called=$(wc -l < "merge_list_${N}.txt")
+rm -f want.txt have.txt
+(( called )) || { echo "no variant calls available to merge" >&2; exit 1; }
+
+echo "=== merging $called isolates → panel_${N}/vcf/${CHROM}.vcf ==="
+bcftools merge -0 -l "merge_list_${N}.txt" -Ov 2>/dev/null \
   | awk 'BEGIN{FS=OFS="\t"} /^#/{print;next}
          {for(i=10;i<=NF;i++){split($i,g,/[\/|]/); $i=g[1]} print}' \
-  > "vcf/${CHROM}.vcf" || exit 1
-sites=$(grep -vc '^#' "vcf/${CHROM}.vcf")
+  > "$PANEL/vcf/${CHROM}.vcf" || exit 1
+sites=$(grep -vc '^#' "$PANEL/vcf/${CHROM}.vcf")
 echo "    $sites variant sites across $called isolates"
 
 cat <<EOF
 
-=== done: $BASE ===
+=== done: $PANEL ===
   ref/${CHROM}.fasta      reference (contig $CHROM)
   vcf/${CHROM}.vcf        merged, haploid, $called paths, $sites sites
 
 Next:
-  vcf2eds -i $BASE/vcf/${CHROM}.vcf -r $BASE/ref/${CHROM}.fasta \\
-          -o $BASE/${CHROM}.eds -s $BASE/${CHROM}.seds
-  edsparser-stats -i $BASE/${CHROM}.eds -s $BASE/${CHROM}.seds   # check ctx_avg vs your l
-  eds2leds -i $BASE/${CHROM}.eds -s $BASE/${CHROM}.seds -l 20 -o $BASE/${CHROM}_l20.leds
+  make_allele_subset.sh $PANEL ${PANEL}_snv50 50    # drop long indels (see below)
+  run_subset_dataset.sh $PANEL 10 20 50 100
+  collect_results.sh    $PANEL tb_p${N}
 
-or drive the whole l sweep with the existing runner:
-  run_subset_dataset.sh $BASE 10 20 50 100
+Long alleles dominate the EDS: at 100 isolates the top 10 variant groups were 89%
+of all degenerate text, because group_overlapping_variants absorbs every variant
+inside a long deletion and emits one full-span haplotype per allele. Filtering
+alleles over 50 bp dropped ~4% of sites and shrank the EDS 4.2x. Build both.
 
 Requires eds2leds at fa0cda0 or later: below 64 paths the merge takes the bitset
 fast path, which mis-read complement source sets before that commit.
