@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -696,17 +696,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#legacy-in-memory-access" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy In-Memory Access
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#source-access" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1281,17 +1270,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#legacy-in-memory-access" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy In-Memory Access
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#source-access" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1705,12 +1683,13 @@ the <code>from_string()</code> / stream constructor paths store all strings in R
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="kt">size_t</span><span class="w"> </span><span class="nf">cardinality</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w">   </span><span class="c1">// m — total number of strings</span>
 <a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
 <a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">const</span><span class="w"> </span><span class="n">EDS</span><span class="o">::</span><span class="n">Metadata</span><span class="o">&amp;</span><span class="w"> </span><span class="nf">get_metadata</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">EDS</span><span class="o">::</span><span class="n">Statistics</span><span class="w">      </span><span class="nf">get_statistics</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </code></pre></div>
+<p><code>get_statistics()</code> and <code>print_statistics()</code> were <strong>removed</strong>. Every field they exposed lives
+in <code>get_metadata()</code> — see the struct below.</p>
 <h3 id="metadata-structure">Metadata Structure<a class="headerlink" href="#metadata-structure" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">struct</span><span class="w"> </span><span class="nc">EDS</span><span class="o">::</span><span class="n">Metadata</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="c1">// Index</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">streampos</span><span class="o">&gt;</span><span class="w"> </span><span class="n">base_positions</span><span class="p">;</span><span class="w">  </span><span class="c1">// file offset per symbol</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">base_positions</span><span class="p">;</span><span class="w">         </span><span class="c1">// byte offset per symbol</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Length</span><span class="o">&gt;</span><span class="w"> </span><span class="n">symbol_sizes</span><span class="p">;</span><span class="w">             </span><span class="c1">// strings-per-symbol (length n)</span>
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Length</span><span class="o">&gt;</span><span class="w"> </span><span class="n">string_lengths</span><span class="p">;</span><span class="w">           </span><span class="c1">// char length per string (length m)</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Length</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cum_set_sizes</span><span class="p">;</span><span class="w">            </span><span class="c1">// cumulative string IDs</span>
@@ -1725,41 +1704,58 @@ the <code>from_string()</code> / stream constructor paths store all strings in R
 <a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">    </span><span class="kt">size_t</span><span class="w"> </span><span class="n">total_change_size</span><span class="p">;</span>
 <a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">    </span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_empty_strings</span><span class="p">;</span>
 <a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>
-<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="c1">// Position-check support (for downstream locate() implementations)</span>
-<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Position</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cum_common_positions</span><span class="p">;</span><span class="w">   </span><span class="c1">// length n+1</span>
-<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w">      </span><span class="n">cum_degenerate_counts</span><span class="p">;</span><span class="w">  </span><span class="c1">// length n+1</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="c1">// Position-check support — LAZY, see below</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Position</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cum_common_positions</span><span class="p">;</span><span class="w">   </span><span class="c1">// length n+1</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w">      </span><span class="n">cum_degenerate_counts</span><span class="p">;</span><span class="w">  </span><span class="c1">// length n+1</span>
 <a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="p">};</span>
 </code></pre></div>
+<p>Two details that matter for memory, both from 2026-07-30:</p>
+<ul>
+<li><code>base_positions</code> is <code>uint64_t</code>, <strong>not</strong> <code>std::streampos</code>. A <code>streampos</code> carries an
+  <code>mbstate_t</code> and occupies 16 bytes, which doubled the largest per-symbol array for no
+  benefit — EDS files are byte streams, never multibyte-stateful.</li>
+<li><code>cum_common_positions</code> and <code>cum_degenerate_counts</code> are <strong>empty until first use</strong>. They are
+  pure prefix sums costing 12 bytes per symbol, materialised by <code>ensure_position_index()</code> on
+  the first position lookup. Read them through that method, never directly: the l-EDS merge
+  holds an input <em>and</em> an output metadata at once and never looks up positions, so it must
+  not pay for them.</li>
+</ul>
 <h3 id="streaming-access">Streaming Access<a class="headerlink" href="#streaming-access" title="Permanent link">&para;</a></h3>
 <p>These methods work in <strong>both</strong> FULL and METADATA_ONLY modes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// Read all strings of symbol at position pos</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// Read all strings of symbol at position pos (by value — safe everywhere)</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">StringSet</span><span class="w"> </span><span class="nf">read_symbol</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">pos</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1">// Per-string metadata accessors (O(1), no disk I/O)</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">Length</span><span class="w">        </span><span class="nf">get_symbol_size</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">pos</span><span class="p">)</span><span class="w">       </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">std</span><span class="o">::</span><span class="n">streampos</span><span class="w"> </span><span class="nf">get_base_position</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">pos</span><span class="p">)</span><span class="w">    </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">Length</span><span class="w">        </span><span class="nf">get_string_length</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">string_id</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">get_is_degenerate</span><span class="p">()</span><span class="w">      </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1">// Reference into the in-memory sets, avoiding the copy. Throws when the EDS</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1">// streams from disk — use read_symbol() there.</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="k">const</span><span class="w"> </span><span class="n">StringSet</span><span class="o">&amp;</span><span class="w"> </span><span class="nf">read_symbol_ref</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">pos</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1">// Byte-copy a run of symbols verbatim to a stream (the raw-copy fast path)</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="kt">void</span><span class="w"> </span><span class="nf">copy_symbol_range_to_stream</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">start</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="n">count</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ostream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="c1">// Per-string metadata accessors (O(1), no disk I/O)</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">Length</span><span class="w"> </span><span class="nf">get_symbol_size</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">pos</span><span class="p">)</span><span class="w">       </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">Length</span><span class="w"> </span><span class="nf">get_string_length</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">string_id</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </code></pre></div>
-<h3 id="legacy-in-memory-access">Legacy In-Memory Access<a class="headerlink" href="#legacy-in-memory-access" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1">// Only valid when constructed from a string or stream (not from file)</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="c1">// Throws in METADATA_ONLY mode</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">StringSet</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">get_sets</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-</code></pre></div>
+<p><code>get_is_degenerate()</code> and <code>get_sets()</code> were <strong>removed</strong>. Use
+<code>get_metadata().is_degenerate</code> for the former; for the latter, <code>read_symbol(pos)</code> works in
+both construction modes and is what the whole pipeline uses.</p>
 <h3 id="source-access">Source Access<a class="headerlink" href="#source-access" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kt">bool</span><span class="w">   </span><span class="nf">has_sources</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="c1">// Delegates to Sources::read_source() — works in both modes</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">std</span><span class="o">::</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w"> </span><span class="n">read_source</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">string_id</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="c1">// Direct object access for advanced operations</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">Sources</span><span class="o">&gt;</span><span class="w"> </span><span class="n">get_sources_object</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="kt">void</span><span class="w"> </span><span class="nf">set_sources_object</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">Sources</span><span class="o">&gt;</span><span class="w"> </span><span class="n">sources</span><span class="p">);</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="c1">// Cache tuning</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="kt">void</span><span class="w"> </span><span class="nf">set_source_cache_capacity</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">capacity</span><span class="p">);</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="kt">void</span><span class="w"> </span><span class="nf">clear_source_cache</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kt">bool</span><span class="w">   </span><span class="nf">has_sources</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="c1">// Delegates to Sources::read_source() — works in both modes</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">std</span><span class="o">::</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w"> </span><span class="n">read_source</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">string_id</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="c1">// Direct object access for advanced operations</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">Sources</span><span class="o">&gt;</span><span class="w"> </span><span class="n">get_sources_object</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="kt">void</span><span class="w"> </span><span class="nf">set_sources_object</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">Sources</span><span class="o">&gt;</span><span class="w"> </span><span class="n">sources</span><span class="p">);</span>
 </code></pre></div>
+<p>Cache tuning moved to the <code>Sources</code> object — <code>EDS::set_source_cache_capacity()</code> and
+<code>EDS::clear_source_cache()</code> were removed:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">eds</span><span class="p">.</span><span class="n">get_sources_object</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">set_cache_capacity</span><span class="p">(</span><span class="mi">1&#39;000&#39;000</span><span class="p">);</span><span class="w">   </span><span class="c1">// ~40 MB</span>
+</code></pre></div>
+<p><code>get_sources()</code> throws when the EDS was constructed from a stream; <code>read_source(idx)</code> works
+regardless. In parallel code always use <code>read_source()</code>, never <code>read_source_ref()</code> — the
+reference points into the LRU cache and another thread can evict it.</p>
 <h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">EDS</span><span class="o">::</span><span class="n">OutputFormat</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">FULL</span><span class="p">,</span><span class="w"> </span><span class="n">COMPACT</span><span class="w"> </span><span class="p">};</span>
 <a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
@@ -1978,10 +1974,10 @@ cleaned up automatically on completion or exception.</p>
 <a id="__codelineno-32-9" name="__codelineno-32-9" href="#__codelineno-32-9"></a>
 <a id="__codelineno-32-10" name="__codelineno-32-10" href="#__codelineno-32-10"></a><span class="w">    </span><span class="c1">// --- Load EDS with sources ---</span>
 <a id="__codelineno-32-11" name="__codelineno-32-11" href="#__codelineno-32-11"></a><span class="w">    </span><span class="n">EDS</span><span class="w"> </span><span class="n">eds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EDS</span><span class="o">::</span><span class="n">load</span><span class="p">(</span><span class="s">&quot;data.eds&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;data.seds&quot;</span><span class="p">);</span>
-<a id="__codelineno-32-12" name="__codelineno-32-12" href="#__codelineno-32-12"></a><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">eds</span><span class="p">.</span><span class="n">get_statistics</span><span class="p">();</span>
+<a id="__codelineno-32-12" name="__codelineno-32-12" href="#__codelineno-32-12"></a><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">meta</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">eds</span><span class="p">.</span><span class="n">get_metadata</span><span class="p">();</span>
 <a id="__codelineno-32-13" name="__codelineno-32-13" href="#__codelineno-32-13"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Symbols: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">eds</span><span class="p">.</span><span class="n">length</span><span class="p">()</span>
 <a id="__codelineno-32-14" name="__codelineno-32-14" href="#__codelineno-32-14"></a><span class="w">              </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Strings: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">eds</span><span class="p">.</span><span class="n">cardinality</span><span class="p">()</span>
-<a id="__codelineno-32-15" name="__codelineno-32-15" href="#__codelineno-32-15"></a><span class="w">              </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Min context: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">stats</span><span class="p">.</span><span class="n">min_context_length</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<a id="__codelineno-32-15" name="__codelineno-32-15" href="#__codelineno-32-15"></a><span class="w">              </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Min context: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">meta</span><span class="p">.</span><span class="n">min_context_length</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 <a id="__codelineno-32-16" name="__codelineno-32-16" href="#__codelineno-32-16"></a>
 <a id="__codelineno-32-17" name="__codelineno-32-17" href="#__codelineno-32-17"></a><span class="w">    </span><span class="c1">// --- Stream first 5 symbols ---</span>
 <a id="__codelineno-32-18" name="__codelineno-32-18" href="#__codelineno-32-18"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">min</span><span class="p">(</span><span class="kt">size_t</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span><span class="w"> </span><span class="n">eds</span><span class="p">.</span><span class="n">length</span><span class="p">());</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -2063,7 +2059,7 @@ cleaned up automatically on completion or exception.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

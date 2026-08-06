@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -736,6 +736,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Iterative Algorithm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-chains-rather-than-pairs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why chains rather than pairs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1084,6 +1101,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Iterative Algorithm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-chains-rather-than-pairs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why chains rather than pairs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1325,45 +1359,66 @@ internal common segment has length ≥ l:
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>merge(S1, S2) = {aᵢbⱼ : intersect(src(aᵢ), src(bⱼ)) ≠ ∅}
 </code></pre></div></p>
 <p>The merged sources of each result string = <code>intersect(src(aᵢ), src(bⱼ))</code>.</p>
-<p>This preserves only biologically valid haplotype paths and prevents the
-Cartesian explosion common in real population data.</p>
+<p><strong>How much this prunes depends entirely on the source model.</strong> When each path takes exactly
+one alternative per symbol — a haploid organism, a phased haplotype, an inbred line — the
+surviving combinations carry <em>disjoint</em> path sets, so a merged symbol can never hold more
+strings than there are paths, and LINEAR is genuinely linear. When sources are sample-level
+and diploid, a heterozygous sample is present in <em>both</em> the reference and the alt string, so
+intersections rarely go empty and a chain of k adjacent degenerate sites can survive up to
+2^k combinations. <code>vcf2eds</code> produces the second kind. See <a href="../performance/">performance.md</a>.</p>
 <h3 id="iterative-algorithm">Iterative Algorithm<a class="headerlink" href="#iterative-algorithm" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Iteration:
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  1. Load EDS as METADATA_ONLY
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  2. Scan symbols left-to-right, greedily select non-overlapping merge pairs:
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>       a. Common symbol with length &lt; l flanked by degenerates on both sides
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>          → merge it with the adjacent degenerate
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>       b. Two consecutive degenerate symbols D D (implicit zero-length common
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>          between them, length 0 &lt; l)
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>          → merge the two degenerates into one (Cartesian / LINEAR product)
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  3. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  4. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>                                       write to temp file
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>  5. Point the input to the new temp file
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>  6. Repeat until no merges are needed
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  2. select_merge_groups(): scan left-to-right; where a pair needs merging,
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>     extend the chain while consecutive pairs also need merging, and emit the
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>     whole run as one MergeGroup{start, count}
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  3. compute_merge_metadata(groups)  ← no string data, only sizes + sources
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  4. MergeStreamWriter consumes each batch and writes it out immediately
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  5. Point the input to the new temp file
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  6. Repeat until no merges are needed
 </code></pre></div>
-<!-- > **Note (unverified):** Convergence figures below are based on synthetic data only —
-> no experiments on real genomic data have been run yet. -->
-
-<p>Worst case: a sequence of n consecutive degenerate symbols <code>D D D … D</code>.
-Each greedy pass can only pair non-overlapping neighbours, so the number
-of D's halves each iteration → <strong>O(log n) iterations</strong>.</p>
-<p>The same bound applies to a long alternating <code>D c D c D</code> chain where every
-common symbol c has length &lt; l: each c must first be absorbed into a
-neighbour (creating a new D D adjacency), then those D's must be merged.</p>
+<p>A pair <code>(i, i+1)</code> needs merging when the two symbols are both degenerate, both common, or
+one is a common symbol whose context is shorter than <code>l</code>.</p>
+<p><strong>Short context is measured over the whole contiguous run of common symbols</strong> a position
+belongs to (tracked by <code>CtxRunCursor</code> during the same left-to-right walk), not over a single
+symbol. VCF- and MSA-derived EDS fragment one deterministic stretch into several adjacent
+common symbols; measuring a single fragment made the greedy chain bridge across an otherwise
+long-enough context and over-merge. It also restores the idempotence invariant
+<code>T_B(EDS) == T_B(T_A(EDS))</code> for <code>A &lt; B</code>, which the incremental experiment runner relies on.</p>
+<p><strong>Note the boundary exception:</strong> <code>needs_merge()</code> skips the first and last symbol, so a
+leading or trailing common symbol shorter than <code>l</code> is never merged and survives into the
+output. The l-EDS guarantee is therefore <em>interior</em>-only.</p>
+<h4 id="why-chains-rather-than-pairs">Why chains rather than pairs<a class="headerlink" href="#why-chains-rather-than-pairs" title="Permanent link">&para;</a></h4>
+<p>Selection emits maximal chains, not non-overlapping pairs. The older pairwise selection
+resolved a chain of L positions in L−1 full-file passes, giving the O(log n) iteration bound
+this document used to quote. Chain selection resolves each chain in <strong>one</strong> pass, and real
+data now converges in 1–2 iterations: 2 on every 1000 Genomes chromosome at every l from 5 to
+100, 1 on M. tuberculosis and on synthetic data. Measured throughput improvement at the time
+of the change: 2.1–2.4×.</p>
+<p>The worst case is unchanged in principle — an adversarial alternating chain still needs
+repeated passes — but it is not what genomic data looks like.</p>
 <h3 id="compute_merge_metadata">compute_merge_metadata<a class="headerlink" href="#compute_merge_metadata" title="Permanent link">&para;</a></h3>
-<p>Uses only metadata (string lengths, source sets) to determine, for each
-merge pair:
-- The lengths of all merged result strings (sum of pair lengths)
-- The source sets of all merged result strings (set intersections)
-- Whether the merge produces an empty result (all intersections are empty)</p>
+<p>Uses only metadata (string lengths, source sets) to determine, per group, by an iterative
+fold from position p₀ through p_{k-1}:</p>
+<ul>
+<li>the lengths of all merged result strings (addition only — no concatenation),</li>
+<li>their source sets (intersections),</li>
+<li><code>valid_indices_flat[m * group_count + k]</code>, recording which alternative of position
+  <code>group_start + k</code> contributes to output string <code>m</code>.</li>
+</ul>
 <p>This step reads <strong>zero bytes of string data</strong> from disk.</p>
+<p>Source intersection uses a 64-bit bitset fast path when the path universe fits in [1, 63],
+falling back to <code>PathSet</code> otherwise. A <code>PathSet</code> beginning with 0 is a <em>complement</em> — <code>{0}</code>
+is universal, <code>{0,e1,e2}</code> is every path except e1 and e2 — and the fast path expands
+complements against a universe masked to <code>num_paths</code>. Collapsing both spellings to "all
+paths" was a bug (fixed 20d8ff1) that stopped the fold pruning entirely.</p>
 <h3 id="stream_merged_symbols_to_file">stream_merged_symbols_to_file<a class="headerlink" href="#stream_merged_symbols_to_file" title="Permanent link">&para;</a></h3>
-<p>For each merged result:
-1. Read symbol i's strings via <code>read_symbol(i)</code> (one seek + read).
-2. Read symbol j's strings via <code>read_symbol(j)</code>.
-3. Concatenate <code>strings_i[a] + strings_j[b]</code> directly into the output stream.
-4. Flush after each symbol.</p>
+<p>For each group:
+1. Read all <code>count</code> symbols on demand via <code>read_symbol()</code>.
+2. Build output string <code>m</code> by concatenating <code>syms[k][valid_indices_flat[m*count + k]]</code>
+   for k = 0 … count−1.
+3. Write directly to the output stream and flush; positions inside the group other than the
+   start are marked skipped and emit nothing.</p>
 <p>For unmodified symbol ranges (not involved in any merge), both the raw EDS
 bytes and the raw SEDS bytes are bulk-copied — one seek + sequential read for
 the entire run — via <code>EDS::copy_symbol_range_to_stream()</code> and
@@ -1565,7 +1620,7 @@ at least one EDS path, making them suitable for testing downstream pattern searc
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

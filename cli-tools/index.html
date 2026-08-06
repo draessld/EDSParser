@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -716,6 +716,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-block-size-bounding-peak-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --block-size — bounding peak memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#-source-format-shrinking-the-output-sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --source-format — shrinking the output sources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#-max-memory-estimate-memory-admission-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --max-memory / --estimate-memory — admission control
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1339,6 +1378,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-block-size-bounding-peak-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --block-size — bounding peak memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#-source-format-shrinking-the-output-sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --source-format — shrinking the output sources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#-max-memory-estimate-memory-admission-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --max-memory / --estimate-memory — admission control
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1792,8 +1870,25 @@
 <td><code>10000000</code></td>
 <td>Genomic window size in bases; <code>0</code> = load all (legacy, high memory)</td>
 </tr>
+<tr>
+<td><code>--keep-eds</code></td>
+<td>flag</td>
+<td>off</td>
+<td>With <code>-l</code>, also write the intermediate stage-1 EDS/SEDS instead of discarding them (no-op without <code>-l</code>)</td>
+</tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong><code>-z</code> is ignored in l-EDS mode.</strong> The two-stage VCF→EDS→l-EDS pipeline writes dense text
+SEDS, so <code>-z</code> combined with <code>-l</code> prints a warning and falls back rather than producing a
+mislabelled file. The kept <code>--keep-eds</code> output has the same limitation for its SEDS; its
+<code>.eds</code> is byte-identical to a plain no-<code>-l</code> run.</p>
+<p><strong>Sources are sample-level, not haplotype-level.</strong> Each diploid sample becomes one path,
+and phase is ignored (<code>0/1</code> is treated like <code>0|1</code>), so a heterozygous sample is recorded in
+<em>both</em> the reference and the alt string at a site. Traversing one path therefore does not
+reconstruct a single physical chromosome, and <code>num_paths</code> counts samples rather than
+haplotypes. This also drives l-EDS merge cost — see <a href="../performance/">performance.md</a>.</p>
+</blockquote>
 <h3 id="variant-support">Variant Support<a class="headerlink" href="#variant-support" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1923,8 +2018,93 @@ whether a source file is provided.</p>
 <td><code>1</code></td>
 <td>Parallel worker threads</td>
 </tr>
+<tr>
+<td><code>--source-format</code></td>
+<td>enum</td>
+<td><code>seds</code></td>
+<td>Output sources format: <code>seds</code>, <code>seds-sparse</code>, <code>edz</code>, <code>edz-sparse</code>, <code>edz-compressed</code></td>
+</tr>
+<tr>
+<td><code>--block-size</code></td>
+<td>size</td>
+<td>—</td>
+<td>Merge in blocks of ~N EDS bytes (<code>200M</code>, <code>1G</code>) so peak RAM is bounded by the block, not the file</td>
+</tr>
+<tr>
+<td><code>--max-memory</code></td>
+<td>size</td>
+<td>—</td>
+<td>Refuse the transform with <strong>exit code 3</strong> if the predicted peak exceeds this budget</td>
+</tr>
+<tr>
+<td><code>--estimate-memory</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Print a machine-readable estimate and exit 0 without doing any work</td>
+</tr>
 </tbody>
 </table>
+<h4 id="-block-size-bounding-peak-memory"><code>--block-size</code> — bounding peak memory<a class="headerlink" href="#-block-size-bounding-peak-memory" title="Permanent link">&para;</a></h4>
+<p>Cuts land only where no merge can cross — a run of common symbols totalling ≥ <code>-l</code> — so the
+output is <strong>byte-identical</strong> to a whole-file run, both <code>.leds</code> and <code>.seds</code>. Measured on a
+949 MB / 31.7 M-symbol input at <code>-l 10</code>: whole file 2 380 MB, <code>200M</code> 1 071 MB, <code>50M</code> 644 MB,
+<code>10M</code> 540 MB linear and <strong>80 MB cartesian</strong>. Cost is roughly 2.7× wall clock.</p>
+<p>Cartesian block mode is a true ceiling, independent of file size. Linear mode floors at the
+whole-file sources index (8 bytes per string), so blocks below ~50 MB stop helping. When no
+barrier exists at a block boundary — variation too dense, or <code>-l</code> larger than every context —
+it warns and falls back to a whole-file run.</p>
+<h4 id="-source-format-shrinking-the-output-sources"><code>--source-format</code> — shrinking the output sources<a class="headerlink" href="#-source-format-shrinking-the-output-sources" title="Permanent link">&para;</a></h4>
+<p>Non-SEDS formats are produced by re-encoding the merged sources once at the end, so peak
+<em>disk</em> still includes the dense text SEDS; only the final artifact shrinks. All EDZ variants
+are written as <code>&lt;output&gt;.edz</code> and are self-describing via header flags. <code>edz-compressed</code>
+requires a zstd-enabled build and is validated before the merge starts.</p>
+<p>Pick by path count — the ranking inverts:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Paths</th>
+<th style="text-align: right;">SEDS</th>
+<th style="text-align: right;"><code>gzip -6</code> of SEDS</th>
+<th style="text-align: right;"><code>edz-sparse</code></th>
+<th style="text-align: right;"><code>edz-compressed</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">440 KB</td>
+<td style="text-align: right;"><strong>58 KB</strong></td>
+<td style="text-align: right;">510 KB</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">500</td>
+<td style="text-align: right;">9.4 MiB</td>
+<td style="text-align: right;">2.9 MiB</td>
+<td style="text-align: right;">4.5 MiB</td>
+<td style="text-align: right;"><strong>2.0 MiB</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">2 504</td>
+<td style="text-align: right;">16.3 MiB</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">7.8 MiB</td>
+<td style="text-align: right;"><strong>2.7 MiB</strong></td>
+</tr>
+</tbody>
+</table>
+<p>At 100 paths sparse EDZ is <em>larger</em> than the text it replaces. EDZ only pays off from a few
+hundred paths up, and the ratio improves as path count grows.</p>
+<h4 id="-max-memory-estimate-memory-admission-control"><code>--max-memory</code> / <code>--estimate-memory</code> — admission control<a class="headerlink" href="#-max-memory-estimate-memory-admission-control" title="Permanent link">&para;</a></h4>
+<p><code>--estimate-memory</code> emits <code>KEY=BYTES</code> lines — <code>MERGE_PEAK_BYTES</code>, <code>EDS_INDEX_BYTES</code>,
+<code>SOURCES_INDEX_BYTES</code>, <code>RECOMMENDED_BUDGET_BYTES</code> (the one to schedule on), <code>MERGE_GROUPS</code>,
+<code>PATH_CAP</code>, <code>SATURATED</code>, <code>BLOCK_SIZE_BYTES</code> — and honours <code>--block-size</code>.</p>
+<blockquote>
+<p><strong>Do not use these for admission control on heterozygous diploid VCF data.</strong> The estimator
+caps each group at <code>num_paths</code>, which is invalid when sources are sample-level: on 1000G
+chr7 at l=5 it predicted 0.64 GiB against an actual peak of 28.3 GiB. It is calibrated and
+reliable on haploid or low-heterozygosity input.</p>
+</blockquote>
 <h3 id="auto-detection-of-merging-strategy">Auto-Detection of Merging Strategy<a class="headerlink" href="#auto-detection-of-merging-strategy" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2364,7 +2544,7 @@ a <code>.eds</code> and a companion <code>.seds</code> file.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

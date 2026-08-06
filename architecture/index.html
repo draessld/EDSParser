@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1276,7 +1276,7 @@ files) rather than a <code>base_positions</code> sentinel.</p>
 temp-file chaining architecture designed to handle 100 GB+ inputs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Input.eds (METADATA_ONLY)
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    │
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    ▼  Iteration 1: collect merge pairs with context &lt; l
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    ▼  Iteration 1: select maximal merge groups (chains)
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>temp0.eds (written via stream_merged_symbols_to_file)
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    │
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    ▼  Iteration 2: check remaining short contexts
@@ -1297,7 +1297,7 @@ cleaned up automatically on normal exit or exception.</p>
 <h3 id="metadata-only-merge-calculation">Metadata-Only Merge Calculation<a class="headerlink" href="#metadata-only-merge-calculation" title="Permanent link">&para;</a></h3>
 <p>Before writing any strings, <code>compute_merge_metadata()</code> calculates — using
 only the metadata (string lengths and source sets, no actual characters):
-- Which symbol pairs will be merged in this iteration
+- Which alternatives of each group's positions combine (<code>valid_indices_flat</code>)
 - The merged string lengths (addition, no concatenation)
 - The merged source sets (set intersections)</p>
 <p>This produces a list of <code>MergeMetadata</code> structs. Only then does
@@ -1305,12 +1305,18 @@ only the metadata (string lengths and source sets, no actual characters):
 in-place, and write directly to the output stream (no intermediate
 <code>ostringstream</code>).</p>
 <h3 id="batch-processing">Batch Processing<a class="headerlink" href="#batch-processing" title="Permanent link">&para;</a></h3>
-<p>Merge pairs are processed in batches (default 1 000 pairs per batch):
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>for each batch of 1000 pairs:
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    compute_merge_metadata(batch)   → ~10 MB metadata
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    stream_merged_symbols_to_file() → reads, merges, writes
+<p>Merge groups are processed in batches (default 1 000 groups per batch):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>for each batch of 1000 groups:
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    compute_merge_metadata(batch)   → metadata only, no string data
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    MergeStreamWriter::add_batch()  → reads, merges, writes immediately
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    free metadata                   → back to baseline memory
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>MergeStreamWriter::finish()         → drains the trailing unmodified tail
 </code></pre></div></p>
+<p><code>MergeStreamWriter</code> is stateful and consumes each batch as it is produced, so retained
+<code>MergeMetadata</code> is capped at one batch rather than accumulating across the iteration —
+byte-identical output, ~23% lower peak RSS on cartesian runs with many moderate groups.</p>
+<p>Note this batching bounds the <em>merge metadata</em>, not the per-symbol index: without
+<code>--block-size</code>, peak RSS is still linear in input symbols (~74 bytes each).</p>
 <hr />
 <h2 id="pipe-streaming-vcf-l-eds-direct">Pipe Streaming (VCF → l-EDS Direct)<a class="headerlink" href="#pipe-streaming-vcf-l-eds-direct" title="Permanent link">&para;</a></h2>
 <p>For the <code>vcf2eds -l</code> pipeline, two stages would normally require a
@@ -1489,7 +1495,7 @@ classifies the transformation into three risk tiers:</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
