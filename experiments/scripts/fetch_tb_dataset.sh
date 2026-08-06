@@ -98,15 +98,54 @@ head -n "$N" all_acc.txt > "acc_${N}.txt"
 echo "=== panel of $N isolates (of $avail available) ==="
 
 # ── stage 3: assemblies ──────────────────────────────────────────────────────
+# Downloaded in chunks rather than one request. A single archive for the whole
+# 1141-genome panel is ~4.9 GB, and one timeout, dropped connection or full disk
+# then loses the entire download — which is how the first 1141 attempt failed,
+# while the 400-assembly request for panel 500 went through. Chunking caps peak
+# disk at one archive, lets each chunk retry independently, and makes an
+# interrupted run resume at chunk granularity.
+CHUNK="${CHUNK:-150}"          # ~650 MB per archive
+RETRIES="${RETRIES:-3}"
+
 missing=$(while read -r a; do
               find asm -path "*${a}*" -name '*.fna' -print -quit 2>/dev/null | grep -q . || echo "$a"
           done < "acc_${N}.txt")
 if [[ -n "$missing" ]]; then
-    echo "=== downloading $(wc -l <<<"$missing") assemblies (~4.5 MB each) ==="
+    n_missing=$(wc -l <<<"$missing")
+    need_mb=$(( n_missing * 5 ))
+    free_mb=$(df -Pm . | awk 'NR==2{print $4}')
+    echo "=== downloading $n_missing assemblies (~4.5 MB each, ~${need_mb} MB; ${free_mb} MB free) ==="
+    (( free_mb < need_mb + 1024 )) &&
+        echo "    WARNING: free space is tight — the pool needs ~${need_mb} MB plus room for EDS output" >&2
+
     printf '%s\n' "$missing" > acc_missing.txt
-    datasets download genome accession --inputfile acc_missing.txt \
-        --include genome --filename mtb.zip >/dev/null || exit 1
-    unzip -qo mtb.zip -d asm && rm -f mtb.zip acc_missing.txt
+    split -l "$CHUNK" -d acc_missing.txt .chunk_
+    failed_chunks=0
+    for chunk in .chunk_*; do
+        got=0
+        for attempt in $(seq "$RETRIES"); do
+            # datasets reports failures on stdout, so keep both streams.
+            if datasets download genome accession --inputfile "$chunk" \
+                   --include genome --filename chunk.zip >chunk.err 2>&1 \
+               && unzip -qo chunk.zip -d asm 2>>chunk.err; then
+                got=1; break
+            fi
+            echo "    chunk ${chunk#.chunk_} attempt $attempt/$RETRIES failed: $(grep -iE 'error|fail|no such|denied|space' chunk.err | tail -1)" >&2
+            rm -f chunk.zip
+            sleep $(( attempt * 5 ))
+        done
+        rm -f chunk.zip chunk.err
+        if (( got )); then
+            echo "    chunk ${chunk#.chunk_}: $(wc -l < "$chunk") assemblies"
+            rm -f "$chunk"
+        else
+            failed_chunks=$(( failed_chunks + 1 ))
+        fi
+    done
+    rm -f acc_missing.txt
+    (( failed_chunks )) &&
+        echo "    $failed_chunks chunk(s) still missing — the panel will be built from what arrived;" \
+             "re-run to retry them" >&2
 fi
 
 # ── stage 4: per-isolate variant calls ───────────────────────────────────────
@@ -153,6 +192,11 @@ comm -12 <(sort want.txt) have.txt > "merge_list_${N}.txt"
 called=$(wc -l < "merge_list_${N}.txt")
 rm -f want.txt have.txt
 (( called )) || { echo "no variant calls available to merge" >&2; exit 1; }
+# The directory is named for the requested size, but the panel is only as big as
+# the isolates that actually made it through download and calling. Say so — the
+# path count is what every downstream number depends on.
+(( called < N )) &&
+    echo "    WARNING: panel_${N} holds $called isolates, not $N — re-run to fill the gap" >&2
 
 echo "=== merging $called isolates → panel_${N}/vcf/${CHROM}.vcf ==="
 bcftools merge -0 -l "merge_list_${N}.txt" -Ov 2>/dev/null \

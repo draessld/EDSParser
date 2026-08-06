@@ -62,7 +62,16 @@ echo
 
 for n in $PANELS; do
     echo "######## panel $n ########"
-    bash "$FETCH" "$BASE" "$n" || { echo "[panel $n] fetch FAILED — skipping" >&2; continue; }
+    mkdir -p "$BASE/logs"
+    flog="$BASE/logs/fetch_panel_${n}.log"
+    bash "$FETCH" "$BASE" "$n" 2>&1 | tee "$flog"
+    if (( ${PIPESTATUS[0]} != 0 )); then   # tee's status would always be 0
+        # Without this the reason vanishes: the driver used to report only that
+        # fetch failed, leaving the actual download error unseen.
+        echo "[panel $n] fetch FAILED — last lines of $flog:" >&2
+        tail -15 "$flog" | sed 's/^/    /' >&2
+        continue
+    fi
 
     # panel_<n> may be capped below the request when fewer genomes exist; find it.
     panel="$BASE/panel_${n}"
