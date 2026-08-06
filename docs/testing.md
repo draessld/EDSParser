@@ -54,9 +54,10 @@ void test_basic_parse() {
     EDS eds = EDS::from_string("ACGT{A,C}GT");
     assert(eds.length() == 3);
     assert(eds.cardinality() == 4);   // ACGT, A, C, GT
-    assert(!eds.get_is_degenerate()[0]);
-    assert(eds.get_is_degenerate()[1]);
-    assert(!eds.get_is_degenerate()[2]);
+    const auto& degen = eds.get_metadata().is_degenerate;
+    assert(!degen[0]);
+    assert(degen[1]);
+    assert(!degen[2]);
 }
 
 int main() {

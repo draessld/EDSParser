@@ -100,55 +100,80 @@ merge(S1, S2) = {aᵢbⱼ : intersect(src(aᵢ), src(bⱼ)) ≠ ∅}
 
 The merged sources of each result string = `intersect(src(aᵢ), src(bⱼ))`.
 
-This preserves only biologically valid haplotype paths and prevents the
-Cartesian explosion common in real population data.
+**How much this prunes depends entirely on the source model.** When each path takes exactly
+one alternative per symbol — a haploid organism, a phased haplotype, an inbred line — the
+surviving combinations carry *disjoint* path sets, so a merged symbol can never hold more
+strings than there are paths, and LINEAR is genuinely linear. When sources are sample-level
+and diploid, a heterozygous sample is present in *both* the reference and the alt string, so
+intersections rarely go empty and a chain of k adjacent degenerate sites can survive up to
+2^k combinations. `vcf2eds` produces the second kind. See [performance.md](performance.md).
 
 ### Iterative Algorithm
 
 ```
 Iteration:
   1. Load EDS as METADATA_ONLY
-  2. Scan symbols left-to-right, greedily select non-overlapping merge pairs:
-       a. Common symbol with length < l flanked by degenerates on both sides
-          → merge it with the adjacent degenerate
-       b. Two consecutive degenerate symbols D D (implicit zero-length common
-          between them, length 0 < l)
-          → merge the two degenerates into one (Cartesian / LINEAR product)
-  3. compute_merge_metadata(pairs)  ← no string data, only sizes + sources
-  4. stream_merged_symbols_to_file() ← read strings on-demand, concatenate,
-                                       write to temp file
+  2. select_merge_groups(): scan left-to-right; where a pair needs merging,
+     extend the chain while consecutive pairs also need merging, and emit the
+     whole run as one MergeGroup{start, count}
+  3. compute_merge_metadata(groups)  ← no string data, only sizes + sources
+  4. MergeStreamWriter consumes each batch and writes it out immediately
   5. Point the input to the new temp file
   6. Repeat until no merges are needed
 ```
 
-<!-- > **Note (unverified):** Convergence figures below are based on synthetic data only —
-> no experiments on real genomic data have been run yet. -->
+A pair `(i, i+1)` needs merging when the two symbols are both degenerate, both common, or
+one is a common symbol whose context is shorter than `l`.
 
-Worst case: a sequence of n consecutive degenerate symbols `D D D … D`.
-Each greedy pass can only pair non-overlapping neighbours, so the number
-of D's halves each iteration → **O(log n) iterations**.
+**Short context is measured over the whole contiguous run of common symbols** a position
+belongs to (tracked by `CtxRunCursor` during the same left-to-right walk), not over a single
+symbol. VCF- and MSA-derived EDS fragment one deterministic stretch into several adjacent
+common symbols; measuring a single fragment made the greedy chain bridge across an otherwise
+long-enough context and over-merge. It also restores the idempotence invariant
+`T_B(EDS) == T_B(T_A(EDS))` for `A < B`, which the incremental experiment runner relies on.
 
-The same bound applies to a long alternating `D c D c D` chain where every
-common symbol c has length < l: each c must first be absorbed into a
-neighbour (creating a new D D adjacency), then those D's must be merged.
+**Note the boundary exception:** `needs_merge()` skips the first and last symbol, so a
+leading or trailing common symbol shorter than `l` is never merged and survives into the
+output. The l-EDS guarantee is therefore *interior*-only.
+
+#### Why chains rather than pairs
+
+Selection emits maximal chains, not non-overlapping pairs. The older pairwise selection
+resolved a chain of L positions in L−1 full-file passes, giving the O(log n) iteration bound
+this document used to quote. Chain selection resolves each chain in **one** pass, and real
+data now converges in 1–2 iterations: 2 on every 1000 Genomes chromosome at every l from 5 to
+100, 1 on M. tuberculosis and on synthetic data. Measured throughput improvement at the time
+of the change: 2.1–2.4×.
+
+The worst case is unchanged in principle — an adversarial alternating chain still needs
+repeated passes — but it is not what genomic data looks like.
 
 ### compute_merge_metadata
 
-Uses only metadata (string lengths, source sets) to determine, for each
-merge pair:
-- The lengths of all merged result strings (sum of pair lengths)
-- The source sets of all merged result strings (set intersections)
-- Whether the merge produces an empty result (all intersections are empty)
+Uses only metadata (string lengths, source sets) to determine, per group, by an iterative
+fold from position p₀ through p_{k-1}:
+
+- the lengths of all merged result strings (addition only — no concatenation),
+- their source sets (intersections),
+- `valid_indices_flat[m * group_count + k]`, recording which alternative of position
+  `group_start + k` contributes to output string `m`.
 
 This step reads **zero bytes of string data** from disk.
 
+Source intersection uses a 64-bit bitset fast path when the path universe fits in [1, 63],
+falling back to `PathSet` otherwise. A `PathSet` beginning with 0 is a *complement* — `{0}`
+is universal, `{0,e1,e2}` is every path except e1 and e2 — and the fast path expands
+complements against a universe masked to `num_paths`. Collapsing both spellings to "all
+paths" was a bug (fixed 20d8ff1) that stopped the fold pruning entirely.
+
 ### stream_merged_symbols_to_file
 
-For each merged result:
-1. Read symbol i's strings via `read_symbol(i)` (one seek + read).
-2. Read symbol j's strings via `read_symbol(j)`.
-3. Concatenate `strings_i[a] + strings_j[b]` directly into the output stream.
-4. Flush after each symbol.
+For each group:
+1. Read all `count` symbols on demand via `read_symbol()`.
+2. Build output string `m` by concatenating `syms[k][valid_indices_flat[m*count + k]]`
+   for k = 0 … count−1.
+3. Write directly to the output stream and flush; positions inside the group other than the
+   start are marked skipped and emit nothing.
 
 For unmodified symbol ranges (not involved in any merge), both the raw EDS
 bytes and the raw SEDS bytes are bulk-copied — one seek + sequential read for

@@ -141,7 +141,7 @@ temp-file chaining architecture designed to handle 100 GB+ inputs:
 ```
 Input.eds (METADATA_ONLY)
     │
-    ▼  Iteration 1: collect merge pairs with context < l
+    ▼  Iteration 1: select maximal merge groups (chains)
 temp0.eds (written via stream_merged_symbols_to_file)
     │
     ▼  Iteration 2: check remaining short contexts
@@ -167,7 +167,7 @@ cleaned up automatically on normal exit or exception.
 
 Before writing any strings, `compute_merge_metadata()` calculates — using
 only the metadata (string lengths and source sets, no actual characters):
-- Which symbol pairs will be merged in this iteration
+- Which alternatives of each group's positions combine (`valid_indices_flat`)
 - The merged string lengths (addition, no concatenation)
 - The merged source sets (set intersections)
 
@@ -178,13 +178,21 @@ in-place, and write directly to the output stream (no intermediate
 
 ### Batch Processing
 
-Merge pairs are processed in batches (default 1 000 pairs per batch):
+Merge groups are processed in batches (default 1 000 groups per batch):
 ```
-for each batch of 1000 pairs:
-    compute_merge_metadata(batch)   → ~10 MB metadata
-    stream_merged_symbols_to_file() → reads, merges, writes
+for each batch of 1000 groups:
+    compute_merge_metadata(batch)   → metadata only, no string data
+    MergeStreamWriter::add_batch()  → reads, merges, writes immediately
     free metadata                   → back to baseline memory
+MergeStreamWriter::finish()         → drains the trailing unmodified tail
 ```
+
+`MergeStreamWriter` is stateful and consumes each batch as it is produced, so retained
+`MergeMetadata` is capped at one batch rather than accumulating across the iteration —
+byte-identical output, ~23% lower peak RSS on cartesian runs with many moderate groups.
+
+Note this batching bounds the *merge metadata*, not the per-symbol index: without
+`--block-size`, peak RSS is still linear in input symbols (~74 bytes each).
 
 ---
 

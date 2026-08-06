@@ -83,6 +83,18 @@ vcf2eds -i <variants.vcf> --reference <genome.fasta> [OPTIONS]
 | `-z, --edz` | flag | off | Write the source file in binary EDZ format instead of text SEDS (both sparse) |
 | `-l, --context-length` | uint | — | If set, produces l-EDS |
 | `--block-size` | uint | `10000000` | Genomic window size in bases; `0` = load all (legacy, high memory) |
+| `--keep-eds` | flag | off | With `-l`, also write the intermediate stage-1 EDS/SEDS instead of discarding them (no-op without `-l`) |
+
+> **`-z` is ignored in l-EDS mode.** The two-stage VCF→EDS→l-EDS pipeline writes dense text
+> SEDS, so `-z` combined with `-l` prints a warning and falls back rather than producing a
+> mislabelled file. The kept `--keep-eds` output has the same limitation for its SEDS; its
+> `.eds` is byte-identical to a plain no-`-l` run.
+
+> **Sources are sample-level, not haplotype-level.** Each diploid sample becomes one path,
+> and phase is ignored (`0/1` is treated like `0|1`), so a heterozygous sample is recorded in
+> *both* the reference and the alt string at a site. Traversing one path therefore does not
+> reconstruct a single physical chromosome, and `num_paths` counts samples rather than
+> haplotypes. This also drives l-EDS merge cost — see [performance.md](performance.md).
 
 ### Variant Support
 
@@ -156,6 +168,51 @@ eds2leds -i <data.eds> -l <N> [OPTIONS]
 | `-z, --edz` | path | — | Input source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with `-s`) |
 | `--full` | flag | off | Force full bracket format (default: compact) |
 | `-t, --threads` | int | `1` | Parallel worker threads |
+| `--source-format` | enum | `seds` | Output sources format: `seds`, `seds-sparse`, `edz`, `edz-sparse`, `edz-compressed` |
+| `--block-size` | size | — | Merge in blocks of ~N EDS bytes (`200M`, `1G`) so peak RAM is bounded by the block, not the file |
+| `--max-memory` | size | — | Refuse the transform with **exit code 3** if the predicted peak exceeds this budget |
+| `--estimate-memory` | flag | off | Print a machine-readable estimate and exit 0 without doing any work |
+
+#### `--block-size` — bounding peak memory
+
+Cuts land only where no merge can cross — a run of common symbols totalling ≥ `-l` — so the
+output is **byte-identical** to a whole-file run, both `.leds` and `.seds`. Measured on a
+949 MB / 31.7 M-symbol input at `-l 10`: whole file 2 380 MB, `200M` 1 071 MB, `50M` 644 MB,
+`10M` 540 MB linear and **80 MB cartesian**. Cost is roughly 2.7× wall clock.
+
+Cartesian block mode is a true ceiling, independent of file size. Linear mode floors at the
+whole-file sources index (8 bytes per string), so blocks below ~50 MB stop helping. When no
+barrier exists at a block boundary — variation too dense, or `-l` larger than every context —
+it warns and falls back to a whole-file run.
+
+#### `--source-format` — shrinking the output sources
+
+Non-SEDS formats are produced by re-encoding the merged sources once at the end, so peak
+*disk* still includes the dense text SEDS; only the final artifact shrinks. All EDZ variants
+are written as `<output>.edz` and are self-describing via header flags. `edz-compressed`
+requires a zstd-enabled build and is validated before the merge starts.
+
+Pick by path count — the ranking inverts:
+
+| Paths | SEDS | `gzip -6` of SEDS | `edz-sparse` | `edz-compressed` |
+|---:|---:|---:|---:|---:|
+| 100 | 440 KB | **58 KB** | 510 KB | — |
+| 500 | 9.4 MiB | 2.9 MiB | 4.5 MiB | **2.0 MiB** |
+| 2 504 | 16.3 MiB | — | 7.8 MiB | **2.7 MiB** |
+
+At 100 paths sparse EDZ is *larger* than the text it replaces. EDZ only pays off from a few
+hundred paths up, and the ratio improves as path count grows.
+
+#### `--max-memory` / `--estimate-memory` — admission control
+
+`--estimate-memory` emits `KEY=BYTES` lines — `MERGE_PEAK_BYTES`, `EDS_INDEX_BYTES`,
+`SOURCES_INDEX_BYTES`, `RECOMMENDED_BUDGET_BYTES` (the one to schedule on), `MERGE_GROUPS`,
+`PATH_CAP`, `SATURATED`, `BLOCK_SIZE_BYTES` — and honours `--block-size`.
+
+> **Do not use these for admission control on heterozygous diploid VCF data.** The estimator
+> caps each group at `num_paths`, which is invalid when sources are sample-level: on 1000G
+> chr7 at l=5 it predicted 0.64 GiB against an actual peak of 28.3 GiB. It is calibrated and
+> reliable on haploid or low-heterozygosity input.
 
 ### Auto-Detection of Merging Strategy
 

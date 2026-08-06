@@ -448,21 +448,22 @@ target_link_libraries(your_target EDSParser::EDSParser)
 #include <edsparser/formats/eds.hpp>
 #include <edsparser/transforms/eds_transforms.hpp>
 
-// Load EDS from file
-EDS eds;
-eds.load("data.eds", StorageMode::FULL);
+// Load EDS from file (streams symbols on demand; strings are not held in RAM)
+EDS eds = EDS::load("data.eds", "data.seds");
 
-// Get statistics
-auto stats = eds.get_statistics();
-std::cout << "Symbols: " << stats.total_symbols << std::endl;
+// Structure and statistics both come from the metadata
+const auto& meta = eds.get_metadata();
+std::cout << "Symbols: " << eds.length()
+          << "  Min context: " << meta.min_context_length << std::endl;
 
-// Transform to l-EDS
-transform_eds_to_leds(
-    std::ifstream("data.eds"),
-    std::ifstream("data.seds"),
-    std::ofstream("output.leds"),
-    10,  // context length
-    MergingStrategy::LINEAR
+// Transform to l-EDS (LINEAR — pass the sources to enable it)
+std::ifstream in("data.eds"), seds("data.seds");
+std::ofstream out("output.leds"), out_seds("output.seds");
+eds_to_leds_linear(
+    in, out,
+    10,          // context length
+    &seds,       // phasing input — omit for CARTESIAN
+    &out_seds
 );
 ```
 

@@ -116,15 +116,17 @@ size_t size()        const;   // N — total characters
 size_t cardinality() const;   // m — total number of strings
 
 const EDS::Metadata& get_metadata() const;
-EDS::Statistics      get_statistics() const;
 ```
+
+`get_statistics()` and `print_statistics()` were **removed**. Every field they exposed lives
+in `get_metadata()` — see the struct below.
 
 ### Metadata Structure
 
 ```cpp
 struct EDS::Metadata {
     // Index
-    std::vector<std::streampos> base_positions;  // file offset per symbol
+    std::vector<uint64_t> base_positions;         // byte offset per symbol
     std::vector<Length> symbol_sizes;             // strings-per-symbol (length n)
     std::vector<Length> string_lengths;           // char length per string (length m)
     std::vector<Length> cum_set_sizes;            // cumulative string IDs
@@ -139,34 +141,46 @@ struct EDS::Metadata {
     size_t total_change_size;
     size_t num_empty_strings;
 
-    // Position-check support (for downstream locate() implementations)
-    std::vector<Position> cum_common_positions;   // length n+1
-    std::vector<int>      cum_degenerate_counts;  // length n+1
+    // Position-check support — LAZY, see below
+    mutable std::vector<Position> cum_common_positions;   // length n+1
+    mutable std::vector<int>      cum_degenerate_counts;  // length n+1
 };
 ```
+
+Two details that matter for memory, both from 2026-07-30:
+
+- `base_positions` is `uint64_t`, **not** `std::streampos`. A `streampos` carries an
+  `mbstate_t` and occupies 16 bytes, which doubled the largest per-symbol array for no
+  benefit — EDS files are byte streams, never multibyte-stateful.
+- `cum_common_positions` and `cum_degenerate_counts` are **empty until first use**. They are
+  pure prefix sums costing 12 bytes per symbol, materialised by `ensure_position_index()` on
+  the first position lookup. Read them through that method, never directly: the l-EDS merge
+  holds an input *and* an output metadata at once and never looks up positions, so it must
+  not pay for them.
 
 ### Streaming Access
 
 These methods work in **both** FULL and METADATA_ONLY modes:
 
 ```cpp
-// Read all strings of symbol at position pos
+// Read all strings of symbol at position pos (by value — safe everywhere)
 StringSet read_symbol(Position pos) const;
 
+// Reference into the in-memory sets, avoiding the copy. Throws when the EDS
+// streams from disk — use read_symbol() there.
+const StringSet& read_symbol_ref(Position pos) const;
+
+// Byte-copy a run of symbols verbatim to a stream (the raw-copy fast path)
+void copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const;
+
 // Per-string metadata accessors (O(1), no disk I/O)
-Length        get_symbol_size(Position pos)       const;
-std::streampos get_base_position(Position pos)    const;
-Length        get_string_length(size_t string_id) const;
-const std::vector<bool>& get_is_degenerate()      const;
+Length get_symbol_size(Position pos)       const;
+Length get_string_length(size_t string_id) const;
 ```
 
-### Legacy In-Memory Access
-
-```cpp
-// Only valid when constructed from a string or stream (not from file)
-// Throws in METADATA_ONLY mode
-const std::vector<StringSet>& get_sets() const;
-```
+`get_is_degenerate()` and `get_sets()` were **removed**. Use
+`get_metadata().is_degenerate` for the former; for the latter, `read_symbol(pos)` works in
+both construction modes and is what the whole pipeline uses.
 
 ### Source Access
 
@@ -179,11 +193,18 @@ std::set<int> read_source(size_t string_id) const;
 // Direct object access for advanced operations
 std::shared_ptr<Sources> get_sources_object() const;
 void set_sources_object(std::shared_ptr<Sources> sources);
-
-// Cache tuning
-void set_source_cache_capacity(size_t capacity);
-void clear_source_cache() const;
 ```
+
+Cache tuning moved to the `Sources` object — `EDS::set_source_cache_capacity()` and
+`EDS::clear_source_cache()` were removed:
+
+```cpp
+eds.get_sources_object()->set_cache_capacity(1'000'000);   // ~40 MB
+```
+
+`get_sources()` throws when the EDS was constructed from a stream; `read_source(idx)` works
+regardless. In parallel code always use `read_source()`, never `read_source_ref()` — the
+reference points into the LRU cache and another thread can evict it.
 
 ### Output
 
@@ -487,10 +508,10 @@ int main() {
 
     // --- Load EDS with sources ---
     EDS eds = EDS::load("data.eds", "data.seds");
-    auto stats = eds.get_statistics();
+    const auto& meta = eds.get_metadata();
     std::cout << "Symbols: " << eds.length()
               << "  Strings: " << eds.cardinality()
-              << "  Min context: " << stats.min_context_length << "\n";
+              << "  Min context: " << meta.min_context_length << "\n";
 
     // --- Stream first 5 symbols ---
     for (size_t i = 0; i < std::min(size_t(5), eds.length()); ++i) {
