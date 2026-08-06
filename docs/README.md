@@ -135,8 +135,9 @@ gigabytes. The architecture was redesigned from scratch around three principles:
    number of paths times the number of strings — easily 10–100× larger than the
    EDS itself. `Sources::load()` indexes the file with a single sequential read
    (64 KB chunks, scanning for `{` characters), then serves individual source
-   sets on demand with an LRU cache (default: 10 000 entries, ~400 KB). Hit rate
-   is typically >98% because merging accesses sources in linear order.
+   sets on demand with an LRU cache (default: 10 000 entries, ~400 KB). Merging
+   accesses sources in near-linear order, so locality is high — the frequently
+   quoted ">98% hit rate" is a plausible estimate but has never been measured.
 
 3. **Iterative temp-file chaining for l-EDS.** The merge algorithm must read and
    re-read symbols across iterations. Instead of keeping all data in RAM, each
@@ -154,8 +155,20 @@ cross-product between adjacent degenerate sets explodes exponentially.
 **LINEAR** — compute only the combinations where the two strings share at least
 one source path. If haplotype 3 carries alternative `A` at set i and alternative
 `GT` at set i+1, the combination `AGT` is valid. If no haplotype carries both,
-the combination is biologically impossible and is discarded. This makes l-EDS
-merging of phased data both correct and tractable.
+the combination is biologically impossible and is discarded.
+
+**How well LINEAR prunes depends on the source model, and this is the single
+biggest performance fact about the library.** When each path takes exactly one
+alternative per symbol — a haploid organism, a phased haplotype, an inbred line —
+surviving combinations carry disjoint path sets, so a merged symbol can never hold
+more strings than there are paths. A 1 141-isolate *M. tuberculosis* panel merges
+at l=20 in about a second.
+
+When paths are *sample*-level and diploid, as `vcf2eds` produces them, a
+heterozygous sample sits in **both** the reference and the alt string at a site.
+Intersections then rarely go empty, and a chain of k adjacent degenerate sites can
+survive up to 2^k combinations. 1000 Genomes chr7 at l=5 peaks at 28 GiB for this
+reason. See [performance.md](performance.md) and TODO 1b.
 
 The practical consequence: `eds2leds` detects which strategy to use automatically.
 If a `.seds` file is supplied, LINEAR is used; without it, CARTESIAN.
@@ -216,9 +229,9 @@ lived:
 |------|------------|
 | **EDS** | Elastic-Degenerate String — sequence of sets of strings |
 | **Symbol** | One element of the EDS sequence; common (one string) or degenerate (≥2) |
-| **l-EDS** | EDS where every internal common segment has length ≥ l |
+| **l-EDS** | EDS where every internal common segment has length ≥ l. *Internal* is literal: the first and last symbol are exempt, so a sequence may begin or end with a shorter context |
 | **Context** | A common symbol; the non-variable region between two degenerate sets |
-| **Source / Path** | A concrete sequence (e.g. one haplotype) consistent with the EDS |
+| **Source / Path** | A sequence consistent with the EDS. `msa2eds` and haploid `vcf2eds` input give one path per genome; diploid `vcf2eds` input gives one path per *sample*, which is not a single chromosome walk |
 | **SEDS** | Source EDS — companion file mapping each string to its source paths |
 | **LINEAR merge** | Phasing-aware merge: keeps only combinations that share a source |
 | **CARTESIAN merge** | All-combinations merge: cross-product, no source filtering |
@@ -239,3 +252,4 @@ lived:
 | [Library API](library-api.md) | C++ public API: EDS, Sources, transform functions |
 | [Performance](performance.md) | Memory profiles, throughput numbers, tuning by dataset size |
 | [Testing](testing.md) | Unit, integration, e2e, memory stress, benchmarks |
+| [Experiments](../experiments/README.md) | Dataset builders, sweep runners, result bundles, which results are valid |

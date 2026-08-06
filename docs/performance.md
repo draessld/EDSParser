@@ -112,11 +112,19 @@ On assembly-derived data this, not the SNVs, sets the file size `[measured]`:
 | 100 isolates, alleles ≤ 50 bp | 4.3 MB | 229 bp |
 | 500 isolates, unfiltered | 689.5 MB | 73 bp |
 | 500 isolates, alleles ≤ 50 bp | 4.6 MB | 69 bp |
+| 1 141 isolates, unfiltered | 2 990 MB | 40 bp |
+| 1 141 isolates, alleles ≤ 50 bp | 5.0 MB | 39 bp |
 
-The genome is 4.41 Mb. Unfiltered, 5× the isolates costs 15× the EDS; filtered, the EDS is
-flat. On the 100-isolate panel only 4.1 M of 48.1 M characters are the common backbone —
-91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89% of it.
-See TODO 1a; `experiments/scripts/make_allele_subset.sh` applies the filter.
+The genome is 4.41 Mb. Unfiltered, 11.4× the isolates costs **65×** the EDS; filtered, the
+EDS is flat at ~5 MB. On the 100-isolate panel only 4.1 M of 48.1 M characters are the common
+backbone — 91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89%
+of it. Filtering alleles longer than 50 bp drops ~4% of sites.
+
+See TODO 1a; `experiments/scripts/make_allele_subset.sh` applies the filter, or directly:
+
+```bash
+bcftools view -e 'strlen(REF)>50 || max(strlen(ALT))>50' in.vcf -Ov -o out.vcf
+```
 
 ---
 
@@ -171,12 +179,55 @@ runs in 1.35 s at 86 MB with an average context of 996 bp.
 
 ### Real run: M. tuberculosis, linear `[measured]`
 
-Haploid, one isolate per path — the same code with the pathology removed:
+Haploid, one isolate per path — the same code with the heterozygosity pathology removed.
+Three panels, alleles filtered to ≤ 50 bp, every run converging in **1 iteration**:
 
-| Panel | l=10 | l=100 |
-|---|---|---|
-| 500 isolates, unfiltered | 9.0 s / 744 MB | 25.2 s / 2 092 MB |
-| 500 isolates, alleles ≤ 50 bp | 0.5 s / 14 MB | 3.3 s / 111 MB |
+| Panel | ctx_avg | l=10 | l=20 | l=50 | l=100 |
+|---|---:|---|---|---|---|
+| 100 isolates | 229 bp | 0.16 s / 8 MB | 0.17 s / 8 MB | 0.18 s / 9 MB | 0.20 s / 9 MB |
+| 500 isolates | 69 bp | 0.53 s / 14 MB | 0.56 s / 14 MB | 0.70 s / 15 MB | 3.31 s / 111 MB |
+| 1 141 isolates | 39 bp | 1.07 s / 20 MB | 1.16 s / 21 MB | 5.34 s / 161 MB | killed at 20 GB |
+
+### Choosing l: the ceiling scales with the panel `[measured]`
+
+Output expansion is a clean function of **l / ctx_avg**, not of l on its own. The same three
+panels, showing that ratio and the resulting `.leds`-over-`.eds` size:
+
+| Panel | ctx_avg | l=10 | l=20 | l=50 | l=100 |
+|---|---:|---|---|---|---|
+| 100 | 229 bp | 0.04 → 1.0× | 0.09 → 1.0× | 0.22 → 1.1× | 0.44 → 1.5× |
+| 500 | 69 bp | 0.14 → 1.0× | 0.29 → 1.2× | 0.72 → 2.5× | 1.44 → 13.7× |
+| 1 141 | 39 bp | 0.26 → 1.1× | 0.51 → 1.7× | 1.28 → 18.3× | 2.56 → **OOM** |
+
+Below about 0.3 the l-EDS is nearly free; around 0.5 it costs ~1.7×; past 1.0 it goes
+non-linear. The 1 141-isolate run at l=100 was killed at a 20 GB cap with 213 851 of its
+225 023 positions (95%) swept into merge groups — at l = 2.6 × ctx_avg almost no position is
+a valid context any more, so the whole file collapses into a few enormous symbols. That is
+correct behaviour for an impossible request, not a defect.
+
+**Rule of thumb: keep l ≲ ctx_avg/2.** Read `ctx_avg` off `edsparser-stats` before choosing.
+Because contexts shorten as a panel grows (229 → 69 → 39 bp here), the usable l *shrinks*
+with panel size: l=50 is comfortable at 100 isolates and impossible at 1 141.
+
+### Panel scaling and why filtering long alleles is mandatory `[measured]`
+
+Variable sites saturate — 11.4× the isolates gives 6.0× the sites (210 → 107 sites per
+isolate) — so a well-formed EDS should stay near reference size as the panel grows. Filtered,
+it does. Unfiltered, it does the opposite:
+
+| Panel | raw sequence | EDS filtered | EDS unfiltered | N characters unfiltered |
+|---|---:|---:|---:|---:|
+| 100 | 0.41 GB | 4.3 MB | 46.0 MB | 48.1 M |
+| 500 | 2.05 GB | 4.6 MB | 689.5 MB | 722.7 M |
+| 1 141 | 4.69 GB | **5.0 MB** | **2 990 MB** | **3.13 G** |
+
+The filtered EDS is 960× smaller than the raw panel at 1 141 isolates and barely grows;
+the unfiltered one reaches 3.13 billion characters for a 4.41 Mb genome (710×) and grows 65×
+across the panel range. The decisive comparison is at the output: the unfiltered 1 141-isolate
+l-EDS at l=100 is **8.2 GB against a 4.69 GB raw panel** — the index is larger than simply
+storing every genome. The filtered equivalent at l=50 is 91.6 MB, 51× smaller than the panel.
+
+Cause and workaround are described under [VCF Transformation](#what-dominates-eds-size).
 
 ### Throughput `[measured]`
 
@@ -238,18 +289,35 @@ sample-level sources break. Do not use it for admission control on het VCF input
 
 ### Format sizes `[measured]`
 
-Choose by path count — the ranking inverts:
+**The deciding factor is the allele-frequency spectrum, not the path count.** A bitset costs
+⌈paths/8⌉ bytes per entry no matter how many paths actually carry the allele, while the text
+encoding costs only as much as the members it lists. So bitsets win when most entries are
+dense (common variants, many carriers) and lose badly when entries are sparse.
+
+*VCF-derived population data, common variants:*
 
 | Paths | SEDS (text) | `seds.gz` | EDZ sparse | EDZ compressed |
 |---:|---:|---:|---:|---:|
-| 100 | 440 KB | **58 KB** | 510 KB | — |
 | 500 | 9.4 MiB | 2.9 MiB | 4.5 MiB | **2.0 MiB** |
 | 2 504 | 16.3 MiB | — | 7.8 MiB | **2.7 MiB** |
 
-At 100 paths sparse EDZ is *larger* than the text it replaces, and plain gzip beats
-everything. EDZ pays off from a few hundred paths up, where bitsets get sparse enough to
-compress well — and the ratio improves with path count, while dense EDZ gets worse
-(⌈paths/8⌉ bytes per entry). Set with `eds2leds --source-format`.
+*M. tuberculosis panels, rare variants in a clonal population:*
+
+| Paths | SEDS (text) | `seds.gz` | EDZ sparse |
+|---:|---:|---:|---:|
+| 100 | 464 KB | **57 KB** | 529 KB |
+| 500 | 2.98 MB | **345 KB** | 8.36 MB |
+| 1 141 | 7.83 MB | **1.02 MB** | 34.07 MB |
+
+The two tables point in opposite directions. On the clonal panels EDZ sparse gets steadily
+*worse* with path count — 4.4× larger than the text it replaces at 1 141 paths — because a
+variant carried by three isolates costs 143 bytes as a bitset and about 12 as `{5,88,900}`.
+Plain gzip of the text SEDS beats everything by roughly 8× at every panel size.
+
+**Guidance:** if most of your variants are rare (a clonal or highly structured population),
+keep text SEDS and compress the file. Reach for EDZ only when entries are genuinely dense.
+`edz-compressed` has not been measured on rare-variant data — `collect_results.sh` currently
+only tries `--to edz --sparse` (TODO 2e). Set the format with `eds2leds --source-format`.
 
 ### Index building `[measured]`
 

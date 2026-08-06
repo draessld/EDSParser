@@ -192,16 +192,28 @@ Non-SEDS formats are produced by re-encoding the merged sources once at the end,
 are written as `<output>.edz` and are self-describing via header flags. `edz-compressed`
 requires a zstd-enabled build and is validated before the merge starts.
 
-Pick by path count — the ranking inverts:
+Pick by **how many paths carry a typical allele**, not by the path count. A bitset costs
+⌈paths/8⌉ bytes per entry whatever its contents; the text encoding costs only as much as the
+members it lists.
+
+*Population VCF, common variants — bitsets win:*
 
 | Paths | SEDS | `gzip -6` of SEDS | `edz-sparse` | `edz-compressed` |
 |---:|---:|---:|---:|---:|
-| 100 | 440 KB | **58 KB** | 510 KB | — |
 | 500 | 9.4 MiB | 2.9 MiB | 4.5 MiB | **2.0 MiB** |
 | 2 504 | 16.3 MiB | — | 7.8 MiB | **2.7 MiB** |
 
-At 100 paths sparse EDZ is *larger* than the text it replaces. EDZ only pays off from a few
-hundred paths up, and the ratio improves as path count grows.
+*Clonal panel, rare variants — bitsets lose, and lose harder as paths grow:*
+
+| Paths | SEDS | `gzip -6` of SEDS | `edz-sparse` |
+|---:|---:|---:|---:|
+| 100 | 464 KB | **57 KB** | 529 KB |
+| 500 | 2.98 MB | **345 KB** | 8.36 MB |
+| 1 141 | 7.83 MB | **1.02 MB** | 34.07 MB |
+
+A variant carried by 3 of 1 141 isolates costs 143 bytes as a bitset and ~12 as `{5,88,900}`.
+If your variants are mostly rare, keep text SEDS and compress the file — gzip beats every
+built-in format by ~8× here.
 
 #### `--max-memory` / `--estimate-memory` — admission control
 

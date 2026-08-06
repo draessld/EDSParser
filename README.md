@@ -321,15 +321,17 @@ Standard Variant Call Format (requires reference FASTA)
 
 ## Running Experiments
 
-Experiment scripts are located in the parent `biofmi` repository at `experiments/`.
-They cover the full pipeline: data generation, EDS transformation, FM-index building, and pattern querying.
+Experiment scripts live in [experiments/](experiments/) in this repository. They build real
+pangenome datasets, sweep the transformations over them, and bundle the results for analysis.
 
 ```bash
-cd biofmi/experiments
-./run_full_experiment.sh          # 6-step end-to-end smoke test
+# Build an M. tuberculosis panel from NCBI and sweep it — no root, no conda
+PANELS=100 L_VALUES="10 20 50" \
+  bash experiments/scripts/run_tb_experiment.sh ~/data/tb
 ```
 
-See [biofmi/experiments/README.md](../../experiments/README.md) for full documentation.
+See [experiments/README.md](experiments/README.md) for the full pipeline, the dataset
+builders, and which published results are still valid.
 
 ## Development
 

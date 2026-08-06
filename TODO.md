@@ -46,18 +46,23 @@ Add to `test_merge.cpp`: build a small EDS with complement-encoded sources and a
 pins the exact failure — the observed symptom was 6,444,274 strings in one symbol against
 a bound of 50.
 
-### 0c. Decide what l-EDS guarantees at sequence boundaries
+### 0c. Surface the boundary-context exemption where users meet it *(mostly resolved)*
 
 `needs_merge()` skips the first and last symbol (`i > 0 && i < n - 1`), so a leading or
-trailing common symbol shorter than l is never merged and survives untouched. Minimal
-repro: `{ACGT}{A,C}{160bp}{G,T}{160bp}` at `-l 20` keeps its 4 bp first symbol. Real
-instance: `tb_p100` reports `context_min` 31 at both l=50 and l=100, because the first
-variant sits 32 bp into H37Rv.
+trailing common symbol shorter than l survives untouched. Minimal repro:
+`{ACGT}{A,C}{160bp}{G,T}{160bp}` at `-l 20` keeps its 4 bp first symbol. Real instance: every
+TB panel reports `context_min` 27–31 at l=50 and l=100, because the first variant sits ~30 bp
+into H37Rv.
 
-Interior contexts do satisfy the invariant, so this is a boundary exception, not a merge
-failure. **Decide and then state it explicitly**: either pad/merge the boundary symbols, or
-document that the l-EDS guarantee is interior-only. This matters directly for biofmi — if
-the index assumes every context is ≥ l, that assumption is false at the sequence ends.
+**This is intended design, not a bug** — `docs/README.md` has defined l-EDS as constraining
+every *internal* common segment since the beginning, on the grounds that a boundary segment
+has a degenerate neighbour on only one side and so is never ambiguous. Interior contexts do
+satisfy the invariant.
+
+What remains is presentation: `edsparser-stats` reports a single `context_min` that includes
+the boundary symbols, so a correct l-EDS looks like it violates its own constraint. Report
+interior minimum separately (or alongside), and confirm biofmi does not assume every context
+is ≥ l.
 
 ---
 
@@ -76,15 +81,21 @@ assembly-derived data.
 
   | dataset | EDS | ctx_avg | l=10 | l=100 |
   |---|---|---|---|---|
-  | `tb_p100` | 46.0 MB | 241 bp | — | — |
-  | `tb_p100_snv50` | 4.3 MB | 229 bp | — | — |
-  | `tb_p500` | 689.5 MB | 73 bp | 9.0 s / 744 MB | 25.2 s / 2092 MB |
+  | `tb_p100` | 46.0 MB | 241 bp | 0.6 s / 66 MB | 0.8 s / 69 MB |
+  | `tb_p100_snv50` | 4.3 MB | 229 bp | 0.2 s / 8 MB | 0.2 s / 9 MB |
+  | `tb_p500` | 689.5 MB | 73 bp | 9.0 s / 744 MB | 25.2 s / 2 092 MB |
   | `tb_p500_snv50` | 4.6 MB | 69 bp | 0.5 s / 14 MB | 3.3 s / 111 MB |
+  | `tb_p1141` | **2 990 MB** | 40 bp | 38.2 s / 1 354 MB | 261 s / 3 627 MB |
+  | `tb_p1141_snv50` | **5.0 MB** | 39 bp | 1.1 s / 20 MB | killed at 20 GB |
 
-  5× the isolates gives **15× the EDS** unfiltered (46 → 690 MB), but **4.3 → 4.6 MB**
-  filtered — essentially constant, which is what saturation of variable sites predicts.
-  So this is not a size annoyance, it is the scaling law of the unfiltered dataset, and it
-  will decide whether the 1141 panel is usable at all.
+  11.4× the isolates gives **65× the EDS** unfiltered (46 → 2 990 MB, i.e. 3.13 billion
+  characters for a 4.41 Mb genome), but **4.3 → 5.0 MB** filtered — essentially constant,
+  which is what saturation of variable sites predicts (210 → 107 sites per isolate).
+- **The unfiltered branch loses to storing the genomes.** At 1 141 isolates the unfiltered
+  l=100 output is **8.2 GB against a 4.69 GB raw panel** — the index is bigger than
+  concatenating all 1 141 genomes. The filtered l=50 output is 91.6 MB, 51× *smaller* than
+  the panel. There is no reading of these numbers in which the unfiltered representation is
+  defensible at scale.
 - **Mechanism:** `group_overlapping_variants()` merges every variant whose span overlaps,
   then `merge_variant_group()` builds `merged_haplotypes` by applying **one variant at a
   time** to the whole group span. A long deletion therefore swallows every variant inside
@@ -137,6 +148,15 @@ peaks at 28.3 GiB and expands 17.9×.
 - **Interim workaround that works today:** haploidise the VCF before conversion (one allele
   per sample). This is what makes the Mtb pipeline cheap and is legitimate for clonal or
   inbred panels; it is a modelling choice, not a fix, for genuinely diploid data.
+
+### 1b-bis. Build biofmi indexes on the TB family *(the actual goal; dataset is ready)*
+
+Everything so far has been dataset preparation. The filtered family — 3 panels × l ∈ {10, 20,
+50}, all correct, all under 100 MB, all converging in 1 iteration — is ready to index. Measure
+index size, build time and query time against panel size and l. This is the first experiment
+that answers the thesis question rather than enabling it.
+
+Confirm 0c first: biofmi must not assume every context is ≥ l.
 
 ### 1c. Re-run the path-count curve on the fixed binary
 
@@ -238,12 +258,51 @@ unchanged** and the conversion costs an extra pass. `vcf2eds -l` has no equivale
 To close it: give `stream_merged_symbols_to_file()` / the SEDS batching path a sparse and EDZ
 writer, mirroring `write_seds_sparse_finalize()` / `write_edz_entry()`.
 
-### 2e. Document that EDZ is a pessimisation at low path counts
+### 2e. Re-measure the source formats — the deciding factor is allele frequency, not path count
 
-Measured on `tb_p100` (100 paths): text SEDS 439,917 B, **sparse EDZ 510,140 B** — larger than the
-text it replaces — while plain gzip of the SEDS is 58,206 B. The 4.7-5.9× EDZ wins in CLAUDE.md are
-at 500-2504 paths, where bitsets get sparse enough to compress well. Add a guidance note (or pick
-the format automatically from `num_paths`) so nobody reaches for EDZ on a small panel.
+The guidance "EDZ pays off above a few hundred paths" is **wrong**, and wrong in a way that
+gets worse with scale. A bitset costs ⌈paths/8⌉ bytes per entry whatever it contains, so it
+wins only when entries are dense. Measured on the clonal TB panels, where most variants are
+rare:
+
+| Paths | text SEDS | `gzip -6` | EDZ sparse |
+|---:|---:|---:|---:|
+| 100 | 464 KB | **57 KB** | 529 KB |
+| 500 | 2.98 MB | **345 KB** | 8.36 MB |
+| 1 141 | 7.83 MB | **1.02 MB** | 34.07 MB |
+
+At 1 141 paths sparse EDZ is **4.4× larger than the text it replaces** — a variant carried by
+3 isolates is 143 bytes as a bitset and ~12 as `{5,88,900}` — while gzip beats every built-in
+format by ~8× at every size. The opposite ranking on 1000G-like data (edz-compressed 4.7-5.9×
+smaller than SEDS) is real too; the two datasets differ in allele-frequency spectrum, not path
+count.
+
+Actions: (1) add `edz-compressed` and gzip to `collect_results.sh`, which currently only tries
+`--to edz --sparse`, and re-measure all three panels — edz-compressed on rare-variant data is
+simply unmeasured; (2) once the picture is complete, either document the rule properly or pick
+the format automatically from the observed mean set density rather than from `num_paths`.
+
+---
+
+### 2f. Pin down the l / ctx_avg law
+
+Output expansion is a clean function of **l divided by the average context**, not of l alone
+`[measured, TB panels]`:
+
+| Panel | ctx_avg | l=10 | l=20 | l=50 | l=100 |
+|---|---:|---|---|---|---|
+| 100 | 229 bp | 0.04 → 1.0× | 0.09 → 1.0× | 0.22 → 1.1× | 0.44 → 1.5× |
+| 500 | 69 bp | 0.14 → 1.0× | 0.29 → 1.2× | 0.72 → 2.5× | 1.44 → 13.7× |
+| 1 141 | 39 bp | 0.26 → 1.1× | 0.51 → 1.7× | 1.28 → 18.3× | 2.56 → OOM |
+
+Free below ~0.3, ~1.7× at 0.5, non-linear past 1.0. Since contexts shorten as a panel grows,
+the usable l *shrinks* with panel size. This is already the practical rule in the docs
+(keep l ≲ ctx_avg/2), but it rests on 11 points from one organism.
+
+Sweep l at fixed ratios of each panel's ctx_avg (0.1, 0.25, 0.5, 0.75, 1.0, 1.5) so the three
+curves collapse onto one, and check the collapse holds on a second organism. The filtered
+datasets are ~5 MB, so the whole sweep costs minutes and produces a figure that tells any user
+how to choose l.
 
 ---
 
