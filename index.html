@@ -1124,8 +1124,9 @@ gigabytes. The architecture was redesigned from scratch around three principles:
    number of paths times the number of strings — easily 10–100× larger than the
    EDS itself. <code>Sources::load()</code> indexes the file with a single sequential read
    (64 KB chunks, scanning for <code>{</code> characters), then serves individual source
-   sets on demand with an LRU cache (default: 10 000 entries, ~400 KB). Hit rate
-   is typically &gt;98% because merging accesses sources in linear order.</p>
+   sets on demand with an LRU cache (default: 10 000 entries, ~400 KB). Merging
+   accesses sources in near-linear order, so locality is high — the frequently
+   quoted "&gt;98% hit rate" is a plausible estimate but has never been measured.</p>
 </li>
 <li>
 <p><strong>Iterative temp-file chaining for l-EDS.</strong> The merge algorithm must read and
@@ -1143,8 +1144,18 @@ cross-product between adjacent degenerate sets explodes exponentially.</p>
 <p><strong>LINEAR</strong> — compute only the combinations where the two strings share at least
 one source path. If haplotype 3 carries alternative <code>A</code> at set i and alternative
 <code>GT</code> at set i+1, the combination <code>AGT</code> is valid. If no haplotype carries both,
-the combination is biologically impossible and is discarded. This makes l-EDS
-merging of phased data both correct and tractable.</p>
+the combination is biologically impossible and is discarded.</p>
+<p><strong>How well LINEAR prunes depends on the source model, and this is the single
+biggest performance fact about the library.</strong> When each path takes exactly one
+alternative per symbol — a haploid organism, a phased haplotype, an inbred line —
+surviving combinations carry disjoint path sets, so a merged symbol can never hold
+more strings than there are paths. A 1 141-isolate <em>M. tuberculosis</em> panel merges
+at l=20 in about a second.</p>
+<p>When paths are <em>sample</em>-level and diploid, as <code>vcf2eds</code> produces them, a
+heterozygous sample sits in <strong>both</strong> the reference and the alt string at a site.
+Intersections then rarely go empty, and a chain of k adjacent degenerate sites can
+survive up to 2^k combinations. 1000 Genomes chr7 at l=5 peaks at 28 GiB for this
+reason. See <a href="performance/">performance.md</a> and TODO 1b.</p>
 <p>The practical consequence: <code>eds2leds</code> detects which strategy to use automatically.
 If a <code>.seds</code> file is supplied, LINEAR is used; without it, CARTESIAN.</p>
 <h3 id="why-the-complexity-estimator">Why the complexity estimator?<a class="headerlink" href="#why-the-complexity-estimator" title="Permanent link">&para;</a></h3>
@@ -1214,7 +1225,7 @@ lived:</p>
 </tr>
 <tr>
 <td><strong>l-EDS</strong></td>
-<td>EDS where every internal common segment has length ≥ l</td>
+<td>EDS where every internal common segment has length ≥ l. <em>Internal</em> is literal: the first and last symbol are exempt, so a sequence may begin or end with a shorter context</td>
 </tr>
 <tr>
 <td><strong>Context</strong></td>
@@ -1222,7 +1233,7 @@ lived:</p>
 </tr>
 <tr>
 <td><strong>Source / Path</strong></td>
-<td>A concrete sequence (e.g. one haplotype) consistent with the EDS</td>
+<td>A sequence consistent with the EDS. <code>msa2eds</code> and haploid <code>vcf2eds</code> input give one path per genome; diploid <code>vcf2eds</code> input gives one path per <em>sample</em>, which is not a single chromosome walk</td>
 </tr>
 <tr>
 <td><strong>SEDS</strong></td>
@@ -1287,6 +1298,10 @@ lived:</p>
 <tr>
 <td><a href="testing/">Testing</a></td>
 <td>Unit, integration, e2e, memory stress, benchmarks</td>
+</tr>
+<tr>
+<td><a href="../experiments/README.md">Experiments</a></td>
+<td>Dataset builders, sweep runners, result bundles, which results are valid</td>
 </tr>
 </tbody>
 </table>

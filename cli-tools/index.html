@@ -2058,7 +2058,10 @@ it warns and falls back to a whole-file run.</p>
 <em>disk</em> still includes the dense text SEDS; only the final artifact shrinks. All EDZ variants
 are written as <code>&lt;output&gt;.edz</code> and are self-describing via header flags. <code>edz-compressed</code>
 requires a zstd-enabled build and is validated before the merge starts.</p>
-<p>Pick by path count — the ranking inverts:</p>
+<p>Pick by <strong>how many paths carry a typical allele</strong>, not by the path count. A bitset costs
+⌈paths/8⌉ bytes per entry whatever its contents; the text encoding costs only as much as the
+members it lists.</p>
+<p><em>Population VCF, common variants — bitsets win:</em></p>
 <table>
 <thead>
 <tr>
@@ -2070,13 +2073,6 @@ requires a zstd-enabled build and is validated before the merge starts.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td style="text-align: right;">100</td>
-<td style="text-align: right;">440 KB</td>
-<td style="text-align: right;"><strong>58 KB</strong></td>
-<td style="text-align: right;">510 KB</td>
-<td style="text-align: right;">—</td>
-</tr>
 <tr>
 <td style="text-align: right;">500</td>
 <td style="text-align: right;">9.4 MiB</td>
@@ -2093,8 +2089,40 @@ requires a zstd-enabled build and is validated before the merge starts.</p>
 </tr>
 </tbody>
 </table>
-<p>At 100 paths sparse EDZ is <em>larger</em> than the text it replaces. EDZ only pays off from a few
-hundred paths up, and the ratio improves as path count grows.</p>
+<p><em>Clonal panel, rare variants — bitsets lose, and lose harder as paths grow:</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Paths</th>
+<th style="text-align: right;">SEDS</th>
+<th style="text-align: right;"><code>gzip -6</code> of SEDS</th>
+<th style="text-align: right;"><code>edz-sparse</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">464 KB</td>
+<td style="text-align: right;"><strong>57 KB</strong></td>
+<td style="text-align: right;">529 KB</td>
+</tr>
+<tr>
+<td style="text-align: right;">500</td>
+<td style="text-align: right;">2.98 MB</td>
+<td style="text-align: right;"><strong>345 KB</strong></td>
+<td style="text-align: right;">8.36 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">1 141</td>
+<td style="text-align: right;">7.83 MB</td>
+<td style="text-align: right;"><strong>1.02 MB</strong></td>
+<td style="text-align: right;">34.07 MB</td>
+</tr>
+</tbody>
+</table>
+<p>A variant carried by 3 of 1 141 isolates costs 143 bytes as a bitset and ~12 as <code>{5,88,900}</code>.
+If your variants are mostly rare, keep text SEDS and compress the file — gzip beats every
+built-in format by ~8× here.</p>
 <h4 id="-max-memory-estimate-memory-admission-control"><code>--max-memory</code> / <code>--estimate-memory</code> — admission control<a class="headerlink" href="#-max-memory-estimate-memory-admission-control" title="Permanent link">&para;</a></h4>
 <p><code>--estimate-memory</code> emits <code>KEY=BYTES</code> lines — <code>MERGE_PEAK_BYTES</code>, <code>EDS_INDEX_BYTES</code>,
 <code>SOURCES_INDEX_BYTES</code>, <code>RECOMMENDED_BUDGET_BYTES</code> (the one to schedule on), <code>MERGE_GROUPS</code>,

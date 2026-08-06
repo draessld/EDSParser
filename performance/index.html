@@ -805,6 +805,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#choosing-l-the-ceiling-scales-with-the-panel-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing l: the ceiling scales with the panel [measured]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#panel-scaling-and-why-filtering-long-alleles-is-mandatory-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel scaling and why filtering long alleles is mandatory [measured]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#throughput-measured" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1230,6 +1252,28 @@
     <span class="md-ellipsis">
       
         Real run: M. tuberculosis, linear [measured]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-l-the-ceiling-scales-with-the-panel-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing l: the ceiling scales with the panel [measured]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#panel-scaling-and-why-filtering-long-alleles-is-mandatory-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel scaling and why filtering long alleles is mandatory [measured]
       
     </span>
   </a>
@@ -1703,12 +1747,25 @@ On assembly-derived data this, not the SNVs, sets the file size <code>[measured]
 <td style="text-align: right;">4.6 MB</td>
 <td style="text-align: right;">69 bp</td>
 </tr>
+<tr>
+<td>1 141 isolates, unfiltered</td>
+<td style="text-align: right;">2 990 MB</td>
+<td style="text-align: right;">40 bp</td>
+</tr>
+<tr>
+<td>1 141 isolates, alleles ≤ 50 bp</td>
+<td style="text-align: right;">5.0 MB</td>
+<td style="text-align: right;">39 bp</td>
+</tr>
 </tbody>
 </table>
-<p>The genome is 4.41 Mb. Unfiltered, 5× the isolates costs 15× the EDS; filtered, the EDS is
-flat. On the 100-isolate panel only 4.1 M of 48.1 M characters are the common backbone —
-91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89% of it.
-See TODO 1a; <code>experiments/scripts/make_allele_subset.sh</code> applies the filter.</p>
+<p>The genome is 4.41 Mb. Unfiltered, 11.4× the isolates costs <strong>65×</strong> the EDS; filtered, the
+EDS is flat at ~5 MB. On the 100-isolate panel only 4.1 M of 48.1 M characters are the common
+backbone — 91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89%
+of it. Filtering alleles longer than 50 bp drops ~4% of sites.</p>
+<p>See TODO 1a; <code>experiments/scripts/make_allele_subset.sh</code> applies the filter, or directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>bcftools<span class="w"> </span>view<span class="w"> </span>-e<span class="w"> </span><span class="s1">&#39;strlen(REF)&gt;50 || max(strlen(ALT))&gt;50&#39;</span><span class="w"> </span><span class="k">in</span>.vcf<span class="w"> </span>-Ov<span class="w"> </span>-o<span class="w"> </span>out.vcf
+</code></pre></div>
 <hr />
 <h2 id="eds-l-eds-transformation">EDS → l-EDS Transformation<a class="headerlink" href="#eds-l-eds-transformation" title="Permanent link">&para;</a></h2>
 <h3 id="memory-what-actually-scales-measured">Memory: what actually scales <code>[measured]</code><a class="headerlink" href="#memory-what-actually-scales-measured" title="Permanent link">&para;</a></h3>
@@ -1823,28 +1880,139 @@ a het sample sits in both the reference and the alt string at a site and a chain
 adjacent degenerate sites can survive up to 2^k combinations (TODO 1b). chrY, being haploid,
 runs in 1.35 s at 86 MB with an average context of 996 bp.</p>
 <h3 id="real-run-m-tuberculosis-linear-measured">Real run: M. tuberculosis, linear <code>[measured]</code><a class="headerlink" href="#real-run-m-tuberculosis-linear-measured" title="Permanent link">&para;</a></h3>
-<p>Haploid, one isolate per path — the same code with the pathology removed:</p>
+<p>Haploid, one isolate per path — the same code with the heterozygosity pathology removed.
+Three panels, alleles filtered to ≤ 50 bp, every run converging in <strong>1 iteration</strong>:</p>
 <table>
 <thead>
 <tr>
 <th>Panel</th>
+<th style="text-align: right;">ctx_avg</th>
 <th>l=10</th>
+<th>l=20</th>
+<th>l=50</th>
 <th>l=100</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>500 isolates, unfiltered</td>
-<td>9.0 s / 744 MB</td>
-<td>25.2 s / 2 092 MB</td>
+<td>100 isolates</td>
+<td style="text-align: right;">229 bp</td>
+<td>0.16 s / 8 MB</td>
+<td>0.17 s / 8 MB</td>
+<td>0.18 s / 9 MB</td>
+<td>0.20 s / 9 MB</td>
 </tr>
 <tr>
-<td>500 isolates, alleles ≤ 50 bp</td>
-<td>0.5 s / 14 MB</td>
-<td>3.3 s / 111 MB</td>
+<td>500 isolates</td>
+<td style="text-align: right;">69 bp</td>
+<td>0.53 s / 14 MB</td>
+<td>0.56 s / 14 MB</td>
+<td>0.70 s / 15 MB</td>
+<td>3.31 s / 111 MB</td>
+</tr>
+<tr>
+<td>1 141 isolates</td>
+<td style="text-align: right;">39 bp</td>
+<td>1.07 s / 20 MB</td>
+<td>1.16 s / 21 MB</td>
+<td>5.34 s / 161 MB</td>
+<td>killed at 20 GB</td>
 </tr>
 </tbody>
 </table>
+<h3 id="choosing-l-the-ceiling-scales-with-the-panel-measured">Choosing l: the ceiling scales with the panel <code>[measured]</code><a class="headerlink" href="#choosing-l-the-ceiling-scales-with-the-panel-measured" title="Permanent link">&para;</a></h3>
+<p>Output expansion is a clean function of <strong>l / ctx_avg</strong>, not of l on its own. The same three
+panels, showing that ratio and the resulting <code>.leds</code>-over-<code>.eds</code> size:</p>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th style="text-align: right;">ctx_avg</th>
+<th>l=10</th>
+<th>l=20</th>
+<th>l=50</th>
+<th>l=100</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100</td>
+<td style="text-align: right;">229 bp</td>
+<td>0.04 → 1.0×</td>
+<td>0.09 → 1.0×</td>
+<td>0.22 → 1.1×</td>
+<td>0.44 → 1.5×</td>
+</tr>
+<tr>
+<td>500</td>
+<td style="text-align: right;">69 bp</td>
+<td>0.14 → 1.0×</td>
+<td>0.29 → 1.2×</td>
+<td>0.72 → 2.5×</td>
+<td>1.44 → 13.7×</td>
+</tr>
+<tr>
+<td>1 141</td>
+<td style="text-align: right;">39 bp</td>
+<td>0.26 → 1.1×</td>
+<td>0.51 → 1.7×</td>
+<td>1.28 → 18.3×</td>
+<td>2.56 → <strong>OOM</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Below about 0.3 the l-EDS is nearly free; around 0.5 it costs ~1.7×; past 1.0 it goes
+non-linear. The 1 141-isolate run at l=100 was killed at a 20 GB cap with 213 851 of its
+225 023 positions (95%) swept into merge groups — at l = 2.6 × ctx_avg almost no position is
+a valid context any more, so the whole file collapses into a few enormous symbols. That is
+correct behaviour for an impossible request, not a defect.</p>
+<p><strong>Rule of thumb: keep l ≲ ctx_avg/2.</strong> Read <code>ctx_avg</code> off <code>edsparser-stats</code> before choosing.
+Because contexts shorten as a panel grows (229 → 69 → 39 bp here), the usable l <em>shrinks</em>
+with panel size: l=50 is comfortable at 100 isolates and impossible at 1 141.</p>
+<h3 id="panel-scaling-and-why-filtering-long-alleles-is-mandatory-measured">Panel scaling and why filtering long alleles is mandatory <code>[measured]</code><a class="headerlink" href="#panel-scaling-and-why-filtering-long-alleles-is-mandatory-measured" title="Permanent link">&para;</a></h3>
+<p>Variable sites saturate — 11.4× the isolates gives 6.0× the sites (210 → 107 sites per
+isolate) — so a well-formed EDS should stay near reference size as the panel grows. Filtered,
+it does. Unfiltered, it does the opposite:</p>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th style="text-align: right;">raw sequence</th>
+<th style="text-align: right;">EDS filtered</th>
+<th style="text-align: right;">EDS unfiltered</th>
+<th style="text-align: right;">N characters unfiltered</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100</td>
+<td style="text-align: right;">0.41 GB</td>
+<td style="text-align: right;">4.3 MB</td>
+<td style="text-align: right;">46.0 MB</td>
+<td style="text-align: right;">48.1 M</td>
+</tr>
+<tr>
+<td>500</td>
+<td style="text-align: right;">2.05 GB</td>
+<td style="text-align: right;">4.6 MB</td>
+<td style="text-align: right;">689.5 MB</td>
+<td style="text-align: right;">722.7 M</td>
+</tr>
+<tr>
+<td>1 141</td>
+<td style="text-align: right;">4.69 GB</td>
+<td style="text-align: right;"><strong>5.0 MB</strong></td>
+<td style="text-align: right;"><strong>2 990 MB</strong></td>
+<td style="text-align: right;"><strong>3.13 G</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The filtered EDS is 960× smaller than the raw panel at 1 141 isolates and barely grows;
+the unfiltered one reaches 3.13 billion characters for a 4.41 Mb genome (710×) and grows 65×
+across the panel range. The decisive comparison is at the output: the unfiltered 1 141-isolate
+l-EDS at l=100 is <strong>8.2 GB against a 4.69 GB raw panel</strong> — the index is larger than simply
+storing every genome. The filtered equivalent at l=50 is 91.6 MB, 51× smaller than the panel.</p>
+<p>Cause and workaround are described under <a href="#what-dominates-eds-size">VCF Transformation</a>.</p>
 <h3 id="throughput-measured">Throughput <code>[measured]</code><a class="headerlink" href="#throughput-measured" title="Permanent link">&para;</a></h3>
 <p>Synthetic data via <code>genrandomeds --min-context 0</code> (which actually triggers merging),
 after the EDS raw-copy pass-through of 2026-07-03:</p>
@@ -1928,7 +2096,11 @@ sample-level sources break. Do not use it for admission control on het VCF input
 <hr />
 <h2 id="sources">Sources<a class="headerlink" href="#sources" title="Permanent link">&para;</a></h2>
 <h3 id="format-sizes-measured">Format sizes <code>[measured]</code><a class="headerlink" href="#format-sizes-measured" title="Permanent link">&para;</a></h3>
-<p>Choose by path count — the ranking inverts:</p>
+<p><strong>The deciding factor is the allele-frequency spectrum, not the path count.</strong> A bitset costs
+⌈paths/8⌉ bytes per entry no matter how many paths actually carry the allele, while the text
+encoding costs only as much as the members it lists. So bitsets win when most entries are
+dense (common variants, many carriers) and lose badly when entries are sparse.</p>
+<p><em>VCF-derived population data, common variants:</em></p>
 <table>
 <thead>
 <tr>
@@ -1940,13 +2112,6 @@ sample-level sources break. Do not use it for admission control on het VCF input
 </tr>
 </thead>
 <tbody>
-<tr>
-<td style="text-align: right;">100</td>
-<td style="text-align: right;">440 KB</td>
-<td style="text-align: right;"><strong>58 KB</strong></td>
-<td style="text-align: right;">510 KB</td>
-<td style="text-align: right;">—</td>
-</tr>
 <tr>
 <td style="text-align: right;">500</td>
 <td style="text-align: right;">9.4 MiB</td>
@@ -1963,10 +2128,45 @@ sample-level sources break. Do not use it for admission control on het VCF input
 </tr>
 </tbody>
 </table>
-<p>At 100 paths sparse EDZ is <em>larger</em> than the text it replaces, and plain gzip beats
-everything. EDZ pays off from a few hundred paths up, where bitsets get sparse enough to
-compress well — and the ratio improves with path count, while dense EDZ gets worse
-(⌈paths/8⌉ bytes per entry). Set with <code>eds2leds --source-format</code>.</p>
+<p><em>M. tuberculosis panels, rare variants in a clonal population:</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Paths</th>
+<th style="text-align: right;">SEDS (text)</th>
+<th style="text-align: right;"><code>seds.gz</code></th>
+<th style="text-align: right;">EDZ sparse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">464 KB</td>
+<td style="text-align: right;"><strong>57 KB</strong></td>
+<td style="text-align: right;">529 KB</td>
+</tr>
+<tr>
+<td style="text-align: right;">500</td>
+<td style="text-align: right;">2.98 MB</td>
+<td style="text-align: right;"><strong>345 KB</strong></td>
+<td style="text-align: right;">8.36 MB</td>
+</tr>
+<tr>
+<td style="text-align: right;">1 141</td>
+<td style="text-align: right;">7.83 MB</td>
+<td style="text-align: right;"><strong>1.02 MB</strong></td>
+<td style="text-align: right;">34.07 MB</td>
+</tr>
+</tbody>
+</table>
+<p>The two tables point in opposite directions. On the clonal panels EDZ sparse gets steadily
+<em>worse</em> with path count — 4.4× larger than the text it replaces at 1 141 paths — because a
+variant carried by three isolates costs 143 bytes as a bitset and about 12 as <code>{5,88,900}</code>.
+Plain gzip of the text SEDS beats everything by roughly 8× at every panel size.</p>
+<p><strong>Guidance:</strong> if most of your variants are rare (a clonal or highly structured population),
+keep text SEDS and compress the file. Reach for EDZ only when entries are genuinely dense.
+<code>edz-compressed</code> has not been measured on rare-variant data — <code>collect_results.sh</code> currently
+only tries <code>--to edz --sparse</code> (TODO 2e). Set the format with <code>eds2leds --source-format</code>.</p>
 <h3 id="index-building-measured">Index building <code>[measured]</code><a class="headerlink" href="#index-building-measured" title="Permanent link">&para;</a></h3>
 <p>Bulk 64 KB chunk scanning replaced per-character <code>get()</code> + <code>tellg()</code>: a 2 MB SEDS builds
 its index in ~32 <code>read()</code> calls instead of ~2 M function calls.</p>
@@ -2034,7 +2234,7 @@ NVMe SSD, Linux 6.8.</p>
 <h3 id="my-eds-is-enormous-relative-to-the-genome">"My EDS is enormous relative to the genome"<a class="headerlink" href="#my-eds-is-enormous-relative-to-the-genome" title="Permanent link">&para;</a></h3>
 <p>Look for long indels. One long deletion absorbs every variant inside it and emits a
 full-span string per allele. Filter with <code>make_allele_subset.sh</code>, or drop the sites with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>bcftools<span class="w"> </span>view<span class="w"> </span>-e<span class="w"> </span><span class="s1">&#39;strlen(REF)&gt;50 || max(strlen(ALT))&gt;50&#39;</span><span class="w"> </span><span class="k">in</span>.vcf<span class="w"> </span>-Ov<span class="w"> </span>-o<span class="w"> </span>out.vcf
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>bcftools<span class="w"> </span>view<span class="w"> </span>-e<span class="w"> </span><span class="s1">&#39;strlen(REF)&gt;50 || max(strlen(ALT))&gt;50&#39;</span><span class="w"> </span><span class="k">in</span>.vcf<span class="w"> </span>-Ov<span class="w"> </span>-o<span class="w"> </span>out.vcf
 </code></pre></div>
 <h3 id="my-eds2leds-is-slow">"My eds2leds is slow"<a class="headerlink" href="#my-eds2leds-is-slow" title="Permanent link">&para;</a></h3>
 <ol>
@@ -2044,21 +2244,21 @@ full-span string per allele. Filter with <code>make_allele_subset.sh</code>, or 
 <li>Put <code>TMPDIR</code> on an SSD — iterations chain through temp files.</li>
 </ol>
 <h3 id="i-need-a-very-large-seds-lru-cache">"I need a very large SEDS LRU cache"<a class="headerlink" href="#i-need-a-very-large-seds-lru-cache" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">auto</span><span class="w"> </span><span class="n">eds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EDS</span><span class="o">::</span><span class="n">load</span><span class="p">(</span><span class="s">&quot;data.eds&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;data.seds&quot;</span><span class="p">);</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">eds</span><span class="p">.</span><span class="n">get_sources_object</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">set_cache_capacity</span><span class="p">(</span><span class="mi">1&#39;000&#39;000</span><span class="p">);</span><span class="w">  </span><span class="c1">// ~40 MB</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">auto</span><span class="w"> </span><span class="n">eds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EDS</span><span class="o">::</span><span class="n">load</span><span class="p">(</span><span class="s">&quot;data.eds&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;data.seds&quot;</span><span class="p">);</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">eds</span><span class="p">.</span><span class="n">get_sources_object</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">set_cache_capacity</span><span class="p">(</span><span class="mi">1&#39;000&#39;000</span><span class="p">);</span><span class="w">  </span><span class="c1">// ~40 MB</span>
 </code></pre></div>
 <p><code>EDS::set_source_cache_capacity()</code> was removed; use the <code>Sources</code> object directly.</p>
 <h3 id="how-do-i-profile-memory-over-time">"How do I profile memory over time?"<a class="headerlink" href="#how-do-i-profile-memory-over-time" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;edsparser/memory_monitor.hpp&gt;</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">MemoryMonitor</span><span class="w"> </span><span class="nf">mon</span><span class="p">(</span><span class="mf">0.5</span><span class="p">);</span><span class="w">  </span><span class="c1">// sample every 0.5 s</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">mon</span><span class="p">.</span><span class="n">start</span><span class="p">();</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">// ... your operation ...</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">mon</span><span class="p">.</span><span class="n">stop</span><span class="p">();</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Peak: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_peak_memory_mb</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot; MB</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">mon</span><span class="p">.</span><span class="n">detect_memory_leak</span><span class="p">(</span><span class="mf">1.0</span><span class="p">))</span><span class="w">  </span><span class="c1">// threshold 1 MB/s</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cerr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Memory leak detected!</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;edsparser/memory_monitor.hpp&gt;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">MemoryMonitor</span><span class="w"> </span><span class="nf">mon</span><span class="p">(</span><span class="mf">0.5</span><span class="p">);</span><span class="w">  </span><span class="c1">// sample every 0.5 s</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">mon</span><span class="p">.</span><span class="n">start</span><span class="p">();</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">// ... your operation ...</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">mon</span><span class="p">.</span><span class="n">stop</span><span class="p">();</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Peak: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_peak_memory_mb</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot; MB</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">mon</span><span class="p">.</span><span class="n">detect_memory_leak</span><span class="p">(</span><span class="mf">1.0</span><span class="p">))</span><span class="w">  </span><span class="c1">// threshold 1 MB/s</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cerr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Memory leak detected!</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 </code></pre></div>
 
 
