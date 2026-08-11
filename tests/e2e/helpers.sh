@@ -8,16 +8,26 @@ NC='\033[0m'
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Find a tool binary: checks PATH first, then edsparser build/tools/.
+# Find a tool binary: checks build/tools/ FIRST, then PATH.
+#
+# The order matters and used to be the other way round. An installed binary in
+# ~/.local/bin shadowed the build, so the suite silently tested whatever was
+# last installed — on 2026-08-11 that was a Jul 6 eds2leds, which reported 10
+# failures for flags the fresh build has. A test suite that does not test the
+# tree it was run from is worse than no test suite.
+#
+# Set EDSPARSER_TOOLS_FROM_PATH=1 to test installed binaries deliberately.
 find_tool() {
     local name="$1"
+    if [ "${EDSPARSER_TOOLS_FROM_PATH:-0}" != "1" ]; then
+        local build_path="$EDSPARSER_ROOT/build/tools/$name"
+        if [ -x "$build_path" ]; then
+            echo "$build_path"
+            return 0
+        fi
+    fi
     if command -v "$name" &>/dev/null; then
         command -v "$name"
-        return 0
-    fi
-    local build_path="$EDSPARSER_ROOT/build/tools/$name"
-    if [ -x "$build_path" ]; then
-        echo "$build_path"
         return 0
     fi
     return 1

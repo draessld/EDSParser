@@ -344,6 +344,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Display statistics for EDS/l-EDS file");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file")
             ("seds,s", po::value<std::filesystem::path>(&sources_file), "Source file (.seds/.edz) - optional, format auto-detected from extension/content")
             ("edz,z", po::value<std::filesystem::path>(&sources_edz_file), "Source file explicitly treated as binary EDZ format regardless of its extension (mutually exclusive with -s)")
@@ -353,6 +354,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("edsparser-stats");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << "edsparser-stats - Display EDS statistics\n\n";

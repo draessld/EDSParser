@@ -44,12 +44,37 @@ done
 for t in vcf2eds eds2leds edsparser-stats; do
     command -v "$t" >/dev/null || { echo "$t not on PATH — run 'make install' first" >&2; exit 1; }
 done
-# The complement fix (20d8ff1) changes results at <= 63 paths and is the whole
-# reason for re-running; refuse to produce another contaminated batch.
-if ! eds2leds --help 2>&1 | grep -q -- --estimate-memory; then
-    echo "eds2leds looks older than 2026-07-30 — pull and 'make install' before running" >&2
-    exit 1
-fi
+# The complement fix (20d8ff1, 2026-08-04) changes results at <= 63 paths and is
+# the whole reason for re-running; refuse to produce another contaminated batch.
+#
+# This used to probe for the --estimate-memory flag (2026-07-30) as a proxy for
+# "new enough". That left a 5-day window: a binary built between Jul 30 and
+# Aug 4 has the flag AND the bug, and would sail through. Gate on the commit
+# date the binary reports instead. ISO-8601 UTC sorts lexicographically, so a
+# string compare is a date compare.
+REQUIRED_COMMIT_DATE="2026-08-04T14:16:54Z"
+for t in vcf2eds eds2leds edsparser-stats; do
+    if ! "$t" --version >/dev/null 2>&1; then
+        echo "$t has no --version — it predates the provenance stamp; rebuild and 'make install'" >&2
+        exit 1
+    fi
+    v=$("$t" --version 2>/dev/null)
+    d=$(awk -F= '/^COMMIT_DATE=/{print $2}' <<<"$v")
+    if [[ -z "$d" || "$d" == "unknown" ]]; then
+        echo "$t reports no build commit date — refusing to run" >&2
+        exit 1
+    fi
+    if [[ "$d" < "$REQUIRED_COMMIT_DATE" ]]; then
+        echo "$t was built from $(awk -F= '/^COMMIT=/{print $2}' <<<"$v") ($d)," >&2
+        echo "  which predates the complement fix ($REQUIRED_COMMIT_DATE)." >&2
+        echo "  It silently produces l-EDS containing strings no genome carries." >&2
+        echo "  Pull and 'make install' before running." >&2
+        exit 1
+    fi
+    if [[ "$(awk -F= '/^DIRTY=/{print $2}' <<<"$v")" == "1" ]]; then
+        echo "warning: $t was built from a dirty tree — results are not reproducible from $(awk -F= '/^COMMIT=/{print $2}' <<<"$v") alone" >&2
+    fi
+done
 
 started=$(date +%s)
 echo "############ TB experiment ############"

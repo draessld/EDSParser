@@ -5,6 +5,8 @@
 #include <sstream>
 #include <filesystem>
 #include <fstream>
+#include <set>
+#include <string>
 
 using namespace edsparser;
 
@@ -271,6 +273,82 @@ void test_merge_with_universal_marker() {
     pass();
 }
 
+// ===== PATH-COUNT INVARIANT (complement-source regression, TODO 0b) =====
+
+// A linear merge can never produce more strings in one output symbol than there
+// are paths: each path contributes exactly one alternative per input symbol, and
+// surviving combinations carry disjoint path sets. Nothing in the suite asserted
+// this, which is how the complement-source bug (20d8ff1) survived every unit and
+// e2e test while producing 6,444,274 strings in one symbol against a bound of 50.
+//
+// The setup targets the exact code path that broke: the bitset fast path in
+// compute_merge_metadata(), which engages only when every path ID fits in [1,63].
+// Six adjacent degenerate symbols would be 2^6 = 64 combinations under a
+// cartesian merge; correct source pruning leaves exactly one per path.
+//
+// Sources use the complement spelling — {0,p} means "every path except p", which
+// is how vcf2eds and msa2eds encode a reference allele. Reading {0,p} as
+// universal (the bug) makes every intersection non-empty, so nothing prunes.
+void test_linear_merge_respects_path_count_bound() {
+    test("Linear merge cannot exceed num_paths strings per symbol");
+
+    // 3 paths, 6 adjacent binary symbols. Alternative T belongs to path 1 at
+    // symbols 0-1, path 2 at symbols 2-3, path 3 at symbols 4-5; the A allele at
+    // each symbol is carried by the other two paths, written as a complement.
+    EDS merged = transform_to_leds_with_sources(
+        "{A,T}{A,T}{A,T}{A,T}{A,T}{A,T}",
+        "{0,1}{1}{0,1}{1}{0,2}{2}{0,2}{2}{0,3}{3}{0,3}{3}",
+        2
+    );
+
+    // The whole chain collapses to a single symbol.
+    assert(merged.size() == 1);
+
+    auto set0 = merged.read_symbol(0);
+
+    // The invariant itself. Cartesian would give 64 here.
+    const size_t num_paths = 3;
+    assert(set0.size() <= num_paths);
+
+    // And the exact expected walk for each path.
+    assert(set0.size() == 3);
+    std::set<std::string> got(set0.begin(), set0.end());
+    assert(got.count("TTAAAA") == 1);  // path 1
+    assert(got.count("AATTAA") == 1);  // path 2
+    assert(got.count("AAAATT") == 1);  // path 3
+
+    pass();
+}
+
+// The same invariant with the universal marker mixed in, so a genuinely
+// universal {0} is not "fixed" into behaving like a complement.
+void test_universal_marker_still_matches_every_path() {
+    test("Universal {0} survives intersection with every path");
+
+    // Symbol 0: A is universal, T belongs to path 1.
+    // Symbol 1: A is every path but 2, T belongs to path 2.
+    EDS merged = transform_to_leds_with_sources(
+        "{A,T}{A,T}",
+        "{0}{1}{0,2}{2}",
+        2
+    );
+
+    auto set0 = merged.read_symbol(0);
+    assert(set0.size() <= 3);
+
+    std::set<std::string> got(set0.begin(), set0.end());
+    // AA: {0} ∩ (all but 2) — non-empty, paths 1 and 3.
+    assert(got.count("AA") == 1);
+    // AT: {0} ∩ {2} = {2} — survives.
+    assert(got.count("AT") == 1);
+    // TA: {1} ∩ (all but 2) = {1} — survives.
+    assert(got.count("TA") == 1);
+    // TT: {1} ∩ {2} = {} — must be pruned.
+    assert(got.count("TT") == 0);
+
+    pass();
+}
+
 // ===== CONTEXT LENGTH VALIDATION TESTS =====
 
 void test_context_length_1() {
@@ -499,6 +577,10 @@ int main() {
     test_merge_with_sources_valid_intersections();
     test_merge_with_sources_filtered();
     test_merge_with_universal_marker();
+
+    // Path-count invariant (complement-source regression)
+    test_linear_merge_respects_path_count_bound();
+    test_universal_marker_still_matches_every_path();
 
     // Context length validation
     test_context_length_1();

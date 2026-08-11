@@ -1,8 +1,36 @@
 # Library CMakeLists.txt for EDSParser
 
+# Build-time git stamp. Regenerated on every build (not only at configure time)
+# so a binary always reports the commit it was really built from; configure_file
+# inside the script leaves the header alone when nothing changed, so this does
+# not cause spurious rebuilds.
+set(EDSPARSER_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+set(EDSPARSER_BUILD_INFO_HPP "${EDSPARSER_GENERATED_DIR}/build_info.hpp")
+
+add_custom_target(edsparser_build_info ALL
+    COMMAND ${CMAKE_COMMAND}
+        -D "GIT_SRC_DIR=${EDSPARSER_REPO_ROOT}"
+        -D "IN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/build_info.hpp.in"
+        -D "OUT_FILE=${EDSPARSER_BUILD_INFO_HPP}"
+        -P "${EDSPARSER_REPO_ROOT}/cmake/GitVersion.cmake"
+    BYPRODUCTS "${EDSPARSER_BUILD_INFO_HPP}"
+    COMMENT "Stamping build with git commit"
+    VERBATIM
+)
+
+# Generate once at configure time too, so the first compile has a header to
+# include even before the custom target has run.
+execute_process(COMMAND ${CMAKE_COMMAND}
+    -D "GIT_SRC_DIR=${EDSPARSER_REPO_ROOT}"
+    -D "IN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/build_info.hpp.in"
+    -D "OUT_FILE=${EDSPARSER_BUILD_INFO_HPP}"
+    -P "${EDSPARSER_REPO_ROOT}/cmake/GitVersion.cmake"
+)
+
 # Create library from source files
 set(LIB_SOURCES
     common.cpp
+    build_info.cpp
     memory_monitor.cpp
     formats/eds.cpp
     formats/sources.cpp
@@ -47,7 +75,11 @@ endif()
 # Set include directories for the library
 target_include_directories(edsparser_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${EDSPARSER_GENERATED_DIR}
 )
+
+# The stamp header must exist before any library source compiles.
+add_dependencies(edsparser_lib edsparser_build_info)
 
 # Install targets
 install(TARGETS edsparser_lib

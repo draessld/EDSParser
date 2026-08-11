@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Generate random patterns from EDS");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file")
             ("output,o", po::value<std::filesystem::path>(&output_file)->required(), "Output pattern file")
             ("count,n", po::value<size_t>(&count)->default_value(100), "Number of patterns")
@@ -42,6 +43,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("edsparser-genpatterns");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << desc << "\n";

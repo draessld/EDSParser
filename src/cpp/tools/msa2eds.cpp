@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Transform MSA (Multiple Sequence Alignment) to EDS/l-EDS");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input MSA file (.msa) in FASTA format with gaps as '-'")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
             ("seds,s", po::value<std::filesystem::path>(&sources_file), "Output source file (default: <output>.seds)")
@@ -46,6 +47,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("msa2eds");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << "msa2eds - Transform MSA (Multiple Sequence Alignment) to EDS\n\n";

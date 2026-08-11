@@ -244,6 +244,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Generate random EDS file with controlled variability");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("output,o", po::value<std::filesystem::path>(&output_file)->required(),
              "Output EDS file (.eds or .leds)")
             ("ref-size-mb", po::value<size_t>(&ref_size_mb)->required(),
@@ -267,6 +268,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("genrandomeds");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << desc << "\n";

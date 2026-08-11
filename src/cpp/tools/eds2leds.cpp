@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Transform EDS to l-EDS (length-constrained EDS)");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input EDS file (.eds)")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output l-EDS file (default: <input>_l<N>.leds)")
             ("context-length,l", po::value<Length>(&context_length)->required(), "Minimum context length")
@@ -165,6 +166,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("eds2leds");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << "eds2leds - Transform EDS to l-EDS (length-constrained EDS)\n\n";

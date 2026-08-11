@@ -22,8 +22,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Repo root, resolved from this file rather than CMAKE_SOURCE_DIR so it is
+# correct whether the build is configured at the repo root, at src/cpp, or as a
+# submodule of another project (biofmi).
+get_filename_component(EDSPARSER_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/lib)
+include_directories(${CMAKE_BINARY_DIR}/generated)
 include_directories(BEFORE ${CMAKE_INCLUDE_PATH})
 
 # Link directories

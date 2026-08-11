@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
             ("help,h", "Show help message")
+            ("version,V", "Print version and build provenance (COMMIT, COMMIT_DATE, DIRTY) and exit")
             ("input,i", po::value<std::filesystem::path>(&input_file)->required(), "Input VCF file (.vcf)")
             ("reference,r", po::value<std::filesystem::path>(&reference_file)->required(), "Reference FASTA file")
             ("output,o", po::value<std::filesystem::path>(&output_file), "Output EDS file (default: <input>.eds)")
@@ -52,6 +53,11 @@ int main(int argc, char** argv) {
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("version")) {
+            edsparser::print_version("vcf2eds");
+            return 0;
+        }
 
         if (vm.count("help")) {
             std::cout << "vcf2eds - Transform VCF (Variant Call Format) to EDS\n\n";

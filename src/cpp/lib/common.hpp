@@ -11,6 +11,25 @@ namespace edsparser {
 // Version information
 constexpr const char* VERSION = "1.0.0";
 
+/**
+ * Build provenance — which commit this binary was actually built from.
+ *
+ * Exists because a stale install silently shadowing a fresh build is not a
+ * hypothetical: a pre-2026-08-04 `eds2leds` produces l-EDS output containing
+ * strings no genome carries (the complement-source bug) without erroring, so
+ * "which binary ran" is a correctness question, not just bookkeeping.
+ * Experiment runners gate on `build_commit_date()`.
+ */
+const char* build_commit();       // short hash, or "unknown"
+const char* build_commit_date();  // ISO-8601 UTC, sortable as a string
+bool build_is_dirty();            // uncommitted changes to tracked files
+
+/**
+ * Print `--version` as machine-readable KEY=VALUE lines, matching the
+ * convention `eds2leds --estimate-memory` already uses.
+ */
+void print_version(const std::string& tool_name);
+
 // Common types
 using String = std::string;
 using StringSet = std::vector<String>;
