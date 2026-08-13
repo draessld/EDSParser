@@ -5,6 +5,7 @@
 #include "sources.hpp"
 #include <iostream>
 #include <vector>
+#include <optional>
 #include <string>
 #include <list>
 #include <unordered_map>
@@ -115,7 +116,33 @@ public:
     void save(const std::filesystem::path& path, OutputFormat format = OutputFormat::FULL) const;
 
     // Pattern generation for benchmarking
-    void generate_patterns(std::ostream& os, size_t count, Length pattern_length) const;
+    struct PatternGenStats {
+        size_t requested    = 0;
+        size_t generated    = 0;  // patterns actually written
+        bool   source_aware = false;  // true if each pattern walked a single path
+        size_t num_paths    = 0;  // path universe, when source-aware
+    };
+
+    /**
+     * Generate random patterns drawn from this EDS.
+     *
+     * With sources attached and `source_aware` set, each pattern walks **one
+     * randomly chosen path**: at every symbol it takes an alternative whose
+     * source set contains that path. The result is a substring of a genome the
+     * panel actually contains.
+     *
+     * Without that, alternatives are picked independently per symbol, which
+     * samples the *cartesian* language — strings no single path carries. Those
+     * patterns are then absent from any LINEAR-merged l-EDS, and increasingly so
+     * as l grows, because merging prunes exactly the combinations no path
+     * carries. Benchmarking locate() with them measures how invalid the pattern
+     * set is rather than anything about the index.
+     *
+     * `seed` makes the pattern set reproducible; unset draws from random_device.
+     */
+    PatternGenStats generate_patterns(std::ostream& os, size_t count, Length pattern_length,
+                                      std::optional<uint64_t> seed = std::nullopt,
+                                      bool source_aware = true) const;
 
     // Extract substring from EDS
     String extract(Position pos, Length len, const std::vector<int>& changes) const;

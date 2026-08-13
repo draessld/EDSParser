@@ -676,6 +676,73 @@ void test_generate_patterns_metadata_only() {
     std::cout << "PASSED\n";
 }
 
+// Regression: pattern generation must respect sources.
+//
+// Picking an alternative from each symbol independently samples the CARTESIAN
+// language — combinations no single path carries. A LINEAR-merged l-EDS prunes
+// exactly those, so such patterns go missing from the index and a locate()
+// benchmark built on them measures the pattern set, not the index.
+void test_generate_patterns_source_aware() {
+    std::cout << "Test 26b: Source-aware generation walks a single path... ";
+
+    // Two paths, two degenerate symbols. Path 1 carries A then G; path 2 carries
+    // C then T. The cross combinations (AT, CG) exist in the cartesian language
+    // but in no genome.
+    auto eds_path = std::filesystem::temp_directory_path() / "test_srcaware.eds";
+    auto seds_path = std::filesystem::temp_directory_path() / "test_srcaware.seds";
+    {
+        std::ofstream f(eds_path);
+        f << "{A,C}{G,T}";
+    }
+    {
+        std::ofstream f(seds_path);
+        f << "{1}{2}{1}{2}";
+    }
+
+    edsparser::EDS eds = edsparser::EDS::load(eds_path, seds_path);
+
+    std::stringstream out;
+    auto stats = eds.generate_patterns(out, 40, 2, /*seed=*/uint64_t{1234},
+                                       /*source_aware=*/true);
+
+    assert(stats.source_aware);
+    assert(stats.num_paths == 2);
+    assert(stats.generated == 40);
+
+    std::string pattern;
+    int n = 0;
+    while (std::getline(out, pattern)) {
+        if (pattern.empty()) continue;
+        n++;
+        // Only the two real haplotypes may appear.
+        assert(pattern == "AG" || pattern == "CT");
+    }
+    assert(n == 40);
+
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(seds_path);
+    std::cout << "PASSED\n";
+}
+
+// A given seed must reproduce a given pattern set exactly — benchmarks compare
+// runs, and an unseeded generator makes every run a different experiment.
+void test_generate_patterns_seed_is_reproducible() {
+    std::cout << "Test 26c: --seed reproduces the same pattern set... ";
+
+    edsparser::EDS eds = create_temp_eds("{ACGT}{A,CA}{GGTT}{T,TG}{ACAC}");
+
+    auto run = [&eds](uint64_t seed) {
+        std::stringstream out;
+        eds.generate_patterns(out, 25, 5, seed, /*source_aware=*/true);
+        return out.str();
+    };
+
+    assert(run(99) == run(99));   // same seed, same output
+    assert(run(99) != run(100));  // different seed, different output
+
+    std::cout << "PASSED\n";
+}
+
 void test_generate_patterns_are_valid() {
     std::cout << "Test 26: Generated patterns are valid (check with check_position)... ";
 
@@ -1459,6 +1526,8 @@ int main() {
         test_generate_patterns();
         test_generate_patterns_metadata_only();
         test_generate_patterns_are_valid();
+        test_generate_patterns_source_aware();
+        test_generate_patterns_seed_is_reproducible();
         test_source_cache_functionality();
         test_extract_basic();
         test_extract_empty();

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <random>
+#include <optional>
 
 namespace edsparser {
 
@@ -461,7 +462,28 @@ void EDS::save(const std::filesystem::path& path, OutputFormat format) const {
 // PATTERN GENERATION & EXTRACTION
 // ================================================================================
 
-void EDS::generate_patterns(std::ostream& os, size_t count, Length pattern_length) const {
+namespace {
+
+// A PathSet is complement-encoded when it starts with 0: {0} means every path,
+// {0,e1,e2} means every path except e1 and e2. Anything else is an explicit
+// member list. Both spellings are produced by vcf2eds and msa2eds (the reference
+// allele is written as a complement), so membership must handle them.
+bool path_in_set(const PathSet& s, int path) {
+    if (s.empty()) return false;
+    if (s.front() == 0) {
+        return std::find(s.begin() + 1, s.end(), path) == s.end();
+    }
+    return std::find(s.begin(), s.end(), path) != s.end();
+}
+
+constexpr size_t NO_ALTERNATIVE = static_cast<size_t>(-1);
+
+}  // namespace
+
+EDS::PatternGenStats EDS::generate_patterns(std::ostream& os, size_t count,
+                                            Length pattern_length,
+                                            std::optional<uint64_t> seed,
+                                            bool source_aware) const {
     if (is_empty_ || n_ == 0) {
         throw std::runtime_error("Cannot generate patterns from empty EDS");
     }
@@ -470,93 +492,127 @@ void EDS::generate_patterns(std::ostream& os, size_t count, Length pattern_lengt
         throw std::invalid_argument("Pattern length must be greater than 0");
     }
 
-    // Use random number generator for reproducible results
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    PatternGenStats stats;
+    stats.requested = count;
 
-    // Random position distribution (0 to num_common_chars - 1)
+    uint64_t effective_seed;
+    if (seed.has_value()) {
+        effective_seed = *seed;
+    } else {
+        std::random_device rd;
+        effective_seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+    }
+    std::mt19937_64 gen(effective_seed);
+
+    // Walking a path needs both a Sources object and a known path universe.
+    const bool walk_path =
+        source_aware && has_sources() && sources_ && sources_->num_paths() > 0;
+    const size_t num_paths = walk_path ? sources_->num_paths() : 0;
+    stats.source_aware = walk_path;
+    stats.num_paths = num_paths;
+
     std::uniform_int_distribution<Position> pos_dist(
         0,
         metadata_.num_common_chars > 0 ? metadata_.num_common_chars - 1 : 0
     );
 
-    for (size_t i = 0; i < count; ++i) {
-        String pattern;
-        Length remaining_length = pattern_length;
-
-        // Pick random starting position in the EDS
-        Position random_common_pos = metadata_.num_common_chars > 0 ? pos_dist(gen) : 0;
-        Position offset_in_symbol = 0;
-        size_t start_symbol = 0;
-
-        if (metadata_.num_common_chars > 0) {
-            start_symbol = find_symbol_at_common_position(random_common_pos, offset_in_symbol);
+    // Pick which alternative of `symbol_pos` to follow. In path mode only
+    // alternatives carrying `path` are eligible; a non-degenerate symbol has a
+    // single alternative that every path shares, so it skips the source lookup.
+    auto choose_alternative = [&](const StringSet& set, Position symbol_pos,
+                                  int path) -> size_t {
+        if (path == 0 || set.size() == 1) {
+            std::uniform_int_distribution<size_t> d(0, set.size() - 1);
+            return set.size() == 1 ? 0 : d(gen);
         }
 
+        const size_t base = metadata_.cum_set_sizes[symbol_pos];
+        std::vector<size_t> candidates;
+        candidates.reserve(set.size());
+        for (size_t k = 0; k < set.size(); ++k) {
+            if (path_in_set(read_source(base + k), path)) candidates.push_back(k);
+        }
+        if (candidates.empty()) return NO_ALTERNATIVE;
+
+        std::uniform_int_distribution<size_t> d(0, candidates.size() - 1);
+        return candidates[candidates.size() == 1 ? 0 : d(gen)];
+    };
+
+    // One attempt from a given start. Returns an empty optional if the walk ran
+    // off the end of the EDS or hit a symbol this path has no alternative at.
+    auto try_build = [&](Position start_symbol, Length offset_in_symbol,
+                         int path) -> std::optional<String> {
+        String pattern;
+        pattern.reserve(pattern_length);
+        Length remaining = pattern_length;
         Position current_pos = start_symbol;
         bool first_symbol = true;
 
-        // Generate pattern by randomly selecting from sets
-        // Works in both FULL and METADATA_ONLY modes via read_symbol()
-        while (remaining_length > 0 && current_pos < n_) {
+        while (remaining > 0 && current_pos < n_) {
             StringSet set = read_symbol(current_pos);
 
-            if (set.empty()) {
-                // Skip empty sets (epsilon)
+            if (set.empty()) {  // epsilon symbol — nothing to contribute
                 current_pos++;
                 first_symbol = false;
                 continue;
             }
 
-            // Randomly select one string from the set
-            std::uniform_int_distribution<size_t> set_dist(0, set.size() - 1);
-            size_t string_idx = set_dist(gen);
-            const String& selected = set[string_idx];
+            size_t idx = choose_alternative(set, current_pos, path);
+            if (idx == NO_ALTERNATIVE) return std::nullopt;
 
-            // For first symbol, start from offset; for others, start from 0
+            const String& selected = set[idx];
             Length start_offset = first_symbol ? offset_in_symbol : 0;
 
-            // Take what we need from this string (starting from offset)
+            // An empty alternative (a deletion on this path) contributes nothing
+            // but is a legitimate step, not a failure.
             if (start_offset < selected.length()) {
                 Length available = selected.length() - start_offset;
-                Length to_take = std::min(remaining_length, available);
+                Length to_take = std::min(remaining, available);
                 pattern.append(selected.substr(start_offset, to_take));
-                remaining_length -= to_take;
+                remaining -= to_take;
             }
 
             first_symbol = false;
-
-            if (remaining_length > 0) {
-                current_pos++;
-            } else {
-                break;
-            }
+            current_pos++;
         }
 
-        // If we couldn't generate full pattern length, pad or regenerate
-        if (pattern.length() < pattern_length) {
-            // Try wrapping around for short EDS
-            while (pattern.length() < pattern_length && n_ > 0) {
-                Position wrap_pos = pattern.length() % n_;
-                StringSet set = read_symbol(wrap_pos);
+        if (remaining > 0) return std::nullopt;  // ran out of EDS
+        return pattern;
+    };
 
-                if (!set.empty()) {
-                    std::uniform_int_distribution<size_t> set_dist(0, set.size() - 1);
-                    size_t string_idx = set_dist(gen);
-                    const String& selected = set[string_idx];
+    // Retry from a fresh path and start rather than padding a short walk by
+    // wrapping around to symbol 0, which would splice together sequence that is
+    // not contiguous in any genome.
+    constexpr int MAX_ATTEMPTS = 64;
 
-                    Length to_take = std::min(
-                        static_cast<Length>(pattern_length - pattern.length()),
-                        static_cast<Length>(selected.length())
-                    );
-                    pattern.append(selected.substr(0, to_take));
-                }
+    for (size_t i = 0; i < count; ++i) {
+        std::optional<String> pattern;
+
+        for (int attempt = 0; attempt < MAX_ATTEMPTS && !pattern; ++attempt) {
+            int path = 0;
+            if (walk_path) {
+                std::uniform_int_distribution<int> path_dist(1, static_cast<int>(num_paths));
+                path = path_dist(gen);
             }
+
+            Position random_common_pos =
+                metadata_.num_common_chars > 0 ? pos_dist(gen) : 0;
+            Position offset_in_symbol = 0;
+            size_t start_symbol = 0;
+            if (metadata_.num_common_chars > 0) {
+                start_symbol = find_symbol_at_common_position(random_common_pos, offset_in_symbol);
+            }
+
+            pattern = try_build(start_symbol, static_cast<Length>(offset_in_symbol), path);
         }
 
-        // Output the pattern
-        os << pattern << '\n';
+        if (pattern) {
+            os << *pattern << '\n';
+            stats.generated++;
+        }
     }
+
+    return stats;
 }
 
 String EDS::extract(Position pos, Length len, const std::vector<int>& changes) const {
