@@ -358,6 +358,68 @@ edsparser-stats -i data.leds --verbose
 
 ---
 
+## edsparser-source-transform
+
+Convert an existing source file between formats (SEDS ↔ EDZ) without re-running
+the EDS transform. A thin wrapper around `Sources::save_as()`: it reads each
+entry through the format-agnostic `read_source()` and re-encodes it.
+
+### Synopsis
+
+```
+edsparser-source-transform -i <in.seds> -o <out.edz> [OPTIONS]
+```
+
+### Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-i, --input` | path | required | Input source file (`.seds` or `.edz`) |
+| `-o, --output` | path | required | Output source file |
+| `--from` | enum | auto-detect | Input format: `seds`, `seds_sparse`, `edz`, `edz_sparse`, `edz_compressed` |
+| `--to` | enum | from extension | Output format, same values; `.edz` → EDZ, anything else → SEDS |
+| `--sparse` | flag | off | Select the sparse variant of the output format (omit universal `{0}` entries) |
+| `-c, --compress` | flag | off | Select `edz_compressed`; EDZ output only, mutually exclusive with `--sparse` |
+| `--verify` | flag | off | Reload input and output and confirm every source set matches |
+
+Note the underscores: `--from`/`--to` take `edz_sparse`, while `eds2leds
+--source-format` takes `edz-sparse`.
+
+### Behaviour
+
+- **Input format** comes from `--from`, else `Sources::detect_format()` on the
+  file's magic bytes and extension.
+- **Output format** comes from `--to`, else the output extension; `--sparse` and
+  `--compress` then select the variant. `--compress` on a non-EDZ target is an
+  error, not a silently ignored flag.
+- **`--verify`** expands complement and universal encodings to explicit member
+  lists before comparing, so SEDS complement form (`{0,4}`) and EDZ explicit form
+  (`{1,2,3,5}`) of the same set compare equal. This relies on an accurate
+  `num_paths`, which both the SEDS trailer and the EDZ header now carry.
+- `edz_compressed` requires a zstd-enabled build; without it the conversion
+  throws rather than writing a corrupt file.
+
+### Examples
+
+```bash
+# Text SEDS → binary EDZ (format inferred from the .edz extension)
+edsparser-source-transform -i sources.seds -o sources.edz
+
+# Back to text
+edsparser-source-transform -i sources.edz -o sources.seds
+
+# Sparse EDZ, verified round-trip
+edsparser-source-transform -i sources.seds -o sources.edz --sparse --verify
+
+# zstd-compressed EDZ (equivalent to --to edz_compressed)
+edsparser-source-transform -i sources.seds -o sources.edz --compress
+
+# Force EDZ interpretation of a misnamed input
+edsparser-source-transform -i sources.bin --from edz -o sources.seds
+```
+
+---
+
 ## edsparser-genpatterns
 
 Extract random patterns from an EDS or l-EDS file for benchmarking.

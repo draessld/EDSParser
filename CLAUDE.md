@@ -35,12 +35,12 @@ make -j$(nproc)
 cd build/src/cpp && ctest --output-on-failure
 
 # Run specific test
-cd build/src/cpp && ./test_eds
+cd build/tools && ./test_eds
 
 # Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration
 
 # Manual memory stress tests (too slow for CI, run manually):
-cd build/src/cpp && ./test_memory_stress
+cd build/tools && ./test_memory_stress
 
 # Install after build
 cd build && make install
@@ -472,13 +472,36 @@ After installation, CMake config files are located in `~/.local/lib/cmake/EDSPar
 
 ## Experiments and Analysis
 
-Lives in `experiments/` **in this repository** (an older note pointed at a `biofmi` sibling repo — no longer true). See [experiments/README.md](experiments/README.md) for the pipeline. In short: `scripts/` builds datasets and runs sweeps, `results/<dataset>/` holds the collected logs, stats and size measurements (never the datasets themselves, which stay on the server), and `parse_transformation_logs.py` turns logs into summary CSVs for the notebooks.
+Lives in `experiments/` **in this repository** (an older note pointed at a `biofmi` sibling repo — no longer true). See [experiments/README.md](experiments/README.md) for the pipeline.
 
-Dataset builders: `fetch_tb_dataset.sh` (M. tuberculosis panels from NCBI, no root or conda needed), `make_sample_subset.sh` (fewer samples), `make_allele_subset.sh` (drop long alleles). Runners: `run_subset_dataset.sh` (one dataset, memory-capped), `run_tb_experiment.sh` (the full panel × filter × l matrix). Collector: `collect_results.sh` bundles a run for transport.
+**Measuring is declarative, via xbench** (2026-08-16). Specs live in `experiments/specs/`, the engine lives in the sibling `xbench/` project (BIO-FMI uses the same one), and `experiments/run.sh` connects them: `./experiments/run.sh merge_mode --dry-run`. Three specs: `merge_mode` (LINEAR vs CARTESIAN across an l sweep), `vcf2eds` (transform cost + `--block-size` trade-off), `source_formats` (SEDS vs EDZ variants vs gzip). The harness resolves `build/tools` before `PATH` and **aborts if `eds2leds` predates the complement fix**, records over-cap runs as `status=oom` rows with their peak rather than dropping them, sizes every input and artifact raw + gzip in its gather phase, and can replay extractors over archived stdout/stderr (`xbench analyze <run> --reextract`) instead of re-running. Run directories land in `experiments/runs/` (gitignored).
+
+This supersedes the collect/parse/compare half of the shell pipeline: `collect_results.sh` sizes → gather phase, `leds_runs.tsv` → the `status` column, `compare_merge_modes.py` → `summary.csv` joined on `tool`, `parse_transformation_logs.py` → `extract:` blocks. The shell runners still matter for 1000G-scale runs on the server (`run_leds.sh`'s screen-based scheduling has no xbench equivalent), and `compare_merge_modes.py` still reads the pre-existing `results/` bundles.
+
+**Dataset building stays shell** — xbench measures binaries, it is not a data pipeline. Builders: `fetch_tb_dataset.sh` (M. tuberculosis panels from NCBI, no root or conda needed), `make_sample_subset.sh` (fewer samples), `make_allele_subset.sh` (drop long alleles). `run_subset_dataset.sh <panel>` with no l values runs VCF→EDS only, which is how the `.eds`/`.seds` inputs the `merge_mode` spec consumes get built; with l values it also runs the l-EDS sweep (`MODES`, default both merges). `run_tb_experiment.sh` drives the full panel × filter × l matrix; `collect_results.sh` bundles a run for transport.
 
 **Result validity:** anything produced at ≤ 63 paths before 20d8ff1 measures the complement bug — see TODO.md §0a. `experiments/results/yeast1011_50` and `tb_100` are invalid; `hgp1000`, `tb_p100`, `tb_p500`, `tb_p1141` and their `_snv50` twins are not.
 
 ## Testing
+
+### ⚠️ The unit suite does not currently build or pass (as of 2026-08-11)
+
+`ctest` is broken at HEAD — the library and all CLI tools build fine, and the
+**e2e suites pass 100%**, but the C++ unit tests have drifted from the code:
+
+| Test | State | Cause |
+|------|-------|-------|
+| `test_eds` | **Does not compile** | Calls `.count()` on `PathSet`, which became `std::vector<int>` in 086e842. Separately, `test_check_position_with_sources_valid`/`_universal` reference an `eds` variable whose constructor line is commented out `// DISABLED: EDS eds(eds_str, seds_str)` — the two-argument in-memory constructor no longer exists, so the bodies reference an undeclared name. `main()` still calls both. |
+| `test_sources` | Fails at `test_sources.cpp:136` | Expects `Sources::load()` on a nonexistent file to throw; it does not. |
+| `test_stats` | Fails at `test_stats.cpp:84` | Expects `meta.total_change_size == 7`. |
+| `test_merge` | Fails at `test_merge.cpp:92` | Expects `{G,C}{T}` at l=2 to merge to one symbol; the transform reports "already satisfies l-EDS, converged after 0 iterations". Plausibly correct new behaviour under the boundary exemption + contiguous-context measurement (cd7e3e2), i.e. a stale expectation rather than a regression — but unverified. |
+| `test_vcf` | Fails at `test_vcf.cpp:321` | Multi-allelic CNV+INV symbol not found. |
+| `test_msa`, `test_integration` | Pass | — |
+
+Each is a first-assertion failure in its area, which is the signature of stale
+expectations rather than deep breakage — but **`test_stats` and `test_vcf` have
+not been triaged and could be real regressions.** Do not treat a green e2e run
+as evidence the library is correct until this is resolved. See TODO.md.
 
 ### Test Categories
 
@@ -494,6 +517,14 @@ Dataset builders: `fetch_tb_dataset.sh` (M. tuberculosis panels from NCBI, no ro
 - FULL (in-memory via stream/string ctors): covered by `test_stream_constructor`, `test_from_string_factory`, `test_mode_equivalence`, `test_full_mode_edge_cases` (Tests A1–A4)
 - Mode equivalence: `test_mode_equivalence` constructs the same EDS via string ctor and file loader and asserts all observable outputs match (`length`, `cardinality`, `size`, all `read_symbol(i)`, all metadata fields)
 
+### End-to-End Suites ([tests/e2e/](tests/e2e/))
+
+Not run by ctest — shell suites driving the installed CLI tools. `bash tests/e2e/run_all.sh` runs all nine: `test_msa2eds`, `test_vcf2eds`, `test_eds2leds`, `test_leds_incremental`, `test_source_transform`, `test_seds_edz`, `test_stats`, `test_genpatterns`, `test_genrandomeds`. `test_eds2leds.sh` is the gate for `--max-memory` (exit 3), `--source-format`, and `--block-size` byte-identity vs a whole-file run; `test_leds_incremental.sh` guards the idempotence/monotonicity invariant.
+
+**All e2e tests are expected to pass.** An older note claimed some `test_eds2leds.sh` tests fail intentionally to document a compact-output bug — that bug is fixed and those tests are gone.
+
+**The suites resolve tools via `PATH` first** (`find_tool()` in `tests/e2e/helpers.sh`), falling back to `build/tools/` only when the name isn't on `PATH`. A stale `~/.local/bin` copy silently fails every test for a flag it predates — run `make install`, or `PATH="$PWD/build/tools:$PATH" bash tests/e2e/run_all.sh`, before believing a failure.
+
 ### Benchmark Scenarios ([tests/bench/](tests/bench/))
 
 `bench.sh --size standard --scenario <name>` runs named scenarios; `all` runs everything.
@@ -505,10 +536,12 @@ Key scenarios relevant to recent changes:
 
 ### Running Memory Tests Manually
 ```bash
-cd build/src/cpp
+cd build/tools
 ./test_memory_smoke    # Quick: validates streaming + LRU cache
 ./test_memory_stress   # Full: memory growth detection via linear regression
 ```
+
+**Binary locations**: `ctest` must run from `build/src/cpp` (where `CTestTestfile.cmake` lives), but every test *executable* is written to `build/tools/`. Docs said `build/src/cpp` for both until 2026-08-11.
 
 ## Test Data
 

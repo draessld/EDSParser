@@ -134,20 +134,37 @@ Beyond a plain explicit list, an entry may use:
   automatically whenever a variant is present in more than half of all
   paths, keeping near-universal entries compact.
 - Correctly expanding a complement entry to its true path count requires
-  knowing the total number of paths, which plain text SEDS never stores in
-  a header (unlike EDZ — see below). `Sources::parse_seds()` infers it by
-  scanning for the largest path ID token seen anywhere in the file during
-  the same pass that builds its entry index.
+  knowing the total number of paths. Text SEDS has no *header*, so the path
+  universe is recorded in a **trailer** at EOF instead (see below), which
+  makes the file self-describing. Only trailerless legacy files fall back to
+  `Sources::parse_seds()` inferring the universe from the largest path ID
+  token seen anywhere in the file, during the same pass that builds its entry
+  index — exact except when the true maximum path appears in every entry but
+  is never spelled out.
 
 ### Sparse Mode (`SEDS_SPARSE`)
 
 `vcf2eds` writes sources **sparse by default**: universal (`{0}`) entries
-are omitted from the text body entirely, and a trailing bitvector +
-20-byte trailer (`"SEDS"` magic + cardinality + degenerate-entry count)
-records which string indices were universal. `Sources::load()`
-auto-detects sparse files by checking for this trailer magic at load time
-— no separate flag is needed to *read* a sparse file, only to force EDZ
-interpretation of a misnamed one (`-z`/`--edz`).
+are omitted from the text body entirely, and a trailing bitvector records
+which string indices were universal. `Sources::load()` auto-detects sparse
+files by checking for the trailer magic at load time — no separate flag is
+needed to *read* a sparse file, only to force EDZ interpretation of a
+misnamed one (`-z`/`--edz`).
+
+### Trailers
+
+Both text variants end in a self-describing binary trailer carrying
+`num_paths`, so complement entries expand exactly on load:
+
+| Variant | Trailer layout | Size |
+|---------|----------------|-----:|
+| Sparse | `bitvec` \| `"SED2"` \| cardinality(8) \| m_degen(8) \| num_paths(8) | 28 B |
+| Dense | `text` \| `"SEDN"` \| cardinality(8) \| num_paths(8) | 20 B |
+
+Legacy files still load: a trailerless dense file, and the old 20-byte
+`"SEDS"` sparse trailer (which carried cardinality and the degenerate-entry
+count but no path universe), both fall back to inferring `num_paths` from
+the largest path-ID token.
 
 ### Format Variants
 
@@ -155,7 +172,7 @@ interpretation of a misnamed one (`-z`/`--edz`).
 |-----------|--------|--------|
 | `.seds` | Text, human-readable, range+complement encoding, sparse by default | ✅ Implemented |
 | `.edz` | Binary bitset, magic-byte header (`"EDZ\0"`+flags), sparse variant | ✅ Implemented |
-| `.edz` (compressed) | Binary + zstd blocks | 🔲 Planned |
+| `.edz` (compressed) | Binary + zstd blocks (`EDZ_COMPRESSED`) | ✅ Implemented — needs a zstd-enabled build |
 
 The `.edz` binary format stores one fixed-size bitset per string
 (`ceil(num_paths/8)` bytes; bit *k* = path ID *k+1*), with a 24-byte
@@ -164,6 +181,26 @@ directly — unlike text SEDS, it never needs to infer the path universe
 size. Select it with `-z`/`--edz` on `vcf2eds`; `eds2leds` and
 `edsparser-stats` auto-detect it by extension via `-s`/`--seds`, or accept
 it explicitly regardless of extension via `-z`/`--edz`.
+
+All three EDZ variants share the `.edz` extension and are distinguished by
+header flags — dense `0x0002`, sparse `0x0006`, compressed `0x0003` — so
+auto-detection resolves the variant from the file itself.
+
+**`EDZ_COMPRESSED`** splits the dense bitset data into ~256 KiB blocks,
+zstd-compresses each, and stores a per-block index (compressed offset and
+size, uncompressed size) for O(1) block lookup. A read decompresses one
+block on demand and caches it. It requires a zstd-enabled build; without
+zstd, load/save/read throw a clear "built without zstd" error rather than
+writing a corrupt file, and `Sources::edz_compressed_available()` reports
+build support. Produce it with `--source-format edz-compressed`
+(`eds2leds`) or `--compress` (`edsparser-source-transform`).
+
+**Choosing a variant is about allele frequency, not path count.** A bitset
+costs `ceil(num_paths/8)` bytes per entry whatever it contains, so it wins
+only when a typical allele is carried by many paths. On rare-variant data
+the text encoding is smaller and the gap widens with scale — see
+[cli-tools.md](cli-tools.md#--source-format--shrinking-the-output-sources)
+for measured numbers.
 
 ---
 

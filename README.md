@@ -65,12 +65,16 @@ edsparser/
 │       ├── vcf2eds             # VCF → EDS/l-EDS
 │       ├── eds2leds            # EDS → l-EDS
 │       ├── edsparser-stats     # Statistics tool
+│       ├── edsparser-source-transform  # SEDS ↔ EDZ source conversion
 │       ├── edsparser-genpatterns  # Pattern generation tool
 │       └── genrandomeds        # Random EDS generation (internal)
 ├── tests/
 │   ├── unit/                   # C++ unit tests
-│   └── e2e/                    # Shell-based end-to-end tests
-├── data/test/                  # Test data
+│   ├── e2e/                    # Shell-based end-to-end tests (data + expected/)
+│   ├── stress/                 # Memory stress test data
+│   └── bench/                  # Benchmark scenarios
+├── docs/                       # Full documentation (see docs/README.md)
+├── experiments/                # Dataset builders, sweep runners, collected results
 ├── INSTALL.sh                  # Installation script
 ├── UNINSTALL.sh                # Uninstallation script
 └── README.md                   # This file
@@ -137,7 +141,26 @@ eds2leds -i data.eds -s data.seds -l 10 --full
 
 # Parallel processing
 eds2leds -i data.eds -l 10 --threads 4
+
+# Bound peak RAM by block instead of file size (output is byte-identical)
+eds2leds -i huge.eds -s huge.seds -l 10 --block-size 50M
+
+# Refuse the run if the predicted peak exceeds a budget (exit code 3)
+eds2leds -i data.eds -s data.seds -l 10 --max-memory 8G
+
+# Predict memory and exit without doing any work
+eds2leds -i data.eds -s data.seds -l 10 --estimate-memory
+
+# Write the merged sources as compressed EDZ instead of text SEDS
+eds2leds -i data.eds -s data.seds -l 10 --source-format edz-compressed
 ```
+
+**Memory control:**
+- `--block-size <size>` merges one block at a time, cutting only where no merge can cross, so the output is byte-identical to a whole-file run. Cartesian block mode is a true ceiling independent of file size; linear mode floors at the whole-file sources index (8 B/string).
+- `--max-memory <size>` predicts the peak from metadata and refuses with **exit code 3** if it exceeds the budget, so an orchestrator can skip the input instead of OOMing the machine. **Not reliable on heterozygous diploid VCF data** — it under-predicted 45× on 1000G chr7.
+- `--estimate-memory` prints that prediction as `KEY=BYTES` lines and exits 0.
+
+**`--source-format`** re-encodes the merged sources once at the end: `seds` (default), `seds-sparse`, `edz`, `edz-sparse`, `edz-compressed`. Bitsets win only when a typical allele is carried by many paths; on rare-variant data plain SEDS plus gzip is far smaller. See [docs/cli-tools.md](docs/cli-tools.md) for measured numbers.
 
 **Merging Methods (auto-detected):**
 - **LINEAR**: Phasing-aware merging using source information (preserves valid haplotypes) - automatically used when `-s`/`--seds` or `-z`/`--edz` sources are provided (mutually exclusive)
@@ -182,6 +205,37 @@ edsparser-stats -i data.eds --verbose
 - File size and memory estimates (METADATA_ONLY vs FULL mode)
 - Source tracking information (number of paths/genomes)
 - l-EDS compliance verification
+
+### edsparser-source-transform - Source Format Conversion
+
+Convert an existing source file between formats (SEDS ↔ EDZ) without re-running the EDS transform:
+
+```bash
+# Text SEDS → binary EDZ (output format inferred from the .edz extension)
+edsparser-source-transform -i sources.seds -o sources.edz
+
+# Back to text
+edsparser-source-transform -i sources.edz -o sources.seds
+
+# Sparse EDZ, with a verified round-trip
+edsparser-source-transform -i sources.seds -o sources.edz --sparse --verify
+
+# zstd-compressed EDZ (requires a zstd-enabled build)
+edsparser-source-transform -i sources.seds -o sources.edz --compress
+
+# Force EDZ interpretation of a misnamed input
+edsparser-source-transform -i sources.bin --from edz -o sources.seds
+```
+
+**Options:**
+- `-i, --input` / `-o, --output` - Input and output source files (required)
+- `--from` - Input format (default: auto-detected from magic bytes/extension)
+- `--to` - Output format (default: inferred from the output extension)
+- `--sparse` - Sparse variant of the output format (omits universal `{0}` entries)
+- `-c, --compress` - zstd-compressed EDZ; EDZ output only, mutually exclusive with `--sparse`
+- `--verify` - Reload input and output and confirm every source set matches
+
+Format names for `--from`/`--to`: `seds`, `seds_sparse`, `edz`, `edz_sparse`, `edz_compressed`.
 
 ### edsparser-genpatterns - Pattern Generation
 
@@ -295,9 +349,11 @@ Source tracking file mapping each string to its originating sequences/samples:
 
 **Complement encoding**: `{0,e1,e2,...}` (leading `0` followed by other IDs) means "all paths except e1, e2, ..." — used automatically whenever a variant is present in more than half of all paths, to keep near-universal entries compact.
 
-**Sparse mode**: `vcf2eds` writes sources sparse by default — universal (`{0}`) entries are omitted entirely from the text body, with a trailing bitvector + trailer recording which positions were universal. Detected automatically on load via a `"SEDS"` magic trailer.
+**Sparse mode**: `vcf2eds` writes sources sparse by default — universal (`{0}`) entries are omitted entirely from the text body, with a trailing bitvector recording which positions were universal.
 
-**Binary variant (`.edz`)**: A binary bitset encoding of the same data (`-z`/`--edz` on `vcf2eds`, `eds2leds`, `edsparser-stats`), self-describing via a magic-byte header (`"EDZ\0"` + flags) and auto-detected by the `.edz` extension.
+**Self-describing trailer**: Both text variants end in a binary trailer carrying the path universe size, so complement entries expand exactly on load — sparse `"SED2"` (28 bytes: bitvec + magic + cardinality + degenerate count + num_paths), dense `"SEDN"` (20 bytes: magic + cardinality + num_paths). `Sources::load()` detects the variant from this magic. Legacy trailerless files and the old 20-byte `"SEDS"` sparse trailer still load, falling back to inferring the path count from the largest path ID seen.
+
+**Binary variant (`.edz`)**: A binary bitset encoding of the same data (`-z`/`--edz` on `vcf2eds`, `eds2leds`, `edsparser-stats`), self-describing via a magic-byte header (`"EDZ\0"` + flags) and auto-detected by the `.edz` extension. Three variants share that extension — dense, sparse, and zstd-compressed (`EDZ_COMPRESSED`, ~256 KiB blocks with a per-block index; needs a zstd-enabled build) — distinguished by header flags.
 
 ### MSA Format (`.msa`)
 
@@ -405,13 +461,17 @@ bash tests/e2e/run_all.sh
 bash tests/e2e/test_msa2eds.sh
 bash tests/e2e/test_vcf2eds.sh
 bash tests/e2e/test_eds2leds.sh
+bash tests/e2e/test_leds_incremental.sh
+bash tests/e2e/test_source_transform.sh
+bash tests/e2e/test_seds_edz.sh
 bash tests/e2e/test_stats.sh
 bash tests/e2e/test_genpatterns.sh
+bash tests/e2e/test_genrandomeds.sh
 ```
 
-Each suite reports individual test results and a per-suite pass/fail summary. `run_all.sh` reports overall suite counts.
+Each suite reports individual test results and a per-suite pass/fail summary. `run_all.sh` reports overall suite counts. All tests are expected to pass.
 
-> **Note:** Some `test_eds2leds.sh` tests currently fail intentionally — they document a known compact-output bug (see `TODO`). Expected output files already contain the correct format and will pass once the bug is fixed.
+> **Note:** the suites use whichever tool `PATH` finds first and only fall back to `build/tools/`. A stale `~/.local/bin` copy will fail tests for flags it predates — run `make install`, or prefix with `PATH="$PWD/build/tools:$PATH"`, before treating a failure as a regression.
 
 #### Benchmarks
 
@@ -481,17 +541,21 @@ eds_to_leds_linear(
   - Install: https://github.com/simongog/sdsl-lite
 - **divsufsort/divsufsort64** - Required by SDSL
 - **OpenMP** - Parallel processing support
+- **zstd** - Enables the `EDZ_COMPRESSED` source format. CMake searches `$CONDA_PREFIX`, `$HOME`, and system paths for `zstd.h` + `libzstd`; when found it defines `EDSPARSER_HAVE_ZSTD`. Without it every other format works unchanged and the compressed paths throw a clear error.
+
+The configure step reports which optional dependencies were found, including
+`EDZ_COMPRESSED (zstd): ON/OFF`.
 
 ### Installing Dependencies
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install cmake g++ libboost-program-options-dev
+sudo apt-get install cmake g++ libboost-program-options-dev libzstd-dev
 ```
 
 **macOS:**
 ```bash
-brew install cmake boost
+brew install cmake boost zstd
 ```
 
 **SDSL (optional):**

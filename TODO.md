@@ -16,6 +16,32 @@ only surviving cause of combinatorial blow-up in the merge itself.
 
 ## P0 — correctness; blocks publishable numbers
 
+### 0. Repair the unit test suite — `ctest` does not build or pass
+
+Found 2026-08-11 while auditing docs. Library and tools build clean, e2e passes 100%, but
+the C++ unit tests have drifted from the code and nobody noticed because the e2e suites are
+what gets run. Until this is fixed there is **no automated check on library internals**,
+which is precisely where 0b wants to add a regression test.
+
+- `test_eds` — **does not compile.** (i) `.count()` on `PathSet`, a `std::vector<int>` since
+  086e842, at 9 sites; (ii) `test_check_position_with_sources_valid` and `_universal` have
+  their construction line commented out (`// DISABLED: EDS eds(eds_str, seds_str)`) because
+  the two-argument in-memory constructor was removed, leaving the bodies referencing an
+  undeclared `eds` — and `main()` still calls both. Fix: `has_path()` helper for (i); rewrite
+  (ii) against `EDS::load(eds_path, seds_path)` with temp files, as
+  `test_load_eds_with_sources_from_files` already does.
+- `test_sources:136` — expects `Sources::load()` on a nonexistent file to throw; it doesn't.
+  Decide which behaviour is wanted and align.
+- `test_merge:92` — expects `{G,C}{T}` at l=2 to merge to one symbol; transform now converges
+  in 0 iterations. Likely a stale expectation under the boundary exemption plus
+  contiguous-context measurement (cd7e3e2), but **confirm before editing the expectation** —
+  this is the merge core.
+- `test_stats:84` (`meta.total_change_size == 7`) and `test_vcf:321` (multi-allelic CNV+INV
+  symbol not found) — **untriaged; these may be real regressions,** not stale expectations.
+
+Triage `test_stats` and `test_vcf` first, since those two decide whether this is a
+documentation-grade annoyance or an actual correctness problem.
+
 ### 0a. Regenerate every result produced at ≤ 63 paths
 
 The bitset fast path in `compute_merge_metadata()` read complement source sets (`{0,e1,e2}`
@@ -351,7 +377,14 @@ holds only `*_disk_size.txt` — no gzip measurements — while the newer bundle
   1M/5M/10M/50M/100M for peak RSS and runtime.
 - **Linear vs cartesian on real data** (was #7): the 1.26× ratio is from synthetic round-robin data.
   Real data has different alternative counts and source distributions; also quantify how much linear's
-  pruning shrinks the output.
+  pruning shrinks the output. **Runner exists, results do not**: `run_subset_dataset.sh` now runs both
+  arms per l (`MODES`, default both) into `leds_l<N>/` and `leds_l<N>_cart/`, records every attempt in
+  `leds_runs.tsv` so a cartesian run killed at `MEM_CAP` is a recorded outcome, and
+  `experiments/compare_merge_modes.py` joins the two into string/byte/runtime/RSS ratios. Re-run the TB
+  matrix to fill it in. Expect the cartesian arm to hit the cap first at high l on the dense panels —
+  that cell is the measurement, not a gap. Note the two arms are not symmetric on disk: linear must
+  carry a `.seds` that is often larger than its `.leds`, so at low l cartesian can be the smaller
+  artifact while being the wrong language.
 
 ### 3f. chr21 is ~1.7× faster than chr22 at identical input size *(was 9b)*
 

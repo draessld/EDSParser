@@ -13,10 +13,18 @@ EDSParser has four layers of testing:
 
 ## 1. Unit Tests
 
+> **⚠️ The unit suite does not build or pass at HEAD (2026-08-11).** The library
+> and CLI tools build fine and the e2e suites pass 100%, but the unit tests have
+> drifted from the code: `test_eds` does not compile (`.count()` on `PathSet`,
+> now a `std::vector<int>`; plus two tests referencing an `eds` whose constructor
+> line is commented out), and `test_sources`, `test_stats`, `test_merge` and
+> `test_vcf` each fail on their first assertion. `test_msa` and
+> `test_integration` pass. See CLAUDE.md for the per-test diagnosis.
+
 ### Running
 
 ```bash
-# From edsparser/build/src/cpp after build
+# From edsparser/build/tools after build
 ctest --output-on-failure
 
 # Run a single executable
@@ -86,7 +94,7 @@ Covered workflows:
 Run with:
 
 ```bash
-cd build/src/cpp && ./test_integration
+cd build/tools && ./test_integration
 ```
 
 ---
@@ -115,10 +123,31 @@ bash tests/e2e/run_all.sh
 bash tests/e2e/test_msa2eds.sh
 bash tests/e2e/test_vcf2eds.sh
 bash tests/e2e/test_eds2leds.sh
+bash tests/e2e/test_leds_incremental.sh
+bash tests/e2e/test_source_transform.sh
+bash tests/e2e/test_seds_edz.sh
 bash tests/e2e/test_stats.sh
 bash tests/e2e/test_genpatterns.sh
 bash tests/e2e/test_genrandomeds.sh
 ```
+
+| Suite | What it covers |
+|-------|----------------|
+| `test_msa2eds.sh` | MSA → EDS/l-EDS, source output, argument errors |
+| `test_vcf2eds.sh` | VCF → EDS/l-EDS, variant types, `--block-size`, `--keep-eds`, `-z`, argument errors |
+| `test_eds2leds.sh` | Linear/cartesian merge, `-s`/`-z` sources, `--max-memory` (exit 3), `--source-format`, `--block-size` byte-identity vs whole-file, `--estimate-memory` |
+| `test_leds_incremental.sh` | Idempotence/monotonicity: building l=B from an l=A l-EDS is byte-identical to building l=B from the raw EDS |
+| `test_source_transform.sh` | `edsparser-source-transform` SEDS ↔ EDZ conversions and `--verify` |
+| `test_seds_edz.sh` | SEDS/EDZ format robustness — trailers, sparse variants, complement entries, misnamed files |
+| `test_stats.sh` | `edsparser-stats` output formats, source-aware stats, `-s`/`-z` |
+| `test_genpatterns.sh` | Pattern generation |
+| `test_genrandomeds.sh` | Synthetic EDS generation |
+
+> **The suites run whichever tool `PATH` finds first**, falling back to
+> `build/tools/` only when the name is not on `PATH` (`find_tool()` in
+> `tests/e2e/helpers.sh`). A stale `~/.local/bin` copy will therefore fail tests
+> for flags it predates. Run `make install`, or prefix the run with
+> `PATH="$PWD/build/tools:$PATH"`, before concluding a failure is real.
 
 Each suite prints individual test results and a per-suite pass/fail count.
 `run_all.sh` prints an overall summary.
@@ -142,12 +171,12 @@ Each suite prints individual test results and a per-suite pass/fail count.
 Reference outputs live under `tests/e2e/expected/<tool>/`. When fixing
 a bug, update the expected files to match the corrected output.
 
-### Known Failing Tests (Intentional)
+### Expected Result
 
-Some `test_eds2leds.sh` tests are **expected to fail** — they document a
-known compact-output formatting issue. These tests will automatically pass
-once the bug is fixed. Do not delete or skip them; they serve as a
-regression gate.
+Every e2e test is expected to pass. The suites once carried deliberately
+failing tests documenting a compact-output formatting bug; that bug is fixed
+and those tests are gone, so any failure now is a real regression (or a stale
+tool on `PATH` — see the note above).
 
 ---
 
@@ -159,7 +188,7 @@ Validates that all streaming operations stay within 2 GB peak and do not
 exhibit memory growth, using 10–50 MB input files.
 
 ```bash
-cd build/src/cpp && ./test_memory_smoke
+cd build/tools && ./test_memory_smoke
 ```
 
 Checks:
@@ -175,7 +204,7 @@ Tests with 100–500 MB files, uses linear regression on periodic memory
 samples to detect leaks.
 
 ```bash
-cd build/src/cpp && ./test_memory_stress
+cd build/tools && ./test_memory_stress
 ```
 
 Checks (threshold: 1.0 MB/sec growth rate):
