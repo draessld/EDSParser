@@ -1,0 +1,161 @@
+experiment: vcf2eds
+description: |
+  VCF → EDS: cost of the first transform, and the --block-size memory trade-off.
+
+  vcf2eds windows the reference into blocks and processes one at a time, so peak
+  memory is O(variants per block) rather than O(total variants). Smaller blocks
+  cost more I/O and produce slightly more EDS symbols at block boundaries; larger
+  ones are faster and heavier. That trade-off has only ever been stated as a
+  memory formula with no wall-clock behind it — see TODO 3e.
+
+  Also measures what the sources encoding costs at write time: -s writes sparse
+  text SEDS, -z writes sparse binary EDZ, and the two are the same transform
+  otherwise.
+
+  Port of experiments/scripts/run_subset_dataset.sh stage 1.
+
+resolve:
+  prefer:
+    - build/tools
+
+binaries:
+  vcf2eds:
+    provenance:
+      require_after: "2026-08-04T14:16:54Z"   # the complement fix, 20d8ff1
+      require_fields: [COMMIT, COMMIT_DATE, DIRTY]
+  edsparser-stats: {}
+
+policy:
+  mem_cap: 8G
+  mem_budget: 16G
+  timeout: 3600s
+  reps: 1
+  jobs: 2
+  env:
+    OMP_NUM_THREADS: "1"
+
+gather:
+  gzip: true
+  gzip_level: 6
+  gzip_max_bytes: 8G
+  count_lines_ext: [".vcf", ".seds"]
+  jobs: 4
+
+# --------------------------------------------------------------------------
+# Datasets — a VCF and the reference it is called against.
+#
+#   fixture   ships with the repo; a smoke dataset, not a measurement
+#   tb_*      copy panel_<n>/{vcf,ref} from the server (~400 MB for all three)
+# --------------------------------------------------------------------------
+datasets:
+  fixture:
+    inputs:
+      vcf: tests/e2e/data/variants.vcf
+      ref: tests/e2e/data/variants.fa
+
+  tb_p100:
+    inputs:
+      vcf: ~/Data/tb/panel_100/vcf/NC_000962.3.vcf
+      ref: ~/Data/tb/panel_100/ref/NC_000962.3.fasta
+
+  tb_p500:
+    inputs:
+      vcf: ~/Data/tb/panel_500/vcf/NC_000962.3.vcf
+      ref: ~/Data/tb/panel_500/ref/NC_000962.3.fasta
+
+  tb_p1141:
+    inputs:
+      vcf: ~/Data/tb/panel_1141/vcf/NC_000962.3.vcf
+      ref: ~/Data/tb/panel_1141/ref/NC_000962.3.fasta
+
+grid:
+  block_size: [1000000, 10000000, 100000000]
+
+cell_slug: "b{block_size}"
+stages: [transform, stats]
+
+tools:
+  seds:
+    label: sparse text SEDS (-s)
+    stages:
+      transform:
+        cmd: >-
+          {vcf2eds} -i {in.vcf} -r {in.ref} -o {out}/out.eds -s {out}/out.seds
+          --block-size {block_size}
+        produces:
+          eds: "{out}/out.eds"
+        produces_optional:
+          sources: "{out}/out.seds"
+        parallel: false          # timed alone: wall time is the point here
+        extract:
+          tool_peak_mb:  {from: stderr, regex: 'Peak Memory:\s*([0-9.]+) MB'}
+          tool_wall_s:   {from: stderr, regex: 'Runtime:\s*([0-9.]+)s'}
+          total_variants:     {regex: 'Total variants read:\s+([0-9.]+)', cast: int_grouped}
+          processed_variants: {regex: 'Successfully processed:\s+([0-9.]+)', cast: int_grouped}
+          skipped_sv:         {regex: 'Skipped \(unsupported SV\):\s+([0-9.]+)', cast: int_grouped}
+          variant_groups:     {regex: 'Variant groups created:\s+([0-9.]+)', cast: int_grouped}
+
+      stats:
+        cmd: "{edsparser-stats} -i {prod.eds} --verbose"
+        needs: [transform]
+        parallel: false
+        gather: false
+        extract:
+          eds_symbols: {regex: 'Number of symbols \(n\):\s+([0-9.]+)', cast: int_grouped}
+          eds_strings: {regex: 'Total strings \(m\):\s+([0-9.]+)', cast: int_grouped}
+          eds_chars:   {regex: 'Total characters \(N\):\s+([0-9.]+)', cast: int_grouped}
+          ctx_avg:     {regex: 'Average:\s+([0-9.,]+)', cast: float_comma}
+          ctx_min:     {regex: 'Minimum:\s+([0-9.]+)', cast: int_grouped}
+
+  edz:
+    label: sparse binary EDZ (-z)
+    extends: seds
+    stages:
+      transform:
+        cmd: >-
+          {vcf2eds} -i {in.vcf} -r {in.ref} -o {out}/out.eds -z {out}/out.edz
+          --block-size {block_size}
+        produces:
+          eds: "{out}/out.eds"
+        produces_optional:
+          sources: "{out}/out.edz"
+
+plots:
+  - id: peak_vs_block_size
+    stage: transform
+    x: block_size
+    y: peak_rss_mb
+    series: tool
+    facet: dataset
+    logx: true
+    title: "Peak RSS vs --block-size — the memory half of the trade-off"
+    ylabel: peak RSS (MB)
+
+  - id: time_vs_block_size
+    stage: transform
+    x: block_size
+    y: wall_s_min
+    series: tool
+    facet: dataset
+    logx: true
+    title: "…and the wall-clock half, which has never been measured"
+    ylabel: seconds
+
+  - id: symbols_vs_block_size
+    stage: stats
+    x: block_size
+    y: eds_symbols
+    series: tool
+    facet: dataset
+    logx: true
+    title: "EDS symbols vs block size — smaller blocks split more at boundaries"
+    ylabel: symbols
+
+  - id: sources_size
+    stage: transform
+    kind: bar
+    x: tool
+    y: artifact_bytes
+    facet: dataset
+    title: "Output size by sources encoding"
+    ylabel: bytes

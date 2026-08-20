@@ -1,0 +1,223 @@
+experiment: merge_mode
+description: |
+  LINEAR vs CARTESIAN l-EDS: what this dataset's own realisation costs, and buys.
+
+  The two merges are the same transform with and without source information, and
+  they pick the same merge groups. CARTESIAN keeps every combination of adjacent
+  alternatives, so it also spells out recombinants nobody was sequenced with;
+  LINEAR intersects sources at every fold and keeps only combinations some path
+  actually carries, so its l-EDS *is* this dataset at context length l.
+
+  Measured both ways round:
+    cartesian/linear strings and bytes  — how much of the language is unobserved
+    linear runtime, peak RSS, .seds     — what the pruning that removes it costs
+
+  A CARTESIAN run killed at the cap is the headline result, not a gap: xbench
+  writes it as status=oom with the peak it reached, so the cell survives.
+
+  Port of experiments/scripts/run_subset_dataset.sh stage 2 (MODES) plus
+  collect_results.sh and compare_merge_modes.py, which this replaces: the sizes
+  come from the gather phase, the ratios from summary.csv.
+
+# --------------------------------------------------------------------------
+# Binaries. Build tree before PATH, always: ~/.local/bin is normally on PATH,
+# and a stale eds2leds emits contaminated l-EDS without erroring.
+# --------------------------------------------------------------------------
+resolve:
+  prefer:
+    - build/tools
+
+binaries:
+  eds2leds:
+    provenance:
+      require_after: "2026-08-04T14:16:54Z"   # the complement fix, 20d8ff1
+      require_fields: [COMMIT, COMMIT_DATE, DIRTY]
+  edsparser-stats: {}
+
+policy:
+  mem_cap: 8G          # per run; a laptop with 30 GB total should not go higher
+  mem_budget: 16G      # across all concurrent runs
+  timeout: 1800s
+  reps: 1
+  mem_backend: watchdog
+  poll_ms: 25
+  jobs: 4
+  env:
+    OMP_NUM_THREADS: "1"   # so a parallel stage does not oversubscribe
+
+gather:
+  gzip: true
+  gzip_level: 6
+  gzip_max_bytes: 4G
+  count_lines_ext: [".txt", ".csv", ".seds"]
+  jobs: 4
+
+# --------------------------------------------------------------------------
+# Datasets — EDS + SEDS pairs. Building them is not this spec's job:
+#
+#   covid_*   ship with the repo (experiments/datasets/SARS_cov2/eds)
+#   tb_*      build once with, from the panel directory,
+#               experiments/scripts/run_subset_dataset.sh <panel>    # no l values
+#             which runs stage 1 only and leaves eds/<chrom>.{eds,seds}
+#
+# A dataset whose inputs are missing is reported and skipped, so the TB entries
+# can stay declared on a machine that has not copied the panels yet.
+# --------------------------------------------------------------------------
+datasets:
+  covid_20A:
+    inputs:
+      eds:  experiments/datasets/SARS_cov2/eds/20A.eds
+      seds: experiments/datasets/SARS_cov2/eds/20A.seds
+    probe: &stats_probe
+      cmd: "{edsparser-stats} -i {in.eds} -s {in.seds} --verbose"
+      extract:
+        ctx_avg:    {regex: 'Average:\s+([0-9.,]+)', cast: float_comma}
+        ctx_min:    {regex: 'Minimum:\s+([0-9.]+)', cast: int_grouped}
+        num_paths:  {regex: 'Total paths \(genomes\):\s+([0-9.]+)', cast: int_grouped}
+        n_symbols:  {regex: 'Number of symbols \(n\):\s+([0-9.]+)', cast: int_grouped}
+        m_strings:  {regex: 'Total strings \(m\):\s+([0-9.]+)', cast: int_grouped}
+
+  covid_20E:
+    inputs:
+      eds:  experiments/datasets/SARS_cov2/eds/20E.eds
+      seds: experiments/datasets/SARS_cov2/eds/20E.seds
+    probe: *stats_probe
+
+  # ---- M. tuberculosis panels. Haploid and clonal: one isolate is one path. ----
+  tb_p100_snv50:
+    inputs:
+      eds:  ~/Data/tb/panel_100_snv50/eds/NC_000962.3.eds
+      seds: ~/Data/tb/panel_100_snv50/eds/NC_000962.3.seds
+    probe: *stats_probe
+
+  tb_p500_snv50:
+    inputs:
+      eds:  ~/Data/tb/panel_500_snv50/eds/NC_000962.3.eds
+      seds: ~/Data/tb/panel_500_snv50/eds/NC_000962.3.seds
+    probe: *stats_probe
+
+  tb_p1141_snv50:
+    inputs:
+      eds:  ~/Data/tb/panel_1141_snv50/eds/NC_000962.3.eds
+      seds: ~/Data/tb/panel_1141_snv50/eds/NC_000962.3.seds
+    probe: *stats_probe
+
+  # Unfiltered: long deletions absorb everything inside them and vcf2eds emits
+  # one full-span haplotype per allele, so this is 3 GB of EDS for a 4.4 Mb
+  # genome — the worst case, and where cartesian is expected to hit the cap.
+  tb_p500:
+    inputs:
+      eds:  ~/Data/tb/panel_500/eds/NC_000962.3.eds
+      seds: ~/Data/tb/panel_500/eds/NC_000962.3.seds
+    probe: *stats_probe
+
+# --------------------------------------------------------------------------
+# The sweep. Output expansion tracks l / ctx_avg rather than l, and ctx_avg
+# falls as a panel grows, so the same l is a different ask on each dataset —
+# read ctx_avg from the probe when reading the curves.
+# --------------------------------------------------------------------------
+grid:
+  l: [5, 10, 20, 50, 100]
+
+cell_slug: "l{l}"
+stages: [merge, stats]
+
+# --------------------------------------------------------------------------
+# Tools. The ONLY difference is whether -s is passed; the merge groups are
+# chosen identically, so the outputs differ exactly by what linear prunes.
+# --------------------------------------------------------------------------
+tools:
+  linear:
+    label: LINEAR (phasing-aware)
+    stages:
+      merge:
+        cmd: "{eds2leds} -i {in.eds} -s {in.seds} -l {l} -o {out}/merged.leds"
+        produces:
+          leds: "{out}/merged.leds"
+        produces_optional:
+          leds_sources: "{out}/merged.seds"     # cartesian writes none
+        parallel: true          # merges are independent; only their own cost is timed
+        extract:
+          # eds2leds puts the banner on stdout and all merge progress on stderr,
+          # so everything worth extracting from the merge reads stderr.
+          iterations:    {from: stderr, regex: 'Converged after (\d+) iterations'}
+          merge_groups:  {from: stderr, regex: 'Iter 0: [0-9]+ symbols, ([0-9]+) groups'}
+          tool_peak_mb:  {from: stderr, regex: 'Peak Memory:\s*([0-9.]+) MB'}
+          tool_wall_s:   {from: stderr, regex: 'Runtime:\s*([0-9.]+)s'}
+
+      stats:
+        # Where the comparison actually comes from: m_strings on the l-EDS is
+        # the count whose cartesian/linear ratio is the unobserved share.
+        cmd: "{edsparser-stats} -i {prod.leds} --verbose"
+        needs: [merge]
+        parallel: false
+        gather: false           # nothing produced; the merge stage was gathered
+        extract:
+          leds_symbols: {regex: 'Number of symbols \(n\):\s+([0-9.]+)', cast: int_grouped}
+          leds_strings: {regex: 'Total strings \(m\):\s+([0-9.]+)', cast: int_grouped}
+          leds_chars:   {regex: 'Total characters \(N\):\s+([0-9.]+)', cast: int_grouped}
+          leds_ctx_min: {regex: 'Minimum:\s+([0-9.]+)', cast: int_grouped}
+          leds_ctx_avg: {regex: 'Average:\s+([0-9.,]+)', cast: float_comma}
+
+  cartesian:
+    label: CARTESIAN (all combinations)
+    extends: linear
+    stages:
+      merge:
+        cmd: "{eds2leds} -i {in.eds} -l {l} -o {out}/merged.leds"
+
+# --------------------------------------------------------------------------
+# Plots
+# --------------------------------------------------------------------------
+plots:
+  - id: leds_size_vs_l
+    stage: merge
+    x: l
+    y: artifact_bytes
+    series: tool
+    facet: dataset
+    logy: true
+    title: "l-EDS size vs l — what phasing saves"
+    ylabel: bytes
+
+  - id: leds_strings_vs_l
+    stage: stats
+    x: l
+    y: leds_strings
+    series: tool
+    facet: dataset
+    logy: true
+    title: "Strings in the l-EDS — the gap is combinations no genome carries"
+    ylabel: strings
+
+  - id: merge_peak_vs_l
+    stage: merge
+    x: l
+    y: peak_rss_mb
+    series: tool
+    facet: dataset
+    logy: true
+    title: "Merge peak RSS vs l (oom cells are reported in the footnote)"
+    ylabel: peak RSS (MB)
+
+  - id: merge_time_vs_l
+    stage: merge
+    x: l
+    y: wall_s_min
+    series: tool
+    facet: dataset
+    logy: true
+    title: "Merge wall time vs l — what source bookkeeping costs"
+    ylabel: seconds
+
+  - id: size_vs_strings
+    stage: stats
+    kind: scatter
+    x: leds_strings
+    y: leds_chars
+    series: tool
+    facet: dataset
+    annotate: l
+    logx: true
+    logy: true
+    title: "Characters against strings, labelled by l"

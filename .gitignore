@@ -101,8 +101,18 @@ experiments/*
 !experiments/scripts/
 !experiments/*.py
 !experiments/*.md
+!experiments/*.sh
 experiments/scripts/*
 !experiments/scripts/*.sh
+# xbench configuration is source, not output. It has to be re-included
+# explicitly: `experiments/*` excludes the directory itself, and git cannot
+# re-include a file whose parent directory is excluded.
+!experiments/specs/
+!experiments/specs/*.yaml
+!experiments/specs/hooks/
+!experiments/specs/hooks/*.py
+# experiments/runs/ stays excluded by the rule above — run directories carry
+# work/ trees that can be tens of GB.
 data/site/
 site/
 

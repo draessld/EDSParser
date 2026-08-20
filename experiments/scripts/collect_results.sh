@@ -23,10 +23,17 @@
 # Layout produced (mirrors experiments/results/yeast1011_50):
 #   <name>/vcf2eds/*.vcf2eds.log          per-chromosome VCF→EDS logs
 #   <name>/vcf2eds/stats/                 edsparser-stats over the EDS
-#   <name>/eds2leds/l<N>/*.out            per-chromosome EDS→l-EDS logs
+#   <name>/eds2leds/l<N>/*.out            per-chromosome EDS→l-EDS logs (linear)
+#   <name>/eds2leds/l<N>_cart/*.out       the same, cartesian merge
 #   <name>/eds2leds/stats/leds_l<N>.csv   edsparser-stats over the l-EDS
+#   <name>/other/leds_runs.tsv            per-run outcome, incl. runs killed at the cap
 #   <name>/other/                         disk/gzip/EDZ size measurements
 #   <name>/MANIFEST.txt                   what was collected, from where, with what binary
+#
+# The `_cart` directories are the cartesian arm written by run_subset_dataset.sh; they
+# flow through unchanged because every loop here keys off the leds_l* glob, and their
+# stats land in leds_l<N>_cart.csv alongside the linear leds_l<N>.csv. Feed the pair to
+# compare_merge_modes.py.
 set -u
 
 # Resolve before any cd — BASH_SOURCE is relative when invoked by a relative path.
@@ -58,6 +65,9 @@ logs=(eds/*.vcf2eds.log)
 (( ${#logs[@]} )) && cp "${logs[@]}" "$OUT/vcf2eds/"
 echo "    vcf2eds logs: ${#logs[@]}"
 
+# leds_l<N> is the linear arm, leds_l<N>_cart the cartesian one; the suffix is carried
+# through into the collected directory and stats names rather than stripped, so the two
+# arms stay distinguishable downstream.
 l_dirs=(leds_l*)
 for d in "${l_dirs[@]}"; do
     [[ -d "$d" ]] || continue
@@ -67,6 +77,11 @@ for d in "${l_dirs[@]}"; do
     (( ${#outs[@]} )) && cp "${outs[@]}" "$OUT/eds2leds/l$l/"
     echo "    eds2leds l=$l logs: ${#outs[@]}"
 done
+
+# Runs killed at the memory cap leave no output file, so without this the cartesian
+# arm's most informative cells would just be missing rows.
+[[ -s leds_runs.tsv ]] && cp leds_runs.tsv "$OUT/other/" && \
+    echo "    leds_runs.tsv: $(( $(wc -l < leds_runs.tsv) - 1 )) runs"
 
 # ── stats over the EDS ───────────────────────────────────────────────────────
 # run_stats.sh already writes these into eds/stats when it has been run; otherwise
@@ -163,7 +178,14 @@ done
 echo "    sources_compression.csv: $(( $(wc -l < "$sc") - 1 )) source files"
 
 # ── manifest ─────────────────────────────────────────────────────────────────
-l_values=(); for d in "${l_dirs[@]}"; do [[ -d "$d" ]] && l_values+=("${d#leds_l}"); done
+l_values=(); modes=()
+for d in "${l_dirs[@]}"; do
+    [[ -d "$d" ]] || continue
+    l="${d#leds_l}"
+    if [[ "$l" == *_cart ]]; then l="${l%_cart}"; m=cartesian; else m=linear; fi
+    [[ " ${l_values[*]-} " == *" $l "* ]] || l_values+=("$l")
+    [[ " ${modes[*]-} "    == *" $m "* ]] || modes+=("$m")
+done
 {
     echo "dataset:     $NAME"
     echo "source:      $(hostname):$BASE"
@@ -173,6 +195,7 @@ l_values=(); for d in "${l_dirs[@]}"; do [[ -d "$d" ]] && l_values+=("${d#leds_l
     echo "repo commit: $(git -C "${EDSPARSER_ROOT:-$SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo
     echo "l values:    ${l_values[*]:-none}"
+    echo "merge modes: ${modes[*]:-none}"
     echo "chromosomes: $(ls eds/*.eds 2>/dev/null | wc -l)"
     # num_paths decides whether the merge takes the bitset fast path (<= 63), so
     # it is the first thing to check when comparing runs across the fix.

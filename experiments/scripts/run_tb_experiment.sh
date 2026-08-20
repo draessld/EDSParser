@@ -10,6 +10,7 @@
 # Env:
 #   PANELS       isolate counts to build      (default "100 500 1141")
 #   L_VALUES     context lengths to sweep     (default "10 20 50 100")
+#   MODES        merges to run per l          (default "linear cartesian")
 #   MAX_ALLELE   allele length filter in bp   (default 50; set 0 to skip the twin)
 #   MEM_CAP      per-run memory ceiling       (default 20G; passed to run_subset_dataset.sh)
 #   RESULTS_ROOT where bundles are written    (default $HOME/results)
@@ -28,6 +29,7 @@ set -u
 BASE="${1:-$HOME/raid_storage/Data/tb}"
 PANELS="${PANELS:-100 500 1141}"
 L_VALUES="${L_VALUES:-10 20 50 100}"
+MODES="${MODES:-linear cartesian}"
 MAX_ALLELE="${MAX_ALLELE:-50}"
 MEM_CAP="${MEM_CAP:-20G}"
 RESULTS_ROOT="${RESULTS_ROOT:-$HOME/results}"
@@ -81,6 +83,7 @@ echo "############ TB experiment ############"
 echo "  base:     $BASE"
 echo "  panels:   $PANELS"
 echo "  l values: $L_VALUES"
+echo "  modes:    $MODES"
 echo "  filter:   $( ((MAX_ALLELE)) && echo "alleles <= ${MAX_ALLELE} bp (twin dataset)" || echo "none" )"
 echo "  results:  $RESULTS_ROOT"
 echo
@@ -114,7 +117,7 @@ for n in $PANELS; do
     for t in "${targets[@]}"; do
         dir="${t%%:*}"; name="${t##*:}"
         echo "---- $name ----"
-        MEM_CAP="$MEM_CAP" bash "$RUN" "$dir" $L_VALUES \
+        MEM_CAP="$MEM_CAP" MODES="$MODES" bash "$RUN" "$dir" $L_VALUES \
             || echo "[$name] sweep reported failures — continuing" >&2
         bash "$COLLECT" "$dir" "$name" "$RESULTS_ROOT" \
             || echo "[$name] collect FAILED" >&2
