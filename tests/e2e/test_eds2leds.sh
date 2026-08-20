@@ -145,6 +145,17 @@ test_missing_input_fails() {
     [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: missing input — expected non-zero exit, got 0"; return 1; }
 }
 
+test_zero_context_length_fails() {
+    local out
+    out=$("$TOOL" -i "$DATA_DIR/simple.eds" -o "$TMPDIR/x.leds" -l 0 2>&1)
+    local code=$?
+    [ $code -ne 0 ] || { echo -e "  ${RED}FAIL${NC}: -l 0 — expected non-zero exit, got 0"; return 1; }
+    echo "$out" | grep -qi "context length" || {
+        echo -e "  ${RED}FAIL${NC}: -l 0 — expected an error naming the context length, got: $out"
+        return 1
+    }
+}
+
 test_raw_copy_passthrough_roundtrip() {
     # Golden-independent validation of the l-EDS merge pass-through raw byte-copy
     # (EDS::copy_symbol_range_to_stream) for unmodified full-bracket symbols:
@@ -383,6 +394,7 @@ run_test "-s fails on misnamed EDZ file"         test_seds_autodetect_fails_on_m
 run_test "raw-copy pass-through round-trip"      test_raw_copy_passthrough_roundtrip
 run_test "missing -l exits non-zero"            test_missing_context_length_fails
 run_test "missing input exits non-zero"         test_missing_input_fails
+run_test "-l 0 exits non-zero"                  test_zero_context_length_fails
 run_test "--max-memory allows under budget"     test_max_memory_allows_under_budget
 run_test "--max-memory refuses over budget (exit 3)" test_max_memory_refuses_over_budget
 run_test "--max-memory cartesian vs linear bound" test_max_memory_cartesian_vs_linear
