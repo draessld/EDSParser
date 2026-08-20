@@ -28,6 +28,11 @@ Makefile
 *.cmake
 !CMakeLists.txt
 !EDSParserConfig.cmake.in
+# Build-system modules we ship. The blanket *.cmake above is aimed at generated
+# files (cmake_install.cmake and friends), but it also swallowed cmake/ — which
+# is how 593456b shipped a src/cpp/lib/CMakeLists.txt referencing
+# cmake/GitVersion.cmake without the file, breaking a clean build at HEAD.
+!cmake/*.cmake
 
 # Build directories
 build/
