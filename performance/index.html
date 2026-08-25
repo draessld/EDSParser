@@ -1763,7 +1763,7 @@ On assembly-derived data this, not the SNVs, sets the file size <code>[measured]
 EDS is flat at ~5 MB. On the 100-isolate panel only 4.1 M of 48.1 M characters are the common
 backbone — 91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89%
 of it. Filtering alleles longer than 50 bp drops ~4% of sites.</p>
-<p>See TODO 1a; <code>experiments/scripts/make_allele_subset.sh</code> applies the filter, or directly:</p>
+<p>See TODO 1a; <code>~/Data/experiments/edsparser/scripts/make_allele_subset.sh</code> applies the filter, or directly:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>bcftools<span class="w"> </span>view<span class="w"> </span>-e<span class="w"> </span><span class="s1">'strlen(REF)&gt;50 || max(strlen(ALT))&gt;50'</span><span class="w"> </span><span class="k">in</span>.vcf<span class="w"> </span>-Ov<span class="w"> </span>-o<span class="w"> </span>out.vcf
 </code></pre></div>
 <hr />
