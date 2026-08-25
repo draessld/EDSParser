@@ -137,8 +137,8 @@ struct EDS::Metadata {
     Length max_context_length;
     double avg_context_length;
     size_t num_degenerate_symbols;
-    size_t num_common_chars;
-    size_t total_change_size;
+    size_t num_common_chars;                      // chars in non-degenerate symbols
+    size_t total_change_size;                     // chars in degenerate symbols
     size_t num_empty_strings;
 
     // Position-check support — LAZY, see below

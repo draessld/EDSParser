@@ -1,7 +1,8 @@
 # EDSParser – known issues and planned work
 
-Last reprioritised **2026-08-06**, after the complement-source fix (20d8ff1) and the
-first M. tuberculosis panels. Items are ordered by what blocks the next result, not by
+Last reprioritised **2026-08-20**, after repairing the unit suite (P0 item 0); before
+that, **2026-08-06**, after the complement-source fix (20d8ff1) and the first
+M. tuberculosis panels. Items are ordered by what blocks the next result, not by
 how interesting they are. Closed items and the reasoning for dropping them are at the
 bottom rather than deleted silently.
 
@@ -16,31 +17,31 @@ only surviving cause of combinatorial blow-up in the merge itself.
 
 ## P0 — correctness; blocks publishable numbers
 
-### 0. Repair the unit test suite — `ctest` does not build or pass
+### 0. Repair the unit test suite — **done 2026-08-20**
 
-Found 2026-08-11 while auditing docs. Library and tools build clean, e2e passes 100%, but
-the C++ unit tests have drifted from the code and nobody noticed because the e2e suites are
-what gets run. Until this is fixed there is **no automated check on library internals**,
-which is precisely where 0b wants to add a regression test.
+`ctest` is 7/7 and e2e is 9/9. Triage answered the question this item asked:
+neither `test_stats` nor `test_vcf` was a regression — every failure was a stale
+expectation — but repairing them surfaced four real defects, now fixed:
 
-- `test_eds` — **does not compile.** (i) `.count()` on `PathSet`, a `std::vector<int>` since
-  086e842, at 9 sites; (ii) `test_check_position_with_sources_valid` and `_universal` have
-  their construction line commented out (`// DISABLED: EDS eds(eds_str, seds_str)`) because
-  the two-argument in-memory constructor was removed, leaving the bodies referencing an
-  undeclared `eds` — and `main()` still calls both. Fix: `has_path()` helper for (i); rewrite
-  (ii) against `EDS::load(eds_path, seds_path)` with temp files, as
-  `test_load_eds_with_sources_from_files` already does.
-- `test_sources:136` — expects `Sources::load()` on a nonexistent file to throw; it doesn't.
-  Decide which behaviour is wanted and align.
-- `test_merge:92` — expects `{G,C}{T}` at l=2 to merge to one symbol; transform now converges
-  in 0 iterations. Likely a stale expectation under the boundary exemption plus
-  contiguous-context measurement (cd7e3e2), but **confirm before editing the expectation** —
-  this is the merge core.
-- `test_stats:84` (`meta.total_change_size == 7`) and `test_vcf:321` (multi-allelic CNV+INV
-  symbol not found) — **untriaged; these may be real regressions,** not stale expectations.
+- **`find_symbol_at_common_position()` out-of-bounds read** for a common position
+  at or past the total common-character count (`upper_bound` → `end()` →
+  `symbol_idx == n`). Segfaulted ~2 runs in 3, reachable from the public
+  `check_position()`. Valgrind catches it, ASan does not.
+- **Out-of-range degenerate string id** reported as an "Internal error" rather
+  than `out_of_range`.
+- **Stray `}` absorbed as a sequence character**, so truncated files parsed
+  "successfully" with braces inside their strings.
+- **`vcf2eds` counted out-of-range variants as processed** and then dropped them,
+  reporting 100% success while discarding the tail of a mismatched reference.
 
-Triage `test_stats` and `test_vcf` first, since those two decide whether this is a
-documentation-grade annoyance or an actual correctness problem.
+Also settled: `total_change_size` counts **characters** in degenerate symbols
+(matching its declaration and its display next to `num_common_chars`, which it
+now partitions N with) rather than alternatives-beyond-the-first, which was
+exactly `m - n`.
+
+Follow-ups this opened, both small and both new items below: 0d (`check_position`
+has no caller and so no real specification) and 0e (`vcf2eds` never validates REF
+against the reference).
 
 ### 0a. Regenerate every result produced at ≤ 63 paths
 
@@ -59,18 +60,14 @@ which makes the boundary exact: **≤ 63 samples/sequences affected, > 63 unaffe
   as a dataset (see 1b — its diploid heterozygosity is a separate problem the fix does not
   solve).
 
-### 0b. Add the regression test that would have caught it
+### 0b. Add the regression test that would have caught it — **done**
 
-Nothing in the suite asserts the invariant that broke: **a linear merge can never produce
-more strings in one symbol than there are paths**, because each path contributes exactly
-one alternative and surviving combinations carry disjoint path sets. `tests/unit/test_merge.cpp`
-has no path-count assertion at all, and the bug survived the whole unit suite and the
-`eds2leds` e2e checks unnoticed.
-
-Add to `test_merge.cpp`: build a small EDS with complement-encoded sources and assert
-`max strings per output symbol ≤ num_paths` after `eds_to_leds_linear()`. Cheap, and it
-pins the exact failure — the observed symptom was 6,444,274 strings in one symbol against
-a bound of 50.
+`test_merge.cpp` has `test_linear_merge_respects_path_count_bound` (3 paths, 6
+adjacent degenerate symbols, complement-spelled sources: cartesian would give 64,
+correct pruning gives 3) plus `test_universal_marker_still_matches_every_path`,
+so a genuinely universal `{0}` is not "fixed" into behaving like a complement.
+Both pass. They were present but unreachable while the suite was red, and one
+asserted `size()` where it meant `length()`.
 
 ### 0c. Surface the boundary-context exemption where users meet it *(mostly resolved)*
 
@@ -89,6 +86,38 @@ What remains is presentation: `edsparser-stats` reports a single `context_min` t
 the boundary symbols, so a correct l-EDS looks like it violates its own constraint. Report
 interior minimum separately (or alongside), and confirm biofmi does not assume every context
 is ≥ l.
+
+### 0d. `check_position()` has no caller, and so no specification
+
+Nothing in the repo calls it outside `eds.cpp` — presumably biofmi is the intended
+consumer. Its tests were the only statement of what it means, and they
+contradicted themselves about the coordinate convention (some assertions counted
+positions in the expanded string, others in common characters). The
+implementation is self-consistent and is now pinned by
+`test_check_position_basic`:
+
+- `common_pos` indexes **common characters only**; alternatives inside a
+  degenerate symbol occupy no common position, so a match cannot *begin* inside
+  one.
+- `degenerate_strings` are **global** degenerate-string ids in symbol order, and
+  each must belong to a symbol the match traverses (`invalid_argument` otherwise);
+  ids for symbols outside the traversed range are warned about and ignored.
+
+Confirm this is the convention biofmi expects before building on it — if it wants
+to start a match inside a degenerate symbol, the API cannot express that today.
+
+### 0e. `vcf2eds` never checks REF against the reference
+
+It takes only the *length* of the REF field and reads the allele from the FASTA,
+so a VCF whose coordinates belong to a different assembly produces a
+well-formed EDS built from the wrong spans, silently. Every position in the
+CNV/INV unit fixture was off by one and nothing noticed for as long as the
+fixture has existed.
+
+The reference span is already read in order to emit it, so comparing it to REF is
+nearly free. Wire it to a counter plus a warning (as 0-fix did for out-of-range
+POS) rather than a hard failure, since real VCFs do contain mismatches, and
+decide the threshold at which the run should refuse to continue.
 
 ---
 

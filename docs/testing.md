@@ -13,19 +13,19 @@ EDSParser has four layers of testing:
 
 ## 1. Unit Tests
 
-> **⚠️ The unit suite does not build or pass at HEAD (2026-08-11).** The library
-> and CLI tools build fine and the e2e suites pass 100%, but the unit tests have
-> drifted from the code: `test_eds` does not compile (`.count()` on `PathSet`,
-> now a `std::vector<int>`; plus two tests referencing an `eds` whose constructor
-> line is commented out), and `test_sources`, `test_stats`, `test_merge` and
-> `test_vcf` each fail on their first assertion. `test_msa` and
-> `test_integration` pass. See CLAUDE.md for the per-test diagnosis.
+> **All seven unit tests build and pass (repaired 2026-08-20).** They had drifted
+> far enough that `test_eds` no longer compiled and four others aborted on their
+> first assertion; repairing them turned up four real defects, including an
+> out-of-bounds read reachable from `check_position()` that segfaulted about two
+> runs in three. See CLAUDE.md for what was wrong and what it found.
 
 ### Running
 
 ```bash
-# From edsparser/build/tools after build
-ctest --output-on-failure
+# ctest runs from build/src/cpp, where CTestTestfile.cmake lives
+cd build/src/cpp && ctest --output-on-failure
+
+# The executables themselves are written to build/tools/
 
 # Run a single executable
 ./test_eds

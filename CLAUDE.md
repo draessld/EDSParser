@@ -484,24 +484,53 @@ This supersedes the collect/parse/compare half of the shell pipeline: `collect_r
 
 ## Testing
 
-### ⚠️ The unit suite does not currently build or pass (as of 2026-08-11)
+### The unit suite builds and passes (repaired 2026-08-20)
 
-`ctest` is broken at HEAD — the library and all CLI tools build fine, and the
-**e2e suites pass 100%**, but the C++ unit tests have drifted from the code:
+`ctest` had drifted badly: `test_eds` did not compile (and so had not run since
+086e842), and `test_sources`, `test_stats`, `test_merge` and `test_vcf` each
+aborted on the first assertion in their area. All seven now pass, alongside the
+nine e2e suites.
 
-| Test | State | Cause |
-|------|-------|-------|
-| `test_eds` | **Does not compile** | Calls `.count()` on `PathSet`, which became `std::vector<int>` in 086e842. Separately, `test_check_position_with_sources_valid`/`_universal` reference an `eds` variable whose constructor line is commented out `// DISABLED: EDS eds(eds_str, seds_str)` — the two-argument in-memory constructor no longer exists, so the bodies reference an undeclared name. `main()` still calls both. |
-| `test_sources` | Fails at `test_sources.cpp:136` | Expects `Sources::load()` on a nonexistent file to throw; it does not. |
-| `test_stats` | Fails at `test_stats.cpp:84` | Expects `meta.total_change_size == 7`. |
-| `test_merge` | Fails at `test_merge.cpp:92` | Expects `{G,C}{T}` at l=2 to merge to one symbol; the transform reports "already satisfies l-EDS, converged after 0 iterations". Plausibly correct new behaviour under the boundary exemption + contiguous-context measurement (cd7e3e2), i.e. a stale expectation rather than a regression — but unverified. |
-| `test_vcf` | Fails at `test_vcf.cpp:321` | Multi-allelic CNV+INV symbol not found. |
-| `test_msa`, `test_integration` | Pass | — |
+Repairing them turned up **four real defects**, since fixed, which is the reason
+a green e2e run is not evidence that library internals are correct:
 
-Each is a first-assertion failure in its area, which is the signature of stale
-expectations rather than deep breakage — but **`test_stats` and `test_vcf` have
-not been triaged and could be real regressions.** Do not treat a green e2e run
-as evidence the library is correct until this is resolved. See TODO.md.
+- **`find_symbol_at_common_position()` read out of bounds** for any common
+  position at or past the total common-character count: `upper_bound` returns
+  `end()`, `symbol_idx` becomes `n`, and every per-symbol array is indexed one
+  past the end. Segfaulted ~2 runs in 3. Reachable from the public
+  `check_position()`, which is written to catch `out_of_range` from it — the
+  read happened first. (Valgrind catches it; ASan does not, because the first
+  over-read lands inside a `std::vector<bool>` word.)
+- **An out-of-range degenerate string id** was reported as `"Internal error: ...
+  maps to non-degenerate symbol"`. Now `out_of_range`, naming the universe size.
+- **A stray `}` was absorbed as a sequence character** — `"ACGT}"` parsed as one
+  5-character symbol — so a truncated file parsed "successfully" with braces
+  inside its strings. Unmatched `{` was already rejected; this is the symmetric
+  check. Compact-format bare symbols are unaffected.
+- **`vcf2eds` counted variants past the end of the reference as processed**, then
+  dropped them, reporting a 100% success rate while discarding the tail. Now a
+  `skipped_out_of_range` count plus a stderr warning, since the usual cause is a
+  VCF/FASTA mismatch.
+
+Two things worth knowing about the tests themselves:
+
+- **`check_position()` has no caller anywhere in the repo**, so its tests are its
+  entire specification — and they used to contradict themselves about the
+  coordinate convention. It is now pinned in `test_check_position_basic`:
+  `common_pos` indexes **common characters only**; `degenerate_strings` are
+  **global** degenerate-string ids that must belong to a symbol the match
+  actually traverses (otherwise `invalid_argument`), while ids for symbols
+  outside the traversed range are warned about and ignored. A match cannot begin
+  inside a degenerate symbol.
+- **Half of `test_merge` merged nothing.** `{G,C}{T}`, `{T}{A,C,G}`, `{,A}{T}`,
+  `{ACGT}{G,C}{T}` and `{A}{B,C}{D}` all place their short common symbol at a
+  boundary, where `needs_merge()`'s `i > 0 && i < n - 1` exempts it, so they
+  asserted results the transform correctly never produces. They now use interior
+  placements, and the exemption is asserted deliberately in two tests instead of
+  accidentally in five. `test_merge` also covers the **path-count invariant**
+  (TODO 0b): a linear merge can never produce more strings in one symbol than
+  there are paths — the assertion the complement-source bug (20d8ff1) would have
+  failed.
 
 ### Test Categories
 
