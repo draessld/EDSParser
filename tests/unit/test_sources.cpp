@@ -129,8 +129,14 @@ void test_load_sources_nonexistent_file() {
         auto sources = Sources::load(nonexistent);
         eds.set_sources_object(sources);
     } catch (const std::runtime_error& e) {
+        // Sources::load checks existence before trying to open, so the message
+        // is "Sources file does not exist", not the "Failed to open" this used
+        // to require — which is EDS::load's wording for the same situation.
+        // Assert the behaviour (it refuses a missing file) rather than one of
+        // two interchangeable spellings.
         std::string msg = e.what();
-        caught = (msg.find("Failed to open") != std::string::npos);
+        caught = (msg.find("does not exist") != std::string::npos ||
+                  msg.find("Failed to open") != std::string::npos);
     }
 
     assert(caught);
@@ -516,6 +522,26 @@ void test_edz_bitset_intersection() {
     std::cout << "PASSED\n";
 }
 
+// Expand a source set to its explicit member list. The same logical set has
+// several spellings — universal {0}, complement {0,e1,...} = every path except
+// e1..., and the explicit list an EDZ bitset reads back as — so comparing them
+// literally compares spelling rather than meaning. Mirrors
+// canonicalize_expanded() in tools/source_transform.cpp, which --verify uses
+// for exactly this reason.
+static PathSet expanded(const PathSet& ps, size_t num_paths) {
+    if (ps.empty() || ps[0] != 0) return ps;
+    if (num_paths == 0) return {0};
+    PathSet out;
+    out.reserve(num_paths);
+    size_t ei = 1;
+    for (size_t p = 1; p <= num_paths; ++p) {
+        while (ei < ps.size() && static_cast<size_t>(ps[ei]) < p) ++ei;
+        if (ei < ps.size() && static_cast<size_t>(ps[ei]) == p) { ++ei; continue; }
+        out.push_back(static_cast<int>(p));
+    }
+    return out;
+}
+
 void test_edz_bitset_copy_range() {
     std::cout << "EDZ Bitset Test 5: copy_range_to_stream re-serialises to SEDS text... ";
 
@@ -541,7 +567,10 @@ void test_edz_bitset_copy_range() {
     auto seds_src = Sources::load(seds_path);
     assert(seds_src->cardinality() == 4);
     for (size_t i = 0; i < sets.size(); ++i) {
-        assert(seds_src->read_source(i) == sets[i]);
+        // Compare meaning, not spelling: {0,2} went in as "every path but 2"
+        // and comes back as the explicit {1,3,4}, because the EDZ bitset has no
+        // complement encoding to preserve. Both denote the same three paths.
+        assert(expanded(seds_src->read_source(i), np) == expanded(sets[i], np));
     }
 
     std::filesystem::remove(path);
@@ -1137,18 +1166,18 @@ void test_sparse_size_invariant() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // save_as() format-conversion tests — backs edsparser-source-transform.
-// Universal sets ({0}) and the explicit full universe {1..np} are equivalent;
-// EDZ canonicalizes both to {0}, so compare semantically after collapsing them.
+// The same logical set has several spellings across formats, so compare the
+// expanded member list rather than the encoding.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Collapsing only the universal spelling ({0} and the explicit full universe)
+// is not enough: it leaves complement entries alone, so a {0,2} that an EDZ
+// bitset reads back as the explicit {1,3,4,5} looks like a changed set. This is
+// the same false mismatch edsparser-source-transform --verify had until it
+// switched to full expansion. expanded() handles universal, complement and
+// explicit alike.
 static PathSet collapse_universal(PathSet ps, size_t np) {
-    if (ps.size() == 1 && ps[0] == 0) return {0};
-    if (np > 0 && ps.size() == np) {
-        for (size_t k = 0; k < np; ++k)
-            if (ps[k] != static_cast<int>(k + 1)) return ps;
-        return {0};
-    }
-    return ps;
+    return expanded(ps, np);
 }
 
 // Convert `in_path` (loaded as in_fmt) to out_fmt, reload, and assert every
@@ -1206,7 +1235,11 @@ void test_save_as_conversions() {
         assert_convert_roundtrip(seds_in, Sources::Format::SEDS,
                                  tmp / "save_as.edzc", Sources::Format::EDZ_COMPRESSED);
 
-        auto edzc_mid = tmp / "save_as_mid.edzc";
+        // Every EDZ variant shares the .edz extension and is told apart by the
+        // header flags, so auto-detection is only defined for that extension.
+        // This file used to be named .edzc, which detect_format does not know
+        // and so could never resolve to EDZ_COMPRESSED.
+        auto edzc_mid = tmp / "save_as_mid.edz";
         Sources::load(seds_in, Sources::Format::SEDS)
             ->save_as(edzc_mid, Sources::Format::EDZ_COMPRESSED);
         assert_convert_roundtrip(edzc_mid, Sources::Format::EDZ_COMPRESSED,

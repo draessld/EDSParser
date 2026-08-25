@@ -63,16 +63,25 @@ const std::string CNV_INV_VCF =
     "##fileformat=VCFv4.2\n"
     "##reference=test_cnv_inv.fa\n"
     "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE1\tSAMPLE2\tSAMPLE3\n"
-    "chr1\t10\t.\tACGT\t<CN0>\t99\tPASS\t.\tGT\t1|1\t0|1\t0|0\n"
-    "chr1\t20\t.\tATG\t<CN2>\t99\tPASS\t.\tGT\t0|1\t1|0\t0|0\n"
-    "chr1\t30\t.\tGCTA\t<CN3>\t99\tPASS\t.\tGT\t0|0\t1|1\t0|1\n"
-    "chr1\t40\t.\tTGCA\t<INV>\t99\tPASS\t.\tGT\t1|0\t0|1\t1|1\n"
-    "chr1\t50\t.\tAAGG\t<CN1>\t99\tPASS\t.\tGT\t0|0\t0|1\t1|0\n"
-    "chr1\t60\t.\tT\t<CN0>,<INV>\t99\tPASS\t.\tGT\t0|1\t1|2\t2|0\n";
+    // POS values are the real 1-based offsets of each REF string in CNV_INV_FA
+    // below. They used to be round numbers (10, 20, ... 60) that matched no REF
+    // allele: every variant was applied to the wrong span, and POS 60 fell past
+    // the end of the 52 bp reference entirely, so the multi-allelic site was
+    // silently dropped and test_multiallelic_cnv_inv could never find it.
+    "chr1\t9\t.\tACGT\t<CN0>\t99\tPASS\t.\tGT\t1|1\t0|1\t0|0\n"
+    "chr1\t18\t.\tATG\t<CN2>\t99\tPASS\t.\tGT\t0|1\t1|0\t0|0\n"
+    "chr1\t26\t.\tGCTA\t<CN3>\t99\tPASS\t.\tGT\t0|0\t1|1\t0|1\n"
+    "chr1\t35\t.\tTGGA\t<INV>\t99\tPASS\t.\tGT\t1|0\t0|1\t1|1\n"
+    "chr1\t43\t.\tAAGG\t<CN1>\t99\tPASS\t.\tGT\t0|0\t0|1\t1|0\n"
+    "chr1\t52\t.\tT\t<CN0>,<INV>\t99\tPASS\t.\tGT\t0|1\t1|2\t2|0\n";
 
+// The INV site is TGGA rather than TGCA: TGCA is its own reverse complement, so
+// an inversion of it produced an allele identical to the reference, the symbol
+// collapsed to one string, and the inversion was untestable. revcomp(TGGA) is
+// TCCA.
 const std::string CNV_INV_FA =
     ">chr1\n"
-    "NNNNNNNNACGTNNNNNATGNNNNNGCTANNNNNTGCANNNNAAGGNNNNNT\n";
+    "NNNNNNNNACGTNNNNNATGNNNNNGCTANNNNNTGGANNNNAAGGNNNNNT\n";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -283,7 +292,9 @@ void test_inversion_handling() {
         if (eds_str[pos] == '{') {
             size_t end = eds_str.find('}', pos);
             std::string sym = eds_str.substr(pos + 1, end - pos - 1);
-            if (sym.find("TGCA") != std::string::npos && sym.find(',') != std::string::npos) {
+            // TGGA inverted is TCCA; both must be present as alternatives.
+            if (sym.find("TGGA") != std::string::npos &&
+                sym.find("TCCA") != std::string::npos) {
                 found = true;
                 std::cout << "  Found inversion symbol: {" << sym << "}" << std::endl;
                 break;
@@ -330,8 +341,13 @@ void test_header_only_vcf() {
 
     auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa);
 
-    assert(eds_str  == "{ACGTACGTACGT}" && "EDS should match reference sequence");
-    assert(seds_str == "{0}"            && "sEDS should be universal path");
+    assert(eds_str == "{ACGTACGTACGT}" && "EDS should match reference sequence");
+
+    // Dense SEDS ends with a binary "SEDN" trailer recording cardinality and
+    // num_paths, so the stream is "{0}" followed by trailer bytes rather than
+    // exactly "{0}". Compare the text portion.
+    assert(seds_str.rfind("{0}", 0) == 0 && "sEDS should start with the universal path");
+    assert(seds_str.find("SEDN") != std::string::npos && "dense SEDS trailer expected");
 
     std::cout << "  PASS" << std::endl;
 }
@@ -342,7 +358,12 @@ void test_variant_across_block_boundary() {
     std::stringstream vcf(
         "##fileformat=VCFv4.2\n"
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
-        "chr1\t8\t.\tCGTAC\tA\t.\tPASS\t.\n");
+        // REF is the actual sequence at POS 8 (1-based) of the reference below.
+        // It read CGTAC, which sits at POS 6 — the parser takes only the REF
+        // *length* and reads the allele from the FASTA, so the mismatch went
+        // unnoticed and the expectation below could never match. POS 8 is the
+        // point: 0-indexed [7,12) straddles the block boundary at 10.
+        "chr1\t8\t.\tTACGT\tA\t.\tPASS\t.\n");
     std::stringstream fa(">chr1\nACGTACGTACGTACGTACGT");
 
     VCFStats stats;
@@ -350,7 +371,7 @@ void test_variant_across_block_boundary() {
 
     std::cout << "  EDS: " << eds_str << std::endl;
 
-    assert(eds_str.find("{CGTAC,A}") != std::string::npos && "Variant spanning block boundary not processed correctly");
+    assert(eds_str.find("{TACGT,A}") != std::string::npos && "Variant spanning block boundary not processed correctly");
     assert(stats.processed_variants == 1 && "Should have processed exactly one variant");
 
     std::cout << "  PASS" << std::endl;

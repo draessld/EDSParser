@@ -7,6 +7,14 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <algorithm>
+
+// PathSet is a std::vector<int> (086e842), not a std::set, so membership is a
+// search rather than .count(). Sources always stores a set's members sorted and
+// deduplicated, so a plain find is enough.
+bool has_path(const PathSet& paths, int path) {
+    return std::find(paths.begin(), paths.end(), path) != paths.end();
+}
 
 // Helper function to create temporary EDS file and load it
 edsparser::EDS create_temp_eds(const std::string& eds_content) {
@@ -17,6 +25,26 @@ edsparser::EDS create_temp_eds(const std::string& eds_content) {
 
     auto eds = edsparser::EDS::load(temp_path);
     std::filesystem::remove(temp_path);
+    return eds;
+}
+
+// Same, for an EDS with sources. The two-argument in-memory constructor
+// EDS(eds_str, seds_str) was removed when Sources became a separate streamed
+// class, so source-aware tests go through the file loader like the rest of the
+// pipeline does. The files are unlinked immediately; EDS::load keeps its own
+// handles open, and Sources reads through them on demand.
+edsparser::EDS create_temp_eds_with_sources(const std::string& eds_content,
+                                            const std::string& seds_content) {
+    auto stem = std::to_string(std::hash<std::string>{}(eds_content + seds_content));
+    auto eds_path  = std::filesystem::temp_directory_path() / ("test_eds_src_" + stem + ".eds");
+    auto seds_path = std::filesystem::temp_directory_path() / ("test_eds_src_" + stem + ".seds");
+
+    { std::ofstream ofs(eds_path);  ofs << eds_content;  }
+    { std::ofstream ofs(seds_path); ofs << seds_content; }
+
+    auto eds = edsparser::EDS::load(eds_path, seds_path);
+    std::filesystem::remove(eds_path);
+    std::filesystem::remove(seds_path);
     return eds;
 }
 
@@ -294,19 +322,24 @@ void test_statistics_simple() {
 
     // Structure checks
     assert(meta.num_degenerate_symbols == 2);  // {A,ACA} and {T,TG}
-    assert(meta.total_change_size == 2);        // 1 extra in each degenerate set
+    // Characters inside the degenerate symbols: A(1) + ACA(3) + T(1) + TG(2).
+    // Was 2, when this counted alternatives beyond the first.
+    assert(meta.total_change_size == 7);
 
-    // Length checks
-    assert(meta.min_context_length == 1);       // "A" and "T"
+    // Length checks. A "context" is a non-degenerate symbol, so the contexts
+    // here are {ACGT} and {CGT} — not the alternatives inside the degenerate
+    // symbols, which is what the previous expectations (min 1, "A" and "T")
+    // measured. test_stats.cpp asserts these same values for this same EDS.
+    assert(meta.min_context_length == 3);       // "CGT"
     assert(meta.max_context_length == 4);       // "ACGT"
-    assert(meta.avg_context_length > 2.0 && meta.avg_context_length < 3.0);
+    assert(meta.avg_context_length > 3.4 && meta.avg_context_length < 3.6);  // 3.5
 
     // No empty strings
     assert(meta.num_empty_strings == 0);
 
-    // Common characters in {A,ACA} - "A" is common prefix
-    // Common characters in {T,TG} - "T" is common prefix
-    assert(meta.num_common_chars == 2);
+    // Chars in the non-degenerate symbols: ACGT (4) + CGT (3). Not a common
+    // prefix of the degenerate alternatives, which is what "A" + "T" == 2 was.
+    assert(meta.num_common_chars == 7);
 
     std::cout << "PASSED\n";
 }
@@ -319,9 +352,13 @@ void test_statistics_with_empty() {
     const auto& meta = eds.get_metadata();
 
     assert(meta.num_degenerate_symbols == 1);   // Only {,A,T}
-    assert(meta.total_change_size == 2);         // 2 extra strings in degenerate set
+    assert(meta.total_change_size == 2);         // chars in {,A,T}: 0 + 1 + 1
     assert(meta.num_empty_strings == 1);
-    assert(meta.min_context_length == 0);        // Empty string
+    // The empty string lives inside the degenerate symbol, so it is not a
+    // context. The contexts are {AC} and {GT}, both length 2 — as
+    // test_stats.cpp asserts for this same EDS.
+    assert(meta.min_context_length == 2);
+    assert(meta.max_context_length == 2);
 
     std::cout << "PASSED\n";
 }
@@ -335,7 +372,8 @@ void test_statistics_all_regular() {
 
     assert(meta.num_degenerate_symbols == 0);
     assert(meta.total_change_size == 0);
-    assert(meta.num_common_chars == 0);
+    // Every symbol is non-degenerate, so all four characters are common.
+    assert(meta.num_common_chars == 4);
     assert(meta.min_context_length == 1);
     assert(meta.max_context_length == 1);
     assert(meta.avg_context_length == 1.0);
@@ -412,14 +450,14 @@ void test_load_eds_with_sources_from_files() {
     auto src2 = eds.read_source(2);  // String "C": {1,2}
 
     assert(src0.size() == 1);
-    assert(src0.count(1) == 1);
+    assert(has_path(src0, 1));
 
     assert(src1.size() == 1);
-    assert(src1.count(2) == 1);
+    assert(has_path(src1, 2));
 
     assert(src2.size() == 2);
-    assert(src2.count(1) == 1);
-    assert(src2.count(2) == 1);
+    assert(has_path(src2, 1));
+    assert(has_path(src2, 2));
 
     // Clean up
     std::filesystem::remove(eds_path);
@@ -616,12 +654,20 @@ void test_save_and_reload_eds_with_sources() {
 void test_generate_patterns() {
     std::cout << "Test 24: Generate patterns... ";
 
-    // Create a simple EDS with enough length for varied patterns
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,CA}{GG}");
+    // The EDS has to be long enough that an 8-character pattern can start at
+    // more than one position. {ACGT}{A,CA}{GG} spans 7-8 characters in total,
+    // so exactly one 8-character walk exists and the variety assertion below
+    // cannot hold — since 3faa4cb the generator no longer pads a short walk by
+    // wrapping around to symbol 0, which is what used to manufacture variety
+    // out of sequence contiguous in no path.
+    edsparser::EDS eds = create_temp_eds("{ACGTACGTAC}{A,CA}{GGTTGGTTGG}");
 
-    // Generate patterns
+    // Seeded, so a failure here is reproducible rather than a one-in-N flake.
     std::stringstream output;
-    eds.generate_patterns(output, 20, 8);
+    auto gen_stats = eds.generate_patterns(output, 20, 8, /*seed=*/42);
+    assert(gen_stats.requested == 20);
+    assert(gen_stats.generated == 20);
+    assert(!gen_stats.source_aware);   // no sources attached
 
     // Check that we got 20 patterns
     std::string line;
@@ -840,13 +886,13 @@ void test_source_cache_functionality() {
 
     // Access sources - first accesses will be cache misses
     auto src0 = eds.read_source(0);  // Cache: {0}
-    assert(src0.count(0) == 1);
+    assert(has_path(src0, 0));
 
     auto src1 = eds.read_source(1);  // Cache: {0, 1}
-    assert(src1.count(1) == 1);
+    assert(has_path(src1, 1));
 
     auto src2 = eds.read_source(2);  // Cache: {1, 2} (evicts 0)
-    assert(src2.count(2) == 1);
+    assert(has_path(src2, 2));
 
     // Access src1 again - should be cache hit
     auto src1_again = eds.read_source(1);
@@ -855,8 +901,8 @@ void test_source_cache_functionality() {
     // Access src4 which has multiple paths
     auto src4 = eds.read_source(4);  // {1,2}
     assert(src4.size() == 2);
-    assert(src4.count(1) == 1);
-    assert(src4.count(2) == 1);
+    assert(has_path(src4, 1));
+    assert(has_path(src4, 2));
 
     // Verify sources persist across multiple reads (cache works)
     for (int i = 0; i < 3; i++) {
@@ -944,28 +990,27 @@ void test_extract_wrong_changes_size() {
 }
 
 void test_extract_metadata_only() {
-    std::cout << "Test 32: Extract throws in METADATA_ONLY mode... ";
+    std::cout << "Test 32: Extract works in METADATA_ONLY mode... ";
 
-    // Create temp file
+    // extract() used to be FULL-mode only and threw here. It now reads through
+    // read_symbol(), so it works whichever way the EDS was constructed; assert
+    // the two modes agree rather than that one of them fails.
     std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "test_extract.eds";
     std::ofstream ofs(temp_file);
     ofs << "{ACGT}{A,CA}";
     ofs.close();
 
-    // Load in METADATA_ONLY mode
-    auto eds = edsparser::EDS::load(temp_file.string());
+    auto eds = edsparser::EDS::load(temp_file.string());          // METADATA_ONLY
 
-    // Should throw
-    std::vector<int> changes = {0};
-    bool threw = false;
-    try {
-        eds.extract(0, 1, changes);
-    } catch (const std::runtime_error& e) {
-        threw = true;
-        std::string msg = e.what();
-        assert(msg.find("FULL mode") != std::string::npos);
-    }
-    assert(threw);
+    std::istringstream ss("{ACGT}{A,CA}");
+    edsparser::EDS full(ss);                                       // FULL
+
+    assert(eds.extract(0, 1, {0}) == "ACGT");
+    assert(eds.extract(1, 1, {1}) == "CA");
+    assert(eds.extract(0, 2, {0, 1}) == "ACGTCA");
+
+    assert(eds.extract(0, 2, {0, 0}) == full.extract(0, 2, {0, 0}));
+    assert(eds.extract(0, 2, {0, 1}) == full.extract(0, 2, {0, 1}));
 
     std::filesystem::remove(temp_file);
     std::cout << "PASSED\n";
@@ -976,26 +1021,49 @@ void test_check_position_basic() {
 
     edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
 
-    // Pattern "ACG" at (0, {})
+    // The coordinate convention, pinned here because nothing else states it and
+    // check_position has no caller outside eds.cpp:
+    //
+    //   common_pos indexes COMMON characters only. For {ACGT}{A,ACA}{CGT}{T,TG}
+    //   that is ACGT = 0..3 and CGT = 4..6; alternatives inside a degenerate
+    //   symbol occupy no common position.
+    //
+    //   degenerate_strings are GLOBAL degenerate-string ids in symbol order —
+    //   symbol 1 contributes 0:"A" and 1:"ACA", symbol 3 contributes 2:"T" and
+    //   3:"TG" — and each must belong to a symbol the match actually traverses.
+    //
+    // The previous expectations here (e.g. (4,{0},"ACG"), (6,{1},"ACG")) counted
+    // positions in the *expanded* string instead, as if the chosen alternative
+    // occupied positions of its own. No single convention satisfied all of them:
+    // those two needed the expanded reading while (5,{2},"GTT") needed this one,
+    // so the test contradicted itself and could never pass as written.
+
+    // Entirely inside the first common run.
     assert(eds.check_position(0, {}, "ACG") == true);
+    assert(eds.check_position(0, {}, "ACGT") == true);
+    assert(eds.check_position(1, {}, "CGT") == true);
+    assert(eds.check_position(3, {}, "T") == true);
 
-    // Pattern "ACG" at (4, {0})
-    assert(eds.check_position(4, {0}, "ACG") == true);
+    // The second common run, reached at common position 4.
+    assert(eds.check_position(4, {}, "CGT") == true);
 
-    // Pattern "ACG" at (6, {1})
-    assert(eds.check_position(6, {1}, "ACG") == true);
-
-    // Pattern "GTT" at (5, {2})
+    // Running off the end of {CGT} into the degenerate symbol 3, choosing "T"
+    // (global id 2) or "TG" (global id 3).
+    assert(eds.check_position(4, {2}, "CGTT") == true);
+    assert(eds.check_position(4, {3}, "CGTTG") == true);
     assert(eds.check_position(5, {2}, "GTT") == true);
-
-    // Pattern "GTT" at (5, {3})
     assert(eds.check_position(5, {3}, "GTT") == true);
 
-    // Pattern "ACGTT" at (4, {0, 2})
-    assert(eds.check_position(4, {0, 2}, "ACGTT") == true);
-
-    // Pattern "ACGTT" at (4, {0, 3})
-    assert(eds.check_position(4, {0, 3}, "ACGTT") == true);
+    // An id for a symbol the match never reaches is rejected outright rather
+    // than quietly ignored: here the match traverses symbol 3, but id 0 is an
+    // alternative of symbol 1.
+    bool threw = false;
+    try {
+        eds.check_position(4, {0, 2}, "ACGTT");
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    assert(threw);
 
     std::cout << "PASSED\n";
 }
@@ -1008,14 +1076,19 @@ void test_check_position_negative() {
     // Wrong pattern
     assert(eds.check_position(0, {}, "XYZ") == false);
 
-    // Pattern doesn't match
-    assert(eds.check_position(0, {}, "ACGTX") == false);
+    // Pattern doesn't match. It has to stay inside the common run: "ACGTX" is
+    // five characters from position 0, so it runs into degenerate symbol 1 and
+    // supplying no id for that symbol is an input error, not a non-match (see
+    // test_check_position_errors).
+    assert(eds.check_position(0, {}, "ACGX") == false);
 
     // Position beyond range
     assert(eds.check_position(100, {}, "ACG") == false);
 
-    // Wrong degenerate string for position
-    assert(eds.check_position(4, {1}, "ACG") == false);  // Should be {0}, not {1}
+    // A degenerate id supplied where the match traverses no degenerate symbol
+    // is warned about and ignored; the pattern still has to match, and "ACG"
+    // does not match {CGT} at common position 4.
+    assert(eds.check_position(4, {1}, "ACG") == false);
 
     std::cout << "PASSED\n";
 }
@@ -1025,10 +1098,17 @@ void test_check_position_errors() {
 
     edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
 
+    // Every case below uses a pattern long enough to actually run into a
+    // degenerate symbol. Ids are only validated against the symbols the match
+    // traverses, so a short pattern like "ACG" from common position 4 stays
+    // inside {CGT}, and any id passed with it is warned about and ignored
+    // rather than rejected — which is what these cases used to do, and why
+    // they expected throws that could not happen.
+
     // Invalid degenerate string number
     bool threw = false;
     try {
-        eds.check_position(4, {999}, "ACG");
+        eds.check_position(4, {999}, "CGTT");   // traverses symbol 3
     } catch (const std::out_of_range&) {
         threw = true;
     }
@@ -1037,7 +1117,7 @@ void test_check_position_errors() {
     // Not enough degenerate strings
     threw = false;
     try {
-        eds.check_position(4, {}, "ACGTT");  // Should need {0, 2} or similar
+        eds.check_position(4, {}, "ACGTT");  // runs into symbol 3 with no id
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -1046,8 +1126,8 @@ void test_check_position_errors() {
     // Wrong symbol for degenerate string
     threw = false;
     try {
-        // String 2 belongs to symbol 3, not symbol 1
-        eds.check_position(4, {2}, "ACG");
+        // Id 2 is an alternative of symbol 3; this match traverses symbol 1.
+        eds.check_position(0, {2}, "ACGTA");
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -1056,7 +1136,7 @@ void test_check_position_errors() {
     // Negative degenerate string number
     threw = false;
     try {
-        eds.check_position(4, {-1}, "ACG");
+        eds.check_position(4, {-1}, "CGTT");
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -1078,9 +1158,26 @@ void test_check_position_metadata_only() {
     // Load in METADATA_ONLY mode
     auto eds = edsparser::EDS::load(temp_file);
 
-    // Should work same as FULL mode
+    // Should work the same as FULL mode. Positions follow the common-character
+    // convention documented in test_check_position_basic.
+    std::istringstream ss("{ACGT}{A,ACA}{CGT}{T,TG}");
+    edsparser::EDS full(ss);
+
+    const std::vector<std::pair<std::pair<int, std::vector<int>>, std::string>> cases = {
+        {{0, {}},  "ACG"},
+        {{4, {}},  "CGT"},
+        {{4, {2}}, "CGTT"},
+        {{5, {2}}, "GTT"},
+        {{0, {}},  "XYZ"},
+    };
+    for (const auto& [where, pattern] : cases) {
+        const auto& [pos, degen] = where;
+        assert(eds.check_position(pos, degen, pattern) ==
+               full.check_position(pos, degen, pattern));
+    }
+
     assert(eds.check_position(0, {}, "ACG") == true);
-    assert(eds.check_position(4, {0}, "ACG") == true);
+    assert(eds.check_position(4, {2}, "CGTT") == true);
     assert(eds.check_position(5, {2}, "GTT") == true);
     assert(eds.check_position(0, {}, "XYZ") == false);
 
@@ -1151,25 +1248,26 @@ void test_check_position_with_sources_valid() {
     std::string eds_str = "{ACGT}{A,ACA}{CGT}{T,TG}";
     std::string seds_str = "{0}{1,3}{2}{0}{1}{2,3}";
 
-    // DISABLED:     edsparser::EDS eds(eds_str, seds_str);
+    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
 
-    // Pattern "ACGTT" at (4, {0, 2})
-    // Uses string 0 "A" with sources {1,3}
-    // Uses string 2 "T" with sources {1}
-    // Intersection: {1,3} ∩ {1} = {1} ✓
-    assert(eds.check_position(4, {0, 2}, "ACGTT") == true);
+    // Positions are common-character positions (see test_check_position_basic),
+    // so a match that traverses both degenerate symbols has to start at 0 and
+    // spell out the common runs it passes through. The old expectations here
+    // started at 4 and named only the varying part, which is the expanded-string
+    // convention the implementation does not use.
 
-    // Pattern "ACGTG" at (4, {0, 3})
-    // Uses string 0 "A" with sources {1,3}
-    // Uses string 3 "TG" with sources {2,3}
-    // Intersection: {1,3} ∩ {2,3} = {3} ✓
-    assert(eds.check_position(4, {0, 3}, "ACGTTG") == true);
+    // ACGT + "A"(id 0) + CGT + "T"(id 2)
+    // "A" has sources {1,3}, "T" has sources {1}; {1,3} ∩ {1} = {1} ✓
+    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);
 
-    // Pattern "ACACGTT" at (4, {1, 2})
-    // Uses string 1 "ACA" with sources {2}
-    // Uses string 2 "T" with sources {1}
-    // Intersection: {2} ∩ {1} = {} EMPTY
-    assert(eds.check_position(4, {1, 2}, "ACACGTT") == false);
+    // ACGT + "A"(id 0) + CGT + "TG"(id 3)
+    // {1,3} ∩ {2,3} = {3} ✓
+    assert(eds.check_position(0, {0, 3}, "ACGTACGTTG") == true);
+
+    // ACGT + "ACA"(id 1) + CGT + "T"(id 2)
+    // "ACA" has sources {2}, "T" has sources {1}; {2} ∩ {1} = {} — no path
+    // carries this combination, so the match is rejected.
+    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == false);
 
     std::cout << "PASSED\n";
 }
@@ -1181,7 +1279,7 @@ void test_check_position_with_sources_universal() {
     std::string eds_str = "{ACGT}{A,ACA}{CGT}";
     std::string seds_str = "{0}{1}{2}{0}";
 
-    // DISABLED:     edsparser::EDS eds(eds_str, seds_str);
+    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
 
     // Universal {0} should not restrict intersection
     // Pattern "ACGTACGT" using string 0 "A"
@@ -1200,12 +1298,13 @@ void test_check_position_without_sources() {
 
     edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
 
-    // Without sources, any valid pattern should match
-    assert(eds.check_position(4, {0, 2}, "ACGTT") == true);
-    assert(eds.check_position(4, {1, 2}, "ACACGTT") == true);
+    // Without sources every combination is admissible, including the one that
+    // test_check_position_with_sources_valid rejects as carried by no path.
+    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);
+    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == true);
 
     // Pattern still needs to match the strings
-    assert(eds.check_position(4, {0, 2}, "WRONG") == false);
+    assert(eds.check_position(0, {0, 2}, "WRONG") == false);
 
     std::cout << "PASSED\n";
 }
@@ -1217,11 +1316,13 @@ void test_check_position_sources_all_paths() {
     std::string eds_str = "{ACGT}{A,ACA}";
     std::string seds_str = "{0}{0}{0}";
 
-    // DISABLED:     edsparser::EDS eds(eds_str, seds_str);
+    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
 
-    // All intersections should be {0}
-    assert(eds.check_position(4, {0}, "A") == true);
-    assert(eds.check_position(4, {1}, "ACA") == true);
+    // Universal {0} never restricts, so both alternatives match. The match has
+    // to start at a common position — there is no way to begin one inside a
+    // degenerate symbol — so it spells the leading ACGT too.
+    assert(eds.check_position(0, {0}, "ACGTA") == true);
+    assert(eds.check_position(0, {1}, "ACGTACA") == true);
 
     std::cout << "PASSED\n";
 }
@@ -1233,7 +1334,7 @@ void test_check_position_sources_disjoint() {
     std::string eds_str = "{AC}{A,C}{GT}";
     std::string seds_str = "{0}{1}{2}{0}";
 
-    // DISABLED:     edsparser::EDS eds(eds_str, seds_str);
+    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
 
     // Valid: {0} ∩ {1} ∩ {0} = {1}
     assert(eds.check_position(0, {0}, "ACAGT") == true);
@@ -1264,9 +1365,9 @@ void test_check_position_sources_metadata_only() {
     // Load in METADATA_ONLY mode
     auto eds = edsparser::EDS::load(temp_eds, temp_seds);
 
-    // Should work same as FULL mode with source validation
-    assert(eds.check_position(4, {0, 2}, "ACGTT") == true);   // Valid path
-    assert(eds.check_position(4, {1, 2}, "ACACGTT") == false); // Empty intersection
+    // Same as the in-memory case, positions in common-character coordinates.
+    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);    // {1,3} ∩ {1}
+    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == false); // {2} ∩ {1} = {}
 
     std::filesystem::remove(temp_eds);
     std::filesystem::remove(temp_seds);
@@ -1491,6 +1592,7 @@ void test_copy_symbol_range_to_stream() {
 }
 
 int main() {
+    std::cout << std::unitbuf;  // flush per write: a crash must not swallow the last line
     std::cout << "Running EDS parsing tests...\n\n";
 
     try {

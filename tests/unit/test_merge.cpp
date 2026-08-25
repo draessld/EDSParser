@@ -84,52 +84,98 @@ void pass() {
 // ===== BASIC MERGE TESTS (via l-EDS transformation) =====
 
 void test_merge_two_degenerate_via_leds() {
-    test("Merge via l-EDS: {G,C}{T} with context_length=2");
+    test("Merge via l-EDS: {G,C}{T} at l=2 is already an l-EDS (boundary exemption)");
 
-    // {G,C}{T} - each symbol has length 1, so with context_length=2
-    // adjacent symbols should be merged
+    // The l-EDS constraint is on *internal* common segments: a segment at the
+    // start or end of the string has a degenerate neighbour on one side only,
+    // so it is never ambiguous. needs_merge() encodes that as `i > 0 && i < n-1`.
+    //
+    // {G,C}{T} therefore has no constrained context at all — {T} is the last
+    // symbol — and the transform correctly converges in 0 iterations, leaving
+    // the input untouched. This test used to expect the merge to {GT,CT}.
     EDS merged = transform_to_leds("{G,C}{T}", 2);
 
-    // Verify structure - should have merged to single symbol
-    assert(merged.length() == 1);
-    assert(merged.cardinality() == 2);
+    assert(merged.length() == 2);
+    assert(merged.cardinality() == 3);
 
     auto set0 = merged.read_symbol(0);
     assert(set0.size() == 2);
-    assert(set0[0] == "GT");
-    assert(set0[1] == "CT");
+    assert(set0[0] == "G");
+    assert(set0[1] == "C");
+
+    auto set1 = merged.read_symbol(1);
+    assert(set1.size() == 1);
+    assert(set1[0] == "T");
+
+    pass();
+}
+
+void test_merge_short_interior_context_via_leds() {
+    test("Merge via l-EDS: a short *interior* context does merge");
+
+    // The counterpart to the exemption above: {A,C}{T}{G,A} at l=2 has {T} in
+    // the interior, one character against a required two, so the chain
+    // collapses into a single symbol. Without a case like this the suite has no
+    // coverage that short contexts merge at all.
+    EDS merged = transform_to_leds("{A,C}{T}{G,A}", 2);
+
+    assert(merged.length() == 1);
+
+    auto set0 = merged.read_symbol(0);
+    assert(set0.size() == 4);   // cartesian: no sources supplied
+    std::set<std::string> got(set0.begin(), set0.end());
+    assert(got == (std::set<std::string>{"ATG", "ATA", "CTG", "CTA"}));
 
     pass();
 }
 
 void test_merge_degenerate_nondegenerate_via_leds() {
-    test("Merge via l-EDS: {G,C}{T} context_length=2");
+    test("Merge via l-EDS: interior chain merges, boundary contexts survive");
 
-    EDS merged = transform_to_leds("{G,C}{T}", 2);
+    // This used to be a second copy of the {G,C}{T} case above, so it tested
+    // the boundary exemption twice and the merge itself not at all. Give it the
+    // case that pins both behaviours at once: the interior {T} is one character
+    // against a required two, so it and both degenerate neighbours collapse
+    // into one symbol, while the leading and trailing {AAA} — long enough
+    // anyway — stay exactly where they are.
+    EDS merged = transform_to_leds("{AAA}{A,C}{T}{G,A}{AAA}", 2);
 
-    assert(merged.length() == 1);
-    assert(merged.cardinality() == 2);
+    assert(merged.length() == 3);
+    assert(merged.cardinality() == 6);   // 1 + 4 + 1
 
     auto set0 = merged.read_symbol(0);
-    assert(set0[0] == "GT");
-    assert(set0[1] == "CT");
+    assert(set0.size() == 1 && set0[0] == "AAA");
+
+    auto set1 = merged.read_symbol(1);
+    assert(set1.size() == 4);
+    std::set<std::string> got(set1.begin(), set1.end());
+    assert(got == (std::set<std::string>{"ATG", "ATA", "CTG", "CTA"}));
+
+    auto set2 = merged.read_symbol(2);
+    assert(set2.size() == 1 && set2[0] == "AAA");
 
     pass();
 }
 
 void test_merge_nondegenerate_degenerate_via_leds() {
-    test("Merge via l-EDS: {T}{A,C,G} context_length=2");
+    test("Merge via l-EDS: {T}{A,C,G} at l=2 — the exemption from the other side");
 
+    // Mirror image of test_merge_two_degenerate_via_leds: here the short common
+    // symbol is leading rather than trailing. It is exempt for the same reason
+    // (a degenerate neighbour on one side only), so nothing merges.
     EDS merged = transform_to_leds("{T}{A,C,G}", 2);
 
-    assert(merged.length() == 1);
-    assert(merged.cardinality() == 3);
+    assert(merged.length() == 2);
+    assert(merged.cardinality() == 4);
 
     auto set0 = merged.read_symbol(0);
-    assert(set0.size() == 3);
-    assert(set0[0] == "TA");
-    assert(set0[1] == "TC");
-    assert(set0[2] == "TG");
+    assert(set0.size() == 1 && set0[0] == "T");
+
+    auto set1 = merged.read_symbol(1);
+    assert(set1.size() == 3);
+    assert(set1[0] == "A");
+    assert(set1[1] == "C");
+    assert(set1[2] == "G");
 
     pass();
 }
@@ -153,15 +199,22 @@ void test_merge_multiple_via_leds() {
 }
 
 void test_merge_with_empty_strings_via_leds() {
-    test("Merge via l-EDS: {,A}{T} context_length=2");
+    test("Merge via l-EDS: empty alternatives concatenate correctly");
 
-    EDS merged = transform_to_leds("{,A}{T}", 2);
+    // {,A}{T} at l=2 is two symbols and so entirely exempt (see
+    // test_merge_two_degenerate_via_leds), which is why this never merged.
+    // Put the short common symbol in the interior so the merge actually runs,
+    // and keep what the test is really about: the empty alternative has to
+    // concatenate as the empty string rather than being dropped or duplicated.
+    EDS merged = transform_to_leds("{,A}{T}{G,A}", 2);
 
-    assert(merged.cardinality() == 2);
+    assert(merged.length() == 1);
+    assert(merged.cardinality() == 4);
 
     auto set0 = merged.read_symbol(0);
-    assert(set0[0] == "T");   // "" + "T" = "T"
-    assert(set0[1] == "AT");  // "A" + "T" = "AT"
+    std::set<std::string> got(set0.begin(), set0.end());
+    // "" + T + G, "" + T + A, "A" + T + G, "A" + T + A
+    assert(got == (std::set<std::string>{"TG", "TA", "ATG", "ATA"}));
 
     pass();
 }
@@ -190,19 +243,21 @@ void test_no_merge_needed() {
 void test_partial_merge() {
     test("Partial merge: some symbols merged, some not");
 
-    // {ACGT}{G,C}{T} - ACGT is long enough, but {G,C}{T} needs merging with context=2
-    EDS transformed = transform_to_leds("{ACGT}{G,C}{T}", 2);
+    // {ACGT}{G,C}{T} at l=2 merges nothing — the trailing {T} is exempt — so it
+    // could not demonstrate a partial merge. Here {ACGT} is long enough to be
+    // left alone while the short interior {T} pulls both its degenerate
+    // neighbours into one symbol.
+    EDS transformed = transform_to_leds("{ACGT}{A,C}{T}{G,A}{ACGT}", 2);
 
-    // Should have 2 symbols: ACGT and merged {GT,CT}
-    assert(transformed.length() == 2);
+    assert(transformed.length() == 3);
 
     auto set0 = transformed.read_symbol(0);
     auto set1 = transformed.read_symbol(1);
+    auto set2 = transformed.read_symbol(2);
 
-    assert(set0[0] == "ACGT");
-    assert(set1.size() == 2);
-    assert(set1[0] == "GT");
-    assert(set1[1] == "CT");
+    assert(set0.size() == 1 && set0[0] == "ACGT");   // untouched
+    assert(set1.size() == 4);                        // merged
+    assert(set2.size() == 1 && set2[0] == "ACGT");   // untouched
 
     pass();
 }
@@ -212,21 +267,32 @@ void test_partial_merge() {
 void test_merge_with_sources_valid_intersections() {
     test("Merge with sources - valid intersections");
 
-    // {G,C}{T} with sources
-    // String 0 (G): {1,2}, String 1 (C): {2,3}, String 2 (T): {2}
-    // Expected: GT with {1,2}∩{2}={2}, CT with {2,3}∩{2}={2}
+    // The old input {G,C}{T} merged nothing at l=2: the trailing common symbol
+    // is boundary-exempt, so the test asserted intersections that were never
+    // computed. Two adjacent degenerate symbols merge regardless of position
+    // (ADJACENT_DEGENERATE is not subject to the exemption), which is the
+    // smallest input that actually exercises the intersection.
+    //
+    // 4 paths, each taking exactly one combination:
+    //   G:{1,2} C:{3,4} | T:{1,3} A:{2,4}
+    //   GT={1} GA={2} CT={3} CA={4}
     EDS merged = transform_to_leds_with_sources(
-        "{G,C}{T}",
-        "{1,2}{2,3}{2}",
+        "{G,C}{T,A}",
+        "{1,2}{3,4}{1,3}{2,4}",
         2
     );
 
-    assert(merged.cardinality() == 2);
+    assert(merged.length() == 1);
+    assert(merged.cardinality() == 4);
     assert(merged.has_sources());
 
     auto set0 = merged.read_symbol(0);
-    assert(set0[0] == "GT");
-    assert(set0[1] == "CT");
+    std::set<std::string> got(set0.begin(), set0.end());
+    assert(got == (std::set<std::string>{"GT", "GA", "CT", "CA"}));
+
+    // Every combination is carried by exactly one path, so the path-count bound
+    // is tight here rather than merely satisfied.
+    assert(set0.size() == 4);
 
     pass();
 }
@@ -256,19 +322,24 @@ void test_merge_with_sources_filtered() {
 void test_merge_with_universal_marker() {
     test("Merge with universal marker {0}");
 
-    // {A,B}{C} with sources
-    // String 0 (A): {0} (all paths), String 1 (B): {2}, String 2 (C): {1}
-    // Expected: AC with {0}∩{1}={1}, BC with {2}∩{1}={} (filtered)
+    // Same correction as above — {A,B}{C} is boundary-exempt and never merged.
+    //   A:{0} (universal)  B:{2} | C:{1}  D:{3}
+    //   AC = {0}∩{1} = {1}   ✓ universal intersects every path
+    //   AD = {0}∩{3} = {3}   ✓
+    //   BC = {2}∩{1} = {}    ✗ pruned
+    //   BD = {2}∩{3} = {}    ✗ pruned
     EDS merged = transform_to_leds_with_sources(
-        "{A,B}{C}",
-        "{0}{2}{1}",
+        "{A,B}{C,D}",
+        "{0}{2}{1}{3}",
         2
     );
 
-    assert(merged.cardinality() == 1);  // Only AC
+    assert(merged.length() == 1);
+    assert(merged.cardinality() == 2);
 
     auto set0 = merged.read_symbol(0);
-    assert(set0[0] == "AC");
+    std::set<std::string> got(set0.begin(), set0.end());
+    assert(got == (std::set<std::string>{"AC", "AD"}));
 
     pass();
 }
@@ -301,8 +372,10 @@ void test_linear_merge_respects_path_count_bound() {
         2
     );
 
-    // The whole chain collapses to a single symbol.
-    assert(merged.size() == 1);
+    // The whole chain collapses to a single symbol. (length() is the symbol
+    // count; size() is the total character count — 18 here, three 6-character
+    // walks — so asserting size() == 1 could never hold.)
+    assert(merged.length() == 1);
 
     auto set0 = merged.read_symbol(0);
 
@@ -352,12 +425,20 @@ void test_universal_marker_still_matches_every_path() {
 // ===== CONTEXT LENGTH VALIDATION TESTS =====
 
 void test_context_length_1() {
-    test("Context length 1 - no merging needed");
+    test("Adjacent common symbols concatenate regardless of l");
 
+    // Even at l=1, where every symbol is already long enough, {A}{B}{C} does
+    // not survive as three symbols: needs_merge() treats two adjacent
+    // non-degenerate symbols as ADJACENT_COMMON and concatenates them, because
+    // an EDS has no reason to split a deterministic run. So the whole thing
+    // collapses to one common symbol. The old expectation of 3 read the
+    // constraint as the only thing that drives merging.
     EDS transformed = transform_to_leds("{A}{B}{C}", 1);
 
-    // With context_length=1, single char symbols are acceptable
-    assert(transformed.length() == 3);
+    assert(transformed.length() == 1);
+
+    auto set0 = transformed.read_symbol(0);
+    assert(set0.size() == 1 && set0[0] == "ABC");
 
     pass();
 }
@@ -381,14 +462,20 @@ void test_context_length_forces_full_merge() {
 void test_statistics_after_transform() {
     test("Verify statistics after transformation");
 
-    EDS transformed = transform_to_leds("{AC}{G,C}{T}", 2);
+    // {AC}{G,C}{T} at l=2 does not merge at all — {T} is the last symbol and so
+    // exempt — which made the old min_context_length == 2 wrong (it is 1, from
+    // that untouched {T}) and the test blind to whether statistics survive a
+    // merge. Use an input that actually merges.
+    EDS transformed = transform_to_leds("{ACGT}{A,C}{T}{G,A}{ACGT}", 2);
 
     const auto& meta = transformed.get_metadata();
 
-    // Should have 1 non-degenerate (AC) and 1 degenerate (GT,CT)
+    // {ACGT} + merged{ATG,ATA,CTG,CTA} + {ACGT}
+    assert(transformed.length() == 3);
     assert(meta.num_degenerate_symbols == 1);
-    assert(meta.min_context_length == 2);  // "AC"
-    assert(meta.max_context_length == 2);
+    assert(meta.min_context_length == 4);   // both remaining contexts are ACGT
+    assert(meta.max_context_length == 4);
+    assert(meta.num_common_chars == 8);
 
     pass();
 }
@@ -396,17 +483,19 @@ void test_statistics_after_transform() {
 void test_metadata_consistency() {
     test("Verify metadata consistency after transform");
 
-    EDS transformed = transform_to_leds("{ACGT}{G,C}{T}", 2);
+    // Same correction as test_statistics_after_transform: the old input
+    // {ACGT}{G,C}{T} is left untouched at l=2, so it checked the metadata of an
+    // EDS that never went through a merge.
+    EDS transformed = transform_to_leds("{ACGT}{A,C}{T}{G,A}{ACGT}", 2);
 
-    // Check dimensions
-    assert(transformed.length() == 2);  // ACGT + merged(G,C)(T)
-    assert(transformed.cardinality() == 3);  // 1 + 2
+    assert(transformed.length() == 3);
+    assert(transformed.cardinality() == 6);   // 1 + 4 + 1
 
-    // Check is_degenerate
     const auto& is_deg = transformed.get_metadata().is_degenerate;
-    assert(is_deg.size() == 2);
-    assert(is_deg[0] == false);  // {ACGT} non-degenerate
-    assert(is_deg[1] == true);   // {GT,CT} degenerate
+    assert(is_deg.size() == 3);
+    assert(is_deg[0] == false);   // {ACGT}
+    assert(is_deg[1] == true);    // the merged symbol
+    assert(is_deg[2] == false);   // {ACGT}
 
     pass();
 }
@@ -442,11 +531,16 @@ void test_all_degenerate_input() {
 void test_alternating_degenerate() {
     test("Alternating degenerate/non-degenerate");
 
-    // Non-deg, deg, non-deg with short contexts
-    EDS transformed = transform_to_leds("{A}{B,C}{D}", 2);
+    // {A}{B,C}{D} at l=2 merges nothing: both {A} and {D} are boundary symbols
+    // and so exempt from the context constraint. Flank it with long contexts so
+    // the short common symbol is genuinely interior.
+    EDS transformed = transform_to_leds("{AAA}{B,C}{D}{E,F}{AAA}", 2);
 
-    // Should merge to meet context length requirements
-    assert(transformed.length() <= 2);  // Some merging needed
+    assert(transformed.length() == 3);
+
+    auto set1 = transformed.read_symbol(1);
+    std::set<std::string> got(set1.begin(), set1.end());
+    assert(got == (std::set<std::string>{"BDE", "BDF", "CDE", "CDF"}));
 
     pass();
 }
@@ -566,6 +660,7 @@ int main() {
 
     // Basic merge tests (CARTESIAN - no sources)
     test_merge_two_degenerate_via_leds();
+    test_merge_short_interior_context_via_leds();
     test_merge_degenerate_nondegenerate_via_leds();
     test_merge_nondegenerate_degenerate_via_leds();
     test_merge_multiple_via_leds();

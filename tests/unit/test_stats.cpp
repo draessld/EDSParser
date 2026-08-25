@@ -162,8 +162,10 @@ void test_source_statistics_basic() {
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     auto src = compute_src_stats(eds);
 
-    // 8 distinct paths: 0, 1, 2, 3, 4, 5, 6, 7
-    assert(src.num_paths == 8);
+    // 7 distinct paths: 1..7. The leading {0} is the universal marker, not a
+    // path id, and compute_src_stats above erases it deliberately — so counting
+    // it as an eighth path was double-counting the marker.
+    assert(src.num_paths == 7);
 
     // Max paths per string: {1,3} has 2 paths
     assert(src.max_paths_per_string == 2);
@@ -235,8 +237,10 @@ void test_source_statistics_file_mode() {
     // Max: {1,2} has 2, {4,5} has 2
     assert(src.max_paths_per_string == 2);
 
-    // Average: (1+2+1+2+1)/5 = 7/5 = 1.4
-    assert(std::abs(src.avg_paths_per_string - 1.4) < 0.01);
+    // Average: the EDS has four strings (ACGT, A, ACA, CGT) and the SEDS four
+    // entries, so (1+2+1+2)/4 = 1.5. The old 7/5 counted a fifth entry that
+    // neither file has.
+    assert(std::abs(src.avg_paths_per_string - 1.5) < 0.01);
 
     // Cleanup
     std::filesystem::remove(eds_file);
