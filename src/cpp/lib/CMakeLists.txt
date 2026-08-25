@@ -1,5 +1,16 @@
 # Library CMakeLists.txt for EDSParser
 
+# EDSPARSER_REPO_ROOT is normally set by src/cpp/CMakeLists.txt, but this
+# directory is also added on its own — biofmi does
+# add_subdirectory(external/edsparser/src/cpp/lib) to get the library without
+# edsparser's tools and tests, which never traverses that parent. The variable
+# was then empty and the stamp below looked for "/cmake/GitVersion.cmake",
+# failing every such build at configure time. Resolve it here when the parent
+# has not, so the directory is self-sufficient.
+if(NOT DEFINED EDSPARSER_REPO_ROOT)
+    get_filename_component(EDSPARSER_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+endif()
+
 # Build-time git stamp. Regenerated on every build (not only at configure time)
 # so a binary always reports the commit it was really built from; configure_file
 # inside the script leaves the header alone when nothing changed, so this does
