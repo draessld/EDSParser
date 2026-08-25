@@ -55,7 +55,7 @@ gather:
 # --------------------------------------------------------------------------
 # Datasets — EDS + SEDS pairs. Building them is not this spec's job:
 #
-#   covid_*   ship with the repo (experiments/datasets/SARS_cov2/eds)
+#   covid_*   live in ~/Data/covid/derived/eds (moved out of the repo 2026-08-25)
 #   tb_*      build once with, from the panel directory,
 #               experiments/scripts/run_subset_dataset.sh <panel>    # no l values
 #             which runs stage 1 only and leaves eds/<chrom>.{eds,seds}
@@ -66,8 +66,8 @@ gather:
 datasets:
   covid_20A:
     inputs:
-      eds:  experiments/datasets/SARS_cov2/eds/20A.eds
-      seds: experiments/datasets/SARS_cov2/eds/20A.seds
+      eds:  ~/Data/covid/derived/eds/20A.eds
+      seds: ~/Data/covid/derived/eds/20A.seds
     probe: &stats_probe
       cmd: "{edsparser-stats} -i {in.eds} -s {in.seds} --verbose"
       extract:
@@ -79,8 +79,8 @@ datasets:
 
   covid_20E:
     inputs:
-      eds:  experiments/datasets/SARS_cov2/eds/20E.eds
-      seds: experiments/datasets/SARS_cov2/eds/20E.seds
+      eds:  ~/Data/covid/derived/eds/20E.eds
+      seds: ~/Data/covid/derived/eds/20E.seds
     probe: *stats_probe
 
   # ---- M. tuberculosis panels. Haploid and clonal: one isolate is one path. ----
