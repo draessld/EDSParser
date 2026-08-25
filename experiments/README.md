@@ -10,9 +10,15 @@ Datasets themselves are large and live on whatever machine ran them (typically
 specs/       xbench specs — what is measured, declaratively
 run.sh       driver: locates the harness and runs a spec
 scripts/     dataset builders (and the older shell sweep runners)
-results/     collected bundles from the shell pipeline, one directory per dataset
-runs/        xbench run directories (gitignored — work/ trees get large)
-datasets/    small inputs kept in-repo (synthetic, SARS-CoV-2)
+
+Data lives outside the working tree, under ~/Data:
+
+  ~/Data/<dataset>/                 inputs (covid/, synthetic/, tb/)
+  ~/Data/experiments/edsparser/runs      xbench run directories
+  ~/Data/experiments/edsparser/results   collected bundles, one per dataset
+
+Only the description of an experiment is versioned; its inputs and outputs are
+not. Override the run location with XBENCH_RUNS.
 ```
 
 ## Measuring: xbench

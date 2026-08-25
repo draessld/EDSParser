@@ -96,7 +96,10 @@ Thumbs.db
 !tests/bench/docs/
 !tests/bench/docs/*.png
 
-# Experiment outputs - track the scripts, exclude all dataset content and results
+# experiments/ holds only the description of an experiment now — specs, the
+# driver, dataset builders, analysis helpers. Inputs and outputs live under
+# ~/Data (see experiments/README.md), so nothing large lands here. The blanket
+# exclude stays as a backstop against stray output.
 experiments/*
 !experiments/scripts/
 !experiments/*.py
@@ -111,8 +114,6 @@ experiments/scripts/*
 !experiments/specs/*.yaml
 !experiments/specs/hooks/
 !experiments/specs/hooks/*.py
-# experiments/runs/ stays excluded by the rule above — run directories carry
-# work/ trees that can be tens of GB.
 data/site/
 site/
 
