@@ -74,7 +74,6 @@ edsparser/
 │   ├── stress/                 # Memory stress test data
 │   └── bench/                  # Benchmark scenarios
 ├── docs/                       # Full documentation (see docs/README.md)
-├── experiments/                # Dataset builders, sweep runners, collected results
 ├── INSTALL.sh                  # Installation script
 ├── UNINSTALL.sh                # Uninstallation script
 └── README.md                   # This file
@@ -377,17 +376,21 @@ Standard Variant Call Format (requires reference FASTA)
 
 ## Running Experiments
 
-Experiment scripts live in [experiments/](experiments/) in this repository. They build real
-pangenome datasets, sweep the transformations over them, and bundle the results for analysis.
+Experiments live **outside this repository**, at `~/Data/experiments/edsparser/`:
+specs, the driver, dataset builders, run directories and collected bundles. The
+builders make real pangenome datasets, sweep the transformations over them, and
+bundle the results for analysis.
 
 ```bash
 # Build an M. tuberculosis panel from NCBI and sweep it — no root, no conda
 PANELS=100 L_VALUES="10 20 50" \
-  bash experiments/scripts/run_tb_experiment.sh ~/data/tb
+  bash ~/Data/experiments/edsparser/scripts/run_tb_experiment.sh ~/Data/tb
 ```
 
-See [experiments/README.md](experiments/README.md) for the full pipeline, the dataset
-builders, and which published results are still valid.
+See `~/Data/experiments/edsparser/README.md` for the full pipeline, the dataset
+builders, and which published results are still valid. `run.sh` needs this
+checkout to resolve `build/tools`; set `EDSPARSER_REPO` if it is not at
+`~/Documents/uni_projects/edsparser`.
 
 ## Development
 

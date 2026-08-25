@@ -120,7 +120,7 @@ EDS is flat at ~5 MB. On the 100-isolate panel only 4.1 M of 48.1 M characters a
 backbone — 91% of the text sits in degenerate symbols, and the top 10 variant groups hold 89%
 of it. Filtering alleles longer than 50 bp drops ~4% of sites.
 
-See TODO 1a; `experiments/scripts/make_allele_subset.sh` applies the filter, or directly:
+See TODO 1a; `~/Data/experiments/edsparser/scripts/make_allele_subset.sh` applies the filter, or directly:
 
 ```bash
 bcftools view -e 'strlen(REF)>50 || max(strlen(ALT))>50' in.vcf -Ov -o out.vcf

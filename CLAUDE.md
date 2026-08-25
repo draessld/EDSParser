@@ -473,9 +473,26 @@ After installation, CMake config files are located in `~/.local/lib/cmake/EDSPar
 
 ## Experiments and Analysis
 
-Lives in `experiments/` **in this repository** (an older note pointed at a `biofmi` sibling repo — no longer true). See [experiments/README.md](experiments/README.md) for the pipeline.
+**Nothing about experiments lives in this repository.** The whole tree — specs,
+the driver, dataset builders, run directories and collected result bundles —
+sits at `~/Data/experiments/edsparser/`, and `experiments/` is gitignored so it
+cannot creep back:
 
-**Measuring is declarative, via xbench** (2026-08-16). Specs live in `experiments/specs/`, the engine lives in the sibling `xbench/` project (BIO-FMI uses the same one), and `experiments/run.sh` connects them: `./experiments/run.sh merge_mode --dry-run`. Three specs: `merge_mode` (LINEAR vs CARTESIAN across an l sweep), `vcf2eds` (transform cost + `--block-size` trade-off), `source_formats` (SEDS vs EDZ variants vs gzip). The harness resolves `build/tools` before `PATH` and **aborts if `eds2leds` predates the complement fix**, records over-cap runs as `status=oom` rows with their peak rather than dropping them, sizes every input and artifact raw + gzip in its gather phase, and can replay extractors over archived stdout/stderr (`xbench analyze <run> --reextract`) instead of re-running. Run directories land in `experiments/runs/` (gitignored).
+```
+~/Data/experiments/edsparser/run.sh        driver: ./run.sh <spec>
+~/Data/experiments/edsparser/specs/        xbench specs
+~/Data/experiments/edsparser/scripts/      dataset builders
+~/Data/experiments/edsparser/runs/         run directories
+~/Data/experiments/edsparser/results/      collected bundles, one per dataset
+~/Data/covid  ~/Data/synthetic  ~/Data/tb  inputs
+```
+
+`run.sh` still needs this checkout, because a spec resolves its binaries from
+repo-relative paths (`resolve.prefer: build/tools`); it defaults to
+`~/Documents/uni_projects/edsparser` and takes `EDSPARSER_REPO` as an override.
+See `~/Data/experiments/edsparser/README.md` for the pipeline.
+
+**Measuring is declarative, via xbench** (2026-08-16). Specs live in `~/Data/experiments/edsparser/specs/`, the engine lives in the sibling `xbench/` project (BIO-FMI uses the same one), and `run.sh` connects them: `~/Data/experiments/edsparser/run.sh merge_mode --dry-run`. Three specs: `merge_mode` (LINEAR vs CARTESIAN across an l sweep), `vcf2eds` (transform cost + `--block-size` trade-off), `source_formats` (SEDS vs EDZ variants vs gzip). The harness resolves `build/tools` before `PATH` and **aborts if `eds2leds` predates the complement fix**, records over-cap runs as `status=oom` rows with their peak rather than dropping them, sizes every input and artifact raw + gzip in its gather phase, and can replay extractors over archived stdout/stderr (`xbench analyze <run> --reextract`) instead of re-running. Run directories land in `~/Data/experiments/edsparser/runs/` (`XBENCH_RUNS` overrides).
 
 This supersedes the collect/parse/compare half of the shell pipeline: `collect_results.sh` sizes → gather phase, `leds_runs.tsv` → the `status` column, `compare_merge_modes.py` → `summary.csv` joined on `tool`, `parse_transformation_logs.py` → `extract:` blocks. The shell runners still matter for 1000G-scale runs on the server (`run_leds.sh`'s screen-based scheduling has no xbench equivalent), and `compare_merge_modes.py` still reads the pre-existing `results/` bundles.
 

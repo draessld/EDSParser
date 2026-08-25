@@ -252,4 +252,4 @@ lived:
 | [Library API](library-api.md) | C++ public API: EDS, Sources, transform functions |
 | [Performance](performance.md) | Memory profiles, throughput numbers, tuning by dataset size |
 | [Testing](testing.md) | Unit, integration, e2e, memory stress, benchmarks |
-| [Experiments](../experiments/README.md) | Dataset builders, sweep runners, result bundles, which results are valid |
+| Experiments (`~/Data/experiments/edsparser/README.md`) | Dataset builders, sweep runners, result bundles, which results are valid — outside this repo |
