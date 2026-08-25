@@ -1,2 +1,2 @@
 file,file_size_bytes,n_symbols,N_characters,m_strings,degenerate_symbols,regular_symbols,context_min,context_max,context_avg,total_change_size,common_characters,empty_strings,memory_current_bytes,memory_estimated_full_bytes,memory_reduction_factor,sources_loaded,num_paths,max_paths_per_string,avg_paths_per_string,runtime_s,peak_memory_mb
-/home/draesdom/Documents/uni_projects/biofmi/external/edsparser/tests/e2e/data/eds/simple.eds,25,4,14,6,2,2,3,4,3.50,2,7,0,171,362,2.1,false,0,0,0.00,0.00,3.9
+/home/draesdom/Documents/uni_projects/biofmi/external/edsparser/tests/e2e/data/eds/simple.eds,25,4,14,6,2,2,3,4,3.50,7,7,0,171,362,2.1,false,0,0,0.00,0.00,3.9

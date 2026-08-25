@@ -63,6 +63,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
         if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
 
         size_t symbol_size = 0;
+        size_t symbol_chars = 0;   // characters in this symbol, across all its strings
         StringSet sym;  // populated only when with_strings=true
 
         if (is_bracketed) {
@@ -80,6 +81,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
                         size_t len = pos - start;
                         metadata_.string_lengths.push_back(len);
                         N_ += len;
+                        symbol_chars += len;
                         if (len == 0) metadata_.num_empty_strings++;
                         if (with_strings) sym.push_back(token.substr(start, len));
                         symbol_size++;
@@ -91,6 +93,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
             size_t len = token.length();
             metadata_.string_lengths.push_back(len);
             N_ += len;
+            symbol_chars = len;
             if (len == 0) metadata_.num_empty_strings++;
             symbol_size = 1;
             if (with_strings) sym.push_back(token);
@@ -106,7 +109,13 @@ void EDS::parse(std::istream& is, bool with_strings) {
         // Update running statistics
         if (is_deg) {
             metadata_.num_degenerate_symbols++;
-            metadata_.total_change_size += (symbol_size - 1);
+            // Characters, not alternatives: total_change_size is the counterpart
+            // of num_common_chars, and the two partition N. It used to add
+            // (symbol_size - 1), which counts alternatives beyond the first and
+            // sums to exactly m - n — a quantity cardinality() and length()
+            // already give — while being printed next to a character count as
+            // though the two were comparable.
+            metadata_.total_change_size += symbol_chars;
         } else {
             // Non-degenerate: this is a context block
             Length ctx_len = metadata_.string_lengths[m_]; // first (and only) string

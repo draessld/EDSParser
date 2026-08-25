@@ -784,14 +784,19 @@ namespace {
         }
 
         // Common per-symbol metadata tail (identical for merged and unmodified).
-        void record_symbol(size_t sym_size) {
+        // sym_chars is the symbol's total character count across all its
+        // strings — both callers already compute it as sum_len. It feeds
+        // total_change_size, which counts characters (the counterpart of
+        // num_common_chars, partitioning N) rather than the alternatives-beyond
+        // -the-first this used to add. See EDS::parse for the same change.
+        void record_symbol(size_t sym_size, size_t sym_chars) {
             bool is_deg = (sym_size > 1);
             result_.metadata.symbol_sizes.push_back(static_cast<Length>(sym_size));
             result_.metadata.is_degenerate.push_back(is_deg);
 
             if (is_deg) {
                 result_.metadata.num_degenerate_symbols++;
-                result_.metadata.total_change_size += (sym_size - 1);
+                result_.metadata.total_change_size += sym_chars;
             } else {
                 Length ctx_len = result_.metadata.string_lengths.back();
                 result_.metadata.num_common_chars += ctx_len;
@@ -858,7 +863,7 @@ namespace {
             }
             eds_out_ << '}';
 
-            record_symbol(sym_size);
+            record_symbol(sym_size, sum_len);
         }
 
         // BRANCH B: write an unmodified position verbatim.
@@ -913,7 +918,7 @@ namespace {
                 seds_batch_count_ += sym_size;
             }
 
-            record_symbol(sym_size);
+            record_symbol(sym_size, sum_len);
         }
     };
 
