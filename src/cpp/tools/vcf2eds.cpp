@@ -297,8 +297,16 @@ int main(int argc, char** argv) {
         std::cout << "  Skipped (malformed):        " << stats.skipped_malformed << "\n";
         std::cout << "  Skipped (unsupported SV):   " << stats.skipped_unsupported_sv << "\n";
         std::cout << "  Skipped (wrong chromosome): " << stats.skipped_wrong_chrom << "\n";
+        std::cout << "  Skipped (past end of ref):  " << stats.skipped_out_of_range << "\n";
         std::cout << "  Total skipped:              " << stats.total_skipped() << "\n";
         std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
+
+        if (stats.skipped_out_of_range > 0) {
+            std::cerr << "Warning: " << stats.skipped_out_of_range
+                      << " variant(s) lie past the end of the reference sequence and were "
+                         "dropped. The VCF and the FASTA probably disagree about which "
+                         "assembly or contig this is.\n";
+        }
 
         if (stats.total_variants > 0) {
             double success_rate = (100.0 * stats.processed_variants) / stats.total_variants;

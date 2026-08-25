@@ -1164,6 +1164,43 @@ void parse_vcf_to_eds_streaming(
         }
     }
 
+    // Variants whose POS lies beyond the end of the reference never reach a
+    // block: the loop above stops once current_block_start passes seq_size, and
+    // anything still in carryover — or still unread in the stream — is simply
+    // dropped. They were nevertheless counted as processed at parse time, so a
+    // VCF/FASTA pair that disagree about the sequence length reported a 100%
+    // success rate while silently discarding the tail. Reclassify what is left.
+    if (stats) {
+        for (const auto& v : carryover_variants) {
+            if (accept_chrom(v.chrom)) {
+                stats->processed_variants--;
+                stats->skipped_out_of_range++;
+            }
+        }
+    }
+    carryover_variants.clear();
+
+    // Drain whatever is left in the stream for the same reason: unread lines
+    // were never counted at all, so "Total variants read" undercounted too.
+    if (!vcf_finished) {
+        while (std::getline(vcf_stream, line)) {
+            SkipReason skip_reason;
+            auto var = parse_vcf_line(line, n_samples, skip_reason);
+            if (!stats) continue;
+            if (skip_reason == SkipReason::MALFORMED) {
+                stats->total_variants++;
+                stats->skipped_malformed++;
+            } else if (skip_reason == SkipReason::UNSUPPORTED_SV) {
+                stats->total_variants++;
+                stats->skipped_unsupported_sv++;
+            } else if (skip_reason == SkipReason::NONE) {
+                stats->total_variants++;
+                if (var && !accept_chrom(var->chrom)) stats->skipped_wrong_chrom++;
+                else                                  stats->skipped_out_of_range++;
+            }
+        }
+    }
+
     // Update variant groups count
     if (stats) {
         stats->variant_groups = total_variant_groups;
