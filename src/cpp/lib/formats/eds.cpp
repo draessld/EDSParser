@@ -192,6 +192,15 @@ void EDS::parse(std::istream& is, bool with_strings) {
                     static_cast<uint64_t>(file_offset + i));   // offset of '{'
                 mode = Scan::IN_BRACKET;
                 ++i;
+            } else if (ch == SET_CLOSE) {
+                // A '}' with no '{' open. Without this the byte falls through to
+                // the bare-token branch below and is absorbed as a sequence
+                // character, so a truncated or corrupt file parses "successfully"
+                // with '}' sitting inside its strings — silent corruption, and
+                // asymmetric with the unmatched-'{' check at the end of the scan.
+                throw std::runtime_error(
+                    "Unmatched '}' in EDS stream at byte " +
+                    std::to_string(static_cast<long long>(file_offset + i)) + ".");
             } else if (is_ws(ch)) {
                 // Inter-symbol whitespace terminates a bare token (if any).
                 if (mode == Scan::IN_BARE) {
@@ -211,7 +220,7 @@ void EDS::parse(std::istream& is, bool with_strings) {
                     mode = Scan::IN_BARE;
                 }
                 std::streamsize j = i;
-                while (j < n && buf[j] != SET_OPEN && !is_ws(buf[j])) ++j;
+                while (j < n && buf[j] != SET_OPEN && buf[j] != SET_CLOSE && !is_ws(buf[j])) ++j;
                 current_token.append(buf.data() + i, static_cast<size_t>(j - i));
                 i = j;
             }
@@ -1133,6 +1142,21 @@ std::pair<size_t, size_t> EDS::decode_degenerate_string_number(int abs_string_nu
         );
     }
 
+    // An id past the last degenerate string lands the binary search below on the
+    // final symbol, which may well be non-degenerate — and was then reported as
+    // "Internal error: ... maps to non-degenerate symbol", blaming the library
+    // for what is a caller-supplied out-of-range id. Reject it here, which also
+    // makes that branch genuinely unreachable from caller input, as intended.
+    const int total_degenerate = metadata_.cum_degenerate_counts.empty()
+        ? 0 : metadata_.cum_degenerate_counts.back();
+    if (abs_string_num >= total_degenerate) {
+        throw std::out_of_range(
+            "Degenerate string number " + std::to_string(abs_string_num) +
+            " out of range: EDS has " + std::to_string(total_degenerate) +
+            " degenerate strings"
+        );
+    }
+
     // Binary search to find which symbol this string belongs to
     auto it = std::upper_bound(
         metadata_.cum_degenerate_counts.begin(),
@@ -1174,6 +1198,24 @@ std::pair<size_t, size_t> EDS::decode_degenerate_string_number(int abs_string_nu
 // Position checking helper: find symbol containing common position
 size_t EDS::find_symbol_at_common_position(Position common_pos, Position& offset_out) const {
     ensure_position_index();
+
+    // cum_common_positions has n+1 entries, so a position at or past the total
+    // common-character count sends upper_bound to end() and makes symbol_idx ==
+    // n below — one past the end of is_degenerate, cum_set_sizes and every other
+    // per-symbol array. That read produced a garbage string index and a segfault
+    // roughly two runs in three, and it is reachable straight from the public
+    // check_position(), which means to handle an out-of-range position by
+    // catching out_of_range from here — it never got the chance to throw.
+    const Position total_common = metadata_.cum_common_positions.empty()
+        ? 0 : metadata_.cum_common_positions.back();
+    if (common_pos >= total_common) {
+        throw std::out_of_range(
+            "Common position " + std::to_string(common_pos) +
+            " is past the end: EDS has " + std::to_string(total_common) +
+            " common characters"
+        );
+    }
+
     // Binary search in cum_common_positions
     auto it = std::upper_bound(
         metadata_.cum_common_positions.begin(),
