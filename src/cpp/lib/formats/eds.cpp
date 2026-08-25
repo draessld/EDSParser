@@ -5,6 +5,7 @@
 #include <cctype>
 #include <random>
 #include <optional>
+#include <unordered_set>
 
 namespace edsparser {
 
@@ -501,7 +502,8 @@ constexpr size_t NO_ALTERNATIVE = static_cast<size_t>(-1);
 EDS::PatternGenStats EDS::generate_patterns(std::ostream& os, size_t count,
                                             Length pattern_length,
                                             std::optional<uint64_t> seed,
-                                            bool source_aware) const {
+                                            bool source_aware,
+                                            bool unique) const {
     if (is_empty_ || n_ == 0) {
         throw std::runtime_error("Cannot generate patterns from empty EDS");
     }
@@ -512,6 +514,7 @@ EDS::PatternGenStats EDS::generate_patterns(std::ostream& os, size_t count,
 
     PatternGenStats stats;
     stats.requested = count;
+    stats.unique = unique;
 
     uint64_t effective_seed;
     if (seed.has_value()) {
@@ -600,8 +603,15 @@ EDS::PatternGenStats EDS::generate_patterns(std::ostream& os, size_t count,
 
     // Retry from a fresh path and start rather than padding a short walk by
     // wrapping around to symbol 0, which would splice together sequence that is
-    // not contiguous in any genome.
+    // not contiguous in any genome.  The same retry loop absorbs deduplication:
+    // a repeat is discarded exactly like a walk that ran off the end.
     constexpr int MAX_ATTEMPTS = 64;
+
+    // Only populated when deduplicating, so the allow-duplicates path costs
+    // nothing. Patterns are fixed-length, so this is count x pattern_length
+    // bytes at worst.
+    std::unordered_set<String> seen;
+    if (unique) seen.reserve(count * 2);
 
     for (size_t i = 0; i < count; ++i) {
         std::optional<String> pattern;
@@ -622,6 +632,11 @@ EDS::PatternGenStats EDS::generate_patterns(std::ostream& os, size_t count,
             }
 
             pattern = try_build(start_symbol, static_cast<Length>(offset_in_symbol), path);
+
+            if (pattern && unique && !seen.insert(*pattern).second) {
+                stats.duplicates_discarded++;
+                pattern.reset();   // try again from a fresh path and start
+            }
         }
 
         if (pattern) {

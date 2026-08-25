@@ -660,7 +660,12 @@ void test_generate_patterns() {
     // cannot hold — since 3faa4cb the generator no longer pads a short walk by
     // wrapping around to symbol 0, which is what used to manufacture variety
     // out of sequence contiguous in no path.
-    edsparser::EDS eds = create_temp_eds("{ACGTACGTAC}{A,CA}{GGTTGGTTGG}");
+    // Long enough, and non-repetitive enough, that 20 *distinct* 8-mers exist:
+    // patterns are deduplicated by default, so a short or repetitive EDS legitimately
+    // yields fewer than requested. The previous {ACGTACGTAC}{A,CA}{GGTTGGTTGG} spans
+    // only ~21 characters of highly periodic sequence.
+    edsparser::EDS eds = create_temp_eds(
+        "{ACGTTGCAATCGGATCCTAG}{A,CA}{GTCAGGATTCCAAGCTTGCA}");
 
     // Seeded, so a failure here is reproducible rather than a one-in-N flake.
     std::stringstream output;
@@ -696,7 +701,9 @@ void test_generate_patterns_metadata_only() {
     // Create temp file
     std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "test_genpatterns.eds";
     std::ofstream ofs(temp_file);
-    ofs << "{ACGT}{A,CA}{GG}";
+    // Same EDS as test 24: {ACGT}{A,CA}{GG} spans at most 8 characters, so exactly
+    // one 8-mer exists in it and deduplication caps the run at a single pattern.
+    ofs << "{ACGTTGCAATCGGATCCTAG}{A,CA}{GTCAGGATTCCAAGCTTGCA}";
     ofs.close();
 
     // Load in METADATA_ONLY mode
@@ -704,19 +711,23 @@ void test_generate_patterns_metadata_only() {
 
     // Should work now (streaming from file)
     std::stringstream output;
-    eds.generate_patterns(output, 5, 8);
+    auto gen_stats = eds.generate_patterns(output, 5, 8);
+    assert(gen_stats.generated == 5);
 
-    // Check that we got 5 patterns
+    // Check that we got 5 patterns, all distinct
     std::string line;
     int count = 0;
+    std::set<std::string> distinct;
     while (std::getline(output, line)) {
         if (!line.empty()) {
             count++;
             // Each pattern should be 8 characters long
             assert(line.length() == 8);
+            distinct.insert(line);
         }
     }
     assert(count == 5);
+    assert(distinct.size() == 5);
 
     std::filesystem::remove(temp_file);
     std::cout << "PASSED\n";
@@ -747,9 +758,13 @@ void test_generate_patterns_source_aware() {
 
     edsparser::EDS eds = edsparser::EDS::load(eds_path, seds_path);
 
+    // Deduplication is off here on purpose: this EDS has exactly two valid
+    // haplotypes, and the test wants many draws from that two-element language
+    // to show the cross combinations never appear. With dedup on it would
+    // correctly stop at 2 — asserted below.
     std::stringstream out;
     auto stats = eds.generate_patterns(out, 40, 2, /*seed=*/uint64_t{1234},
-                                       /*source_aware=*/true);
+                                       /*source_aware=*/true, /*unique=*/false);
 
     assert(stats.source_aware);
     assert(stats.num_paths == 2);
@@ -764,6 +779,19 @@ void test_generate_patterns_source_aware() {
         assert(pattern == "AG" || pattern == "CT");
     }
     assert(n == 40);
+
+    // The same walk with deduplication on: the language holds exactly two
+    // strings, so a request for 40 yields 2 and reports the shortfall rather
+    // than padding with repeats.
+    std::stringstream uniq_out;
+    auto uniq_stats = eds.generate_patterns(uniq_out, 40, 2, /*seed=*/uint64_t{1234},
+                                            /*source_aware=*/true, /*unique=*/true);
+    std::set<std::string> distinct;
+    for (std::string p2; std::getline(uniq_out, p2); )
+        if (!p2.empty()) distinct.insert(p2);
+    assert(distinct == (std::set<std::string>{"AG", "CT"}));
+    assert(uniq_stats.generated == 2);
+    assert(uniq_stats.duplicates_discarded > 0);
 
     std::filesystem::remove(eds_path);
     std::filesystem::remove(seds_path);
@@ -789,6 +817,50 @@ void test_generate_patterns_seed_is_reproducible() {
     std::cout << "PASSED\n";
 }
 
+void test_generate_patterns_deduplicates() {
+    std::cout << "Test 26d: patterns are distinct by default... ";
+
+    // Short patterns over a small EDS, so repeats are near-certain without
+    // deduplication -- which is the point: on a low-diversity panel a
+    // "200 pattern" benchmark can quietly be far fewer distinct queries.
+    edsparser::EDS eds = create_temp_eds("{ACGT}{A,CA}{GGTT}{T,TG}{ACAC}");
+
+    auto lines = [](const std::string& blob) {
+        std::vector<std::string> out;
+        std::istringstream in(blob);
+        for (std::string l; std::getline(in, l); ) if (!l.empty()) out.push_back(l);
+        return out;
+    };
+
+    std::stringstream uniq;
+    auto s1 = eds.generate_patterns(uniq, 20, 4, /*seed=*/7, /*source_aware=*/true);
+    auto u = lines(uniq.str());
+    assert(s1.unique);
+    assert(std::set<std::string>(u.begin(), u.end()).size() == u.size());
+    assert(u.size() == s1.generated);
+
+    std::stringstream dups;
+    auto s2 = eds.generate_patterns(dups, 20, 4, /*seed=*/7, /*source_aware=*/true,
+                                    /*unique=*/false);
+    auto d = lines(dups.str());
+    assert(!s2.unique);
+    assert(s2.duplicates_discarded == 0);   // nothing is rejected in this mode
+    // The whole reason the opt-out exists: with repeats allowed this EDS yields
+    // fewer distinct patterns than requested.
+    assert(std::set<std::string>(d.begin(), d.end()).size() < d.size());
+
+    // A request for more distinct patterns than the EDS can supply is reported
+    // as a shortfall rather than silently padded with repeats.
+    edsparser::EDS small = create_temp_eds("{AC}{G,T}{AC}");
+    std::stringstream tiny;
+    auto s3 = small.generate_patterns(tiny, 50, 5, /*seed=*/1, /*source_aware=*/false);
+    auto t = lines(tiny.str());
+    assert(std::set<std::string>(t.begin(), t.end()).size() == t.size());
+    assert(s3.generated <= s3.requested);
+
+    std::cout << "PASSED\n";
+}
+
 void test_generate_patterns_are_valid() {
     std::cout << "Test 26: Generated patterns are valid (check with check_position)... ";
 
@@ -796,9 +868,12 @@ void test_generate_patterns_are_valid() {
     std::string eds_str = "{ACGT}{A,CA}{GG}{T,TG}";
     edsparser::EDS eds = create_temp_eds(eds_str);
 
-    // Generate patterns
+    // Generate patterns. This EDS is small, so deduplication may yield fewer than
+    // the 10 requested; what the test is about is that every pattern it *does*
+    // produce is findable, so assert against what was generated.
     std::stringstream output;
-    eds.generate_patterns(output, 10, 6);
+    auto gen_stats = eds.generate_patterns(output, 10, 6);
+    assert(gen_stats.generated > 0);
 
     // For each generated pattern, verify it can be found in the EDS
     std::string pattern;
@@ -856,7 +931,7 @@ void test_generate_patterns_are_valid() {
         validated++;
     }
 
-    assert(validated == 10); // All 10 patterns should be validated
+    assert(validated == static_cast<int>(gen_stats.generated)); // every one findable
 
     std::cout << "PASSED\n";
 }
@@ -1630,6 +1705,7 @@ int main() {
         test_generate_patterns_are_valid();
         test_generate_patterns_source_aware();
         test_generate_patterns_seed_is_reproducible();
+        test_generate_patterns_deduplicates();
         test_source_cache_functionality();
         test_extract_basic();
         test_extract_empty();

@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
         Length length;
         uint64_t seed = 0;
         bool no_sources = false;
+        bool allow_duplicates = false;
 
         po::options_description desc("Generate random patterns from EDS");
         desc.add_options()
@@ -59,7 +60,14 @@ int main(int argc, char** argv) {
             ("ignore-sources", po::bool_switch(&no_sources),
                 "Pick alternatives independently per symbol even when sources are "
                 "given. This samples the cartesian language and can emit strings no "
-                "genome carries — only for reproducing the old behaviour.");
+                "genome carries — only for reproducing the old behaviour.")
+            ("allow-duplicates", po::bool_switch(&allow_duplicates),
+                "Keep repeated patterns instead of retrying for a distinct one. "
+                "A repeat is the same query timed twice, not a second measurement, "
+                "so this is only for regenerating a set produced before "
+                "deduplication existed — and note the same seed still yields a "
+                "different set, because rejecting a duplicate changes how much "
+                "randomness is consumed.");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -177,7 +185,8 @@ int main(int argc, char** argv) {
         if (vm.count("seed")) seed_opt = seed;
 
         std::cerr << "Generating " << count << " patterns of length " << length << "...\n";
-        auto stats = eds.generate_patterns(outfile, count, length, seed_opt, !no_sources);
+        auto stats = eds.generate_patterns(outfile, count, length, seed_opt,
+                                           !no_sources, !allow_duplicates);
 
         if (stats.source_aware) {
             std::cerr << "Mode: source-aware (each pattern walks one of "
@@ -194,11 +203,21 @@ int main(int argc, char** argv) {
                          "benchmarking.\n";
         }
 
+        if (stats.duplicates_discarded > 0) {
+            std::cerr << "Discarded " << stats.duplicates_discarded
+                      << " duplicate pattern(s) and retried for distinct ones\n";
+        }
+
         if (stats.generated < stats.requested) {
             std::cerr << "Warning: generated " << stats.generated << " of "
                       << stats.requested << " requested patterns; the rest could not be "
                          "built\n  (pattern length may exceed what a single path spans "
-                         "from a random start)\n";
+                         "from a random start";
+            if (stats.unique) {
+                std::cerr << ", or the EDS holds fewer than "
+                          << stats.requested << " distinct patterns of this length";
+            }
+            std::cerr << ")\n";
         }
 
         std::cerr << "Successfully generated " << stats.generated << " patterns\n";

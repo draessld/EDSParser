@@ -121,6 +121,8 @@ public:
         size_t generated    = 0;  // patterns actually written
         bool   source_aware = false;  // true if each pattern walked a single path
         size_t num_paths    = 0;  // path universe, when source-aware
+        size_t duplicates_discarded = 0;  // repeats rejected while deduplicating
+        bool   unique       = true;  // whether duplicates were rejected
     };
 
     /**
@@ -139,10 +141,19 @@ public:
      * set is rather than anything about the index.
      *
      * `seed` makes the pattern set reproducible; unset draws from random_device.
+     *
+     * `unique` (the default) rejects a pattern already generated and retries, so
+     * a set of N patterns is N distinct queries. A duplicate is not a second
+     * measurement -- it is the same query timed twice -- and on a small or
+     * low-diversity panel repeats are common enough to matter. Pass false to
+     * allow repeats, which is what regenerating a pattern set produced before
+     * deduplication existed requires: rejecting a duplicate changes how much
+     * randomness is consumed, so the same seed yields a different set.
      */
     PatternGenStats generate_patterns(std::ostream& os, size_t count, Length pattern_length,
                                       std::optional<uint64_t> seed = std::nullopt,
-                                      bool source_aware = true) const;
+                                      bool source_aware = true,
+                                      bool unique = true) const;
 
     // Extract substring from EDS
     String extract(Position pos, Length len, const std::vector<int>& changes) const;
