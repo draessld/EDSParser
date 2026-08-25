@@ -675,6 +675,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#trailers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trailers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#format-variants" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1131,6 +1142,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#trailers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trailers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#format-variants" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1262,8 +1284,8 @@
 <p>An EDS file consists of a sequence of <em>symbols</em>, each represented as a
 brace-delimited set of alternative strings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>&lt;EDS&gt;          ::= &lt;symbol&gt;+
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>&lt;symbol&gt;       ::= &#39;{&#39; &lt;alternatives&gt; &#39;}&#39;
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>&lt;alternatives&gt; ::= &lt;string&gt; (&#39;,&#39; &lt;string&gt;)*
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>&lt;symbol&gt;       ::= '{' &lt;alternatives&gt; '}'
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>&lt;alternatives&gt; ::= &lt;string&gt; (',' &lt;string&gt;)*
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>&lt;string&gt;       ::= [ACGT]*          ; may be empty (represents deletion)
 </code></pre></div>
 <p>A <strong>common (non-degenerate) symbol</strong> has exactly one alternative.
@@ -1385,19 +1407,49 @@ Real path IDs are 1-indexed. When performing source intersections:</p>
   automatically whenever a variant is present in more than half of all
   paths, keeping near-universal entries compact.</li>
 <li>Correctly expanding a complement entry to its true path count requires
-  knowing the total number of paths, which plain text SEDS never stores in
-  a header (unlike EDZ — see below). <code>Sources::parse_seds()</code> infers it by
-  scanning for the largest path ID token seen anywhere in the file during
-  the same pass that builds its entry index.</li>
+  knowing the total number of paths. Text SEDS has no <em>header</em>, so the path
+  universe is recorded in a <strong>trailer</strong> at EOF instead (see below), which
+  makes the file self-describing. Only trailerless legacy files fall back to
+  <code>Sources::parse_seds()</code> inferring the universe from the largest path ID
+  token seen anywhere in the file, during the same pass that builds its entry
+  index — exact except when the true maximum path appears in every entry but
+  is never spelled out.</li>
 </ul>
 <h3 id="sparse-mode-seds_sparse">Sparse Mode (<code>SEDS_SPARSE</code>)<a class="headerlink" href="#sparse-mode-seds_sparse" title="Permanent link">&para;</a></h3>
 <p><code>vcf2eds</code> writes sources <strong>sparse by default</strong>: universal (<code>{0}</code>) entries
-are omitted from the text body entirely, and a trailing bitvector +
-20-byte trailer (<code>"SEDS"</code> magic + cardinality + degenerate-entry count)
-records which string indices were universal. <code>Sources::load()</code>
-auto-detects sparse files by checking for this trailer magic at load time
-— no separate flag is needed to <em>read</em> a sparse file, only to force EDZ
-interpretation of a misnamed one (<code>-z</code>/<code>--edz</code>).</p>
+are omitted from the text body entirely, and a trailing bitvector records
+which string indices were universal. <code>Sources::load()</code> auto-detects sparse
+files by checking for the trailer magic at load time — no separate flag is
+needed to <em>read</em> a sparse file, only to force EDZ interpretation of a
+misnamed one (<code>-z</code>/<code>--edz</code>).</p>
+<h3 id="trailers">Trailers<a class="headerlink" href="#trailers" title="Permanent link">&para;</a></h3>
+<p>Both text variants end in a self-describing binary trailer carrying
+<code>num_paths</code>, so complement entries expand exactly on load:</p>
+<table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Trailer layout</th>
+<th style="text-align: right;">Size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sparse</td>
+<td><code>bitvec</code> | <code>"SED2"</code> | cardinality(8) | m_degen(8) | num_paths(8)</td>
+<td style="text-align: right;">28 B</td>
+</tr>
+<tr>
+<td>Dense</td>
+<td><code>text</code> | <code>"SEDN"</code> | cardinality(8) | num_paths(8)</td>
+<td style="text-align: right;">20 B</td>
+</tr>
+</tbody>
+</table>
+<p>Legacy files still load: a trailerless dense file, and the old 20-byte
+<code>"SEDS"</code> sparse trailer (which carried cardinality and the degenerate-entry
+count but no path universe), both fall back to inferring <code>num_paths</code> from
+the largest path-ID token.</p>
 <h3 id="format-variants">Format Variants<a class="headerlink" href="#format-variants" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1420,8 +1472,8 @@ interpretation of a misnamed one (<code>-z</code>/<code>--edz</code>).</p>
 </tr>
 <tr>
 <td><code>.edz</code> (compressed)</td>
-<td>Binary + zstd blocks</td>
-<td>🔲 Planned</td>
+<td>Binary + zstd blocks (<code>EDZ_COMPRESSED</code>)</td>
+<td>✅ Implemented — needs a zstd-enabled build</td>
 </tr>
 </tbody>
 </table>
@@ -1432,6 +1484,23 @@ directly — unlike text SEDS, it never needs to infer the path universe
 size. Select it with <code>-z</code>/<code>--edz</code> on <code>vcf2eds</code>; <code>eds2leds</code> and
 <code>edsparser-stats</code> auto-detect it by extension via <code>-s</code>/<code>--seds</code>, or accept
 it explicitly regardless of extension via <code>-z</code>/<code>--edz</code>.</p>
+<p>All three EDZ variants share the <code>.edz</code> extension and are distinguished by
+header flags — dense <code>0x0002</code>, sparse <code>0x0006</code>, compressed <code>0x0003</code> — so
+auto-detection resolves the variant from the file itself.</p>
+<p><strong><code>EDZ_COMPRESSED</code></strong> splits the dense bitset data into ~256 KiB blocks,
+zstd-compresses each, and stores a per-block index (compressed offset and
+size, uncompressed size) for O(1) block lookup. A read decompresses one
+block on demand and caches it. It requires a zstd-enabled build; without
+zstd, load/save/read throw a clear "built without zstd" error rather than
+writing a corrupt file, and <code>Sources::edz_compressed_available()</code> reports
+build support. Produce it with <code>--source-format edz-compressed</code>
+(<code>eds2leds</code>) or <code>--compress</code> (<code>edsparser-source-transform</code>).</p>
+<p><strong>Choosing a variant is about allele frequency, not path count.</strong> A bitset
+costs <code>ceil(num_paths/8)</code> bytes per entry whatever it contains, so it wins
+only when a typical allele is carried by many paths. On rare-variant data
+the text encoding is smaller and the gap widens with scale — see
+<a href="../cli-tools/#--source-format--shrinking-the-output-sources">cli-tools.md</a>
+for measured numbers.</p>
 <hr />
 <h2 id="msa-multiple-sequence-alignment-msa">MSA — Multiple Sequence Alignment (<code>.msa</code>)<a class="headerlink" href="#msa-multiple-sequence-alignment-msa" title="Permanent link">&para;</a></h2>
 <p>Standard FASTA format where <strong>all sequences are the same length</strong> and gaps
