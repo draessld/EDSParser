@@ -500,6 +500,52 @@ test_keep_eds_without_l_warns() {
 # RUN
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ---------------------------------------------------------------------------
+# REF-vs-reference validation (TODO 0e)
+#
+# vcf2eds only ever used the *length* of the REF field, so a VCF belonging to a
+# different assembly produced a well-formed EDS built from the wrong spans and
+# reported a 100% success rate. Mismatches are now counted and reported, and a
+# rate that can only mean "wrong assembly" refuses to run at all.
+# ---------------------------------------------------------------------------
+
+test_ref_check_clean_fixture_reports_zero() {
+    local out
+    out=$("$TOOL" -i "$VARIANTS_VCF" -r "$VARIANTS_REF" \
+                  -o "$TMPDIR/rc.eds" -s "$TMPDIR/rc.seds" 2>&1)
+    assert_contains "$out" "REF mismatches:             0" "clean fixture reports 0 mismatches" || return 1
+}
+
+test_ref_check_counts_mismatches() {
+    # small.vcf's POS values against a poly-A reference: every REF that is not A
+    # disagrees, so the check must both warn per site and summarise.
+    printf '>chr1\n%s\n' "$(printf 'A%.0s' $(seq 1 200))" > "$TMPDIR/polyA.fa"
+    local out
+    out=$("$TOOL" -i "$VCF" -r "$TMPDIR/polyA.fa" \
+                  -o "$TMPDIR/rc2.eds" -s "$TMPDIR/rc2.seds" 2>&1)
+    assert_contains "$out" "REF mismatch at chr1:" "warns per mismatching site" || return 1
+    assert_contains "$out" "disagree with the reference sequence" "prints the summary warning" || return 1
+}
+
+test_ref_check_wrong_assembly_refuses() {
+    # 1200 variants that all disagree: past the abort threshold, so the run must
+    # refuse rather than build an EDS from the wrong spans.
+    {
+        printf '##fileformat=VCFv4.2\n'
+        printf '#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n'
+        for i in $(seq 1 1200); do
+            printf 'chr1\t%d\t.\tC\tG\t99\tPASS\t.\tGT\t0|1\n' "$i"
+        done
+    } > "$TMPDIR/wrong.vcf"
+    printf '>chr1\n%s\n' "$(printf 'A%.0s' $(seq 1 1500))" > "$TMPDIR/wrongref.fa"
+
+    local out rc
+    out=$("$TOOL" -i "$TMPDIR/wrong.vcf" -r "$TMPDIR/wrongref.fa" \
+                  -o "$TMPDIR/rc3.eds" -s "$TMPDIR/rc3.seds" 2>&1) && rc=0 || rc=$?
+    assert_exit_code 1 "$rc" "wrong assembly exits 1" || return 1
+    assert_contains "$out" "different assembly" "explains why it refused" || return 1
+}
+
 echo "-- basic conversion & errors --"
 run_test "basic VCF→EDS conversion"                test_basic_conversion
 run_test "sources file created"                    test_sources_file_created
@@ -546,6 +592,12 @@ run_test "SEDS output matches golden"              test_variants_seds_matches_go
 run_test "multi-allelic expands to {A,C,G}"        test_variants_multiallelic_expands
 run_test "deletion yields empty-alt set"           test_variants_deletion_empty_alt
 run_test "golden round-trips through stats"         test_variants_golden_roundtrips
+
+echo "-- REF-vs-reference validation --"
+run_test "clean fixture reports 0 mismatches"      test_ref_check_clean_fixture_reports_zero
+run_test "mismatches counted and warned"           test_ref_check_counts_mismatches
+run_test "wrong assembly refuses (exit 1)"         test_ref_check_wrong_assembly_refuses
+
 
 echo "-- source formats (SEDS/-s vs EDZ/-z) --"
 run_test "SEDS (default): creates .seds file"           test_seds_produces_seds_file

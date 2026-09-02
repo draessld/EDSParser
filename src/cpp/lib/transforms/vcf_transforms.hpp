@@ -32,6 +32,14 @@ struct VCFStats {
     size_t skipped_out_of_range = 0;  // Skipped: POS lies beyond the end of the reference
     size_t variant_groups = 0;        // Number of variant groups created (after merging overlaps)
 
+    // Variants whose REF field disagrees with the reference FASTA at that
+    // position. NOT a skip count: the variant is still processed, because real
+    // VCFs contain genuine mismatches. It is a data-quality signal — a nonzero
+    // value usually means the VCF and the FASTA are different assemblies, in
+    // which case every span is wrong. Spans containing N are not compared.
+    size_t ref_mismatches = 0;
+    size_t ref_checked = 0;           // Variants whose REF could actually be compared
+
     // Helper to get total skipped count
     size_t total_skipped() const {
         return skipped_malformed + skipped_unsupported_sv + skipped_wrong_chrom +

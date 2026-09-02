@@ -15,19 +15,32 @@ using namespace edsparser;
 // Inline test data (no external data/ directory dependency)
 // ---------------------------------------------------------------------------
 
+// REF fields are the bases SMALL_FA actually holds at each POS. Eight of the ten
+// used to disagree with it (only POS 5 and 90 were right), which nothing noticed
+// because vcf2eds reads the allele out of the FASTA and only ever used REF for its
+// length. The REF check added for TODO 0e is what surfaced it.
+//
+// Three sites change the emitted EDS, and each was previously wrong:
+//   POS 20  ALT was T, which equalled the true reference base — the symbol
+//           collapsed to {T} and the "variant" was not one. Now T->C gives {T,C}.
+//   POS 34  insertion ALT must begin with the reference base: T->TA emitted
+//           {G,TA} against a reference G. Now G->GA gives {G,GA}.
+//   POS 75  same, A->ATG against a reference C emitted {C,ATG}. Now C->CTG.
+// The other five are pure relabelling: the allele comes from the FASTA either
+// way, so those symbols are byte-identical.
 const std::string SMALL_VCF =
     "##fileformat=VCFv4.2\n"
     "##reference=reference.fasta\n"
     "#CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  SAMPLE1 SAMPLE2 SAMPLE3 SAMPLE4 SAMPLE5\n"
     "chr1    5       .       T       C       99      PASS    .       GT      0|0     0|1     1|0     1|1     0|0\n"
-    "chr1    8      .       A       G       99      PASS    .       GT      0|1     0|0     0|1     1|1     0|0\n"
-    "chr1    20      .       C       T       99      PASS    .       GT      1|0     1|1     0|0     0|1     0|0\n"
-    "chr1    27      .       G       A       99      PASS    .       GT      0|0     0|1     0|0     1|1     0|0\n"
-    "chr1    34      .       T       TA      99      PASS    .       GT      0|1     1|0     1|1     0|0     0|0\n"
-    "chr1    42      .       C       <DEL>       99      PASS    .       GT      1|1     0|1     0|0     0|0     1|0\n"
-    "chr1    55      .       A       C       99      PASS    .       GT      0|0     0|1     1|1     0|0     0|1\n"
-    "chr1    60      .       G       T       99      PASS    .       GT      0|1     1|0     0|0     1|1     0|0\n"
-    "chr1    75      .       A       ATG     99      PASS    .       GT      1|0     1|1     0|0     0|1     0|0\n"
+    "chr1    8      .       C       G       99      PASS    .       GT      0|1     0|0     0|1     1|1     0|0\n"
+    "chr1    20      .       T       C       99      PASS    .       GT      1|0     1|1     0|0     0|1     0|0\n"
+    "chr1    27      .       T       A       99      PASS    .       GT      0|0     0|1     0|0     1|1     0|0\n"
+    "chr1    34      .       G       GA      99      PASS    .       GT      0|1     1|0     1|1     0|0     0|0\n"
+    "chr1    42      .       G       <DEL>       99      PASS    .       GT      1|1     0|1     0|0     0|0     1|0\n"
+    "chr1    55      .       T       C       99      PASS    .       GT      0|0     0|1     1|1     0|0     0|1\n"
+    "chr1    60      .       A       T       99      PASS    .       GT      0|1     1|0     0|0     1|1     0|0\n"
+    "chr1    75      .       C       CTG     99      PASS    .       GT      1|0     1|1     0|0     0|1     0|0\n"
     "chr1    90      .       T       G,A       99      PASS    .       GT      0|2     0|0     2|1     1|0     1|1\n";
 
 const std::string SMALL_FA =
@@ -666,6 +679,68 @@ void test_no_genotype_seds_cardinality() {
     std::cout << "  PASS" << std::endl;
 }
 
+
+// ---------------------------------------------------------------------------
+// TODO 0e: vcf2eds only ever used the *length* of the REF field, so a VCF whose
+// coordinates belong to a different assembly produced a well-formed EDS built
+// from the wrong spans, reporting a 100% success rate. These pin the check that
+// now compares REF against the reference.
+// ---------------------------------------------------------------------------
+void test_ref_mismatch_detection() {
+    std::cout << "Test 16: REF-vs-reference validation..." << std::endl;
+
+    // A correct fixture must report zero mismatches, and must actually have
+    // compared something — a check that silently compares nothing would pass
+    // the mismatch assertion on its own.
+    {
+        std::stringstream vcf(SMALL_VCF), fa(SMALL_FA);
+        VCFStats stats;
+        parse_vcf_to_eds_streaming_str(vcf, fa, &stats);
+        assert(stats.ref_checked == 10   && "All 10 SMALL_VCF variants should be comparable");
+        assert(stats.ref_mismatches == 0 && "Corrected SMALL_VCF must agree with SMALL_FA");
+        std::cout << "  Correct fixture: " << stats.ref_checked << " checked, 0 mismatches"
+                  << std::endl;
+    }
+
+    // Same POS values against a reference that disagrees everywhere: a poly-A
+    // sequence, so only the variants whose REF is already A can match.
+    {
+        const std::string wrong_fa = ">chr1\n" + std::string(50, 'A') + "\n"
+                                                + std::string(50, 'A') + "\n"
+                                                + std::string(35, 'A') + "\n";
+        std::stringstream vcf(SMALL_VCF), fa(wrong_fa);
+        VCFStats stats;
+        parse_vcf_to_eds_streaming_str(vcf, fa, &stats);
+        assert(stats.ref_checked == 10 && "Every variant is still comparable");
+        assert(stats.ref_mismatches == 9 &&
+               "Only POS 60 (REF=A) can match a poly-A reference");
+        std::cout << "  Wrong reference: " << stats.ref_mismatches << "/"
+                  << stats.ref_checked << " mismatches reported" << std::endl;
+    }
+
+    // N is padding, not a base. No caller emits variants inside an N run, and
+    // comparing against one would report a mismatch for a span that was never
+    // sequenced — so such spans are neither counted nor warned about.
+    {
+        const std::string n_vcf =
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+            "chr1\t3\t.\tG\tT\t99\tPASS\t.\tGT\t0|1\n"    // inside the N run
+            "chr1\t9\t.\tC\tG\t99\tPASS\t.\tGT\t0|1\n";   // real base, matches
+        const std::string n_fa = ">chr1\nAGNNNNNNCGTACGTA\n";
+        std::stringstream vcf(n_vcf), fa(n_fa);
+        VCFStats stats;
+        parse_vcf_to_eds_streaming_str(vcf, fa, &stats);
+        assert(stats.ref_checked == 1    && "The N-covered variant must not be compared");
+        assert(stats.ref_mismatches == 0 && "The one comparable variant agrees");
+        std::cout << "  N spans skipped: " << stats.ref_checked
+                  << " of 2 variants compared" << std::endl;
+    }
+
+    std::cout << "  PASS" << std::endl;
+}
+
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -685,6 +760,7 @@ int main() {
         test_multi_chromosome_filtering();
         test_edz_vs_seds_agreement();
         test_no_genotype_seds_cardinality();
+        test_ref_mismatch_detection();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

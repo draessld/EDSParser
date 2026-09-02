@@ -98,6 +98,96 @@ struct VariantGroup {
 };
 
 // ============================================================================
+// REF-vs-REFERENCE VALIDATION
+// ============================================================================
+//
+// vcf2eds only ever used the *length* of the REF field: the allele it emits is
+// read out of the FASTA and never compared to what the VCF claims is there. A
+// VCF whose coordinates belong to a different assembly therefore produced a
+// well-formed EDS built from the wrong spans, silently — no warning, no
+// nonzero skip count, a 100% success rate.
+//
+// The reference span of every variant group is already read in order to emit
+// it, so the comparison costs one substring compare per variant. Policy
+// matches the out-of-range POS handling: count every mismatch, print the first
+// few with enough detail to diagnose, and keep going, because real VCFs do
+// contain genuine mismatches. Only a rate high enough to mean "wrong assembly"
+// refuses to continue.
+
+struct RefCheckState {
+    size_t checked    = 0;   // variants whose REF could be compared
+    size_t mismatches = 0;
+    size_t warned     = 0;   // how many were printed individually
+
+    // A wrong assembly disagrees at roughly three sites in four (a random base
+    // matches one in four); a usable VCF disagrees at well under one in a
+    // hundred. Half of the first ABORT_SAMPLE comparisons separates those two
+    // cases with room to spare, and fails within the first second of work
+    // rather than after hours of it.
+    static constexpr size_t MAX_WARNINGS = 10;
+    static constexpr size_t ABORT_SAMPLE = 1000;
+};
+
+// Case-insensitive equality: soft-masked FASTA regions are lowercase, and a
+// lowercase repeat is not a mismatch.
+static bool ref_iequals(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::toupper(static_cast<unsigned char>(a[i])) !=
+            std::toupper(static_cast<unsigned char>(b[i]))) return false;
+    }
+    return true;
+}
+
+// Compare one variant's REF against the span already read for its group.
+// `ref_span` covers [group_start, group_start + ref_span.size()) 0-indexed.
+static void check_ref_against_reference(const VCFVariant& var,
+                                        const std::string& ref_span,
+                                        size_t group_start,
+                                        RefCheckState* st)
+{
+    if (!st) return;
+
+    const size_t offset = (var.pos - 1) - group_start;
+    if (offset + var.ref.size() > ref_span.size()) {
+        // The span was truncated at the end of the sequence. POS past the end
+        // is already counted as skipped_out_of_range; nothing to add here.
+        return;
+    }
+
+    const std::string actual = ref_span.substr(offset, var.ref.size());
+
+    // N is padding, not a base: no caller emits variants inside an N run, and
+    // comparing against one would report mismatches for a span that was never
+    // sequenced. Such a span is neither counted nor warned about.
+    if (actual.find('N') != std::string::npos ||
+        actual.find('n') != std::string::npos) return;
+
+    st->checked++;
+    if (ref_iequals(actual, var.ref)) return;
+
+    st->mismatches++;
+    if (st->warned < RefCheckState::MAX_WARNINGS) {
+        std::cerr << "Warning: REF mismatch at " << var.chrom << ':' << var.pos
+                  << " - VCF says \"" << var.ref << "\", reference has \""
+                  << actual << "\"\n";
+        if (++st->warned == RefCheckState::MAX_WARNINGS) {
+            std::cerr << "Warning: further REF mismatches will be counted but not "
+                         "listed individually.\n";
+        }
+    }
+
+    if (st->checked >= RefCheckState::ABORT_SAMPLE &&
+        st->mismatches * 2 >= st->checked) {
+        throw std::runtime_error(
+            "VCF/FASTA mismatch: " + std::to_string(st->mismatches) + " of the first " +
+            std::to_string(st->checked) + " comparable REF alleles disagree with the "
+            "reference sequence. The VCF almost certainly belongs to a different "
+            "assembly than the FASTA. Refusing to build an EDS from the wrong spans.");
+    }
+}
+
+// ============================================================================
 // FASTA PARSING
 // ============================================================================
 
@@ -688,7 +778,8 @@ VariantGroup merge_variant_group(
 std::vector<VariantGroup> group_overlapping_variants(
     const std::vector<VCFVariant>& variants,
     std::istream& fasta_stream,
-    const FASTAMetadata& fasta_meta)
+    const FASTAMetadata& fasta_meta,
+    RefCheckState* ref_check)
 {
     std::vector<VariantGroup> groups;
 
@@ -727,6 +818,12 @@ std::vector<VariantGroup> group_overlapping_variants(
         // Read reference span for this group
         size_t span_length = group_end - group_start;
         std::string ref_span = read_fasta_region(fasta_stream, fasta_meta, group_start, span_length);
+
+        // Confirm the VCF and the FASTA agree about what is at these positions.
+        // The span is already in hand, so this is a substring compare per variant.
+        for (const VCFVariant& v : current_group) {
+            check_ref_against_reference(v, ref_span, group_start, ref_check);
+        }
 
         // Merge the group
         VariantGroup merged = merge_variant_group(current_group, ref_span, group_start);
@@ -784,11 +881,13 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     size_t end_pos,
     Sources::Format seds_format = Sources::Format::SEDS,
     std::vector<uint8_t>* presence_bitvec = nullptr,
-    size_t* bitvec_bit_count = nullptr)
+    size_t* bitvec_bit_count = nullptr,
+    RefCheckState* ref_check = nullptr)
 {
 
     // Group overlapping variants
-    std::vector<VariantGroup> groups = group_overlapping_variants(variants, fasta_stream, fasta_meta);
+    std::vector<VariantGroup> groups =
+        group_overlapping_variants(variants, fasta_stream, fasta_meta, ref_check);
     size_t num_groups = groups.size();
 
     size_t current_pos = start_pos;
@@ -954,7 +1053,12 @@ void parse_vcf_to_eds_streaming(
     }
 
     size_t n_samples = 0;
+
     size_t total_variant_groups = 0;
+
+    // REF-vs-reference validation state, accumulated across every block so the
+    // abort threshold sees the whole run rather than one block's worth.
+    RefCheckState ref_check;
 
     // If block_size is 0, use old behavior (load all variants)
     // Otherwise, if sequence is shorter than block size, process as single block
@@ -1137,7 +1241,8 @@ void parse_vcf_to_eds_streaming(
                 eds_output, seds_output,
                 actual_write_pos, current_block_end, seds_format,
                 is_sparse_fmt ? &presence_bitvec  : nullptr,
-                is_sparse_fmt ? &bitvec_bit_count : nullptr);
+                is_sparse_fmt ? &bitvec_bit_count : nullptr,
+                &ref_check);
         actual_write_pos = new_write_pos;
         total_seds_entries    += block_seds_entries;
         total_m_degen_entries += block_m_degen;
@@ -1204,6 +1309,8 @@ void parse_vcf_to_eds_streaming(
     // Update variant groups count
     if (stats) {
         stats->variant_groups = total_variant_groups;
+        stats->ref_mismatches = ref_check.mismatches;
+        stats->ref_checked    = ref_check.checked;
     }
 
     // Finalize header / trailer for binary or sparse formats.

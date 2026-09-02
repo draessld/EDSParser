@@ -299,6 +299,8 @@ int main(int argc, char** argv) {
         std::cout << "  Skipped (wrong chromosome): " << stats.skipped_wrong_chrom << "\n";
         std::cout << "  Skipped (past end of ref):  " << stats.skipped_out_of_range << "\n";
         std::cout << "  Total skipped:              " << stats.total_skipped() << "\n";
+        std::cout << "  REF checked against ref:    " << stats.ref_checked << "\n";
+        std::cout << "  REF mismatches:             " << stats.ref_mismatches << "\n";
         std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
 
         if (stats.skipped_out_of_range > 0) {
@@ -306,6 +308,16 @@ int main(int argc, char** argv) {
                       << " variant(s) lie past the end of the reference sequence and were "
                          "dropped. The VCF and the FASTA probably disagree about which "
                          "assembly or contig this is.\n";
+        }
+
+        if (stats.ref_mismatches > 0) {
+            double pct = (100.0 * stats.ref_mismatches) / stats.ref_checked;
+            std::cerr << "Warning: " << stats.ref_mismatches << " of " << stats.ref_checked
+                      << " comparable REF allele(s) (" << std::fixed << std::setprecision(2)
+                      << pct << "%) disagree with the reference sequence. The alleles emitted "
+                         "come from the FASTA, not from the VCF, so those spans are built from "
+                         "whatever the reference actually contains. A high rate means the VCF "
+                         "and the FASTA are different assemblies.\n";
         }
 
         if (stats.total_variants > 0) {
