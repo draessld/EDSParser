@@ -1,73 +1,47 @@
 # EDSParser – known issues and planned work
 
-Last reprioritised **2026-08-20**, after repairing the unit suite (P0 item 0); before
-that, **2026-08-06**, after the complement-source fix (20d8ff1) and the first
-M. tuberculosis panels. Items are ordered by what blocks the next result, not by
+Last reprioritised **2026-08-30**, after the REF-validation fix (0e) and the decision to
+keep sources sample-level; before that **2026-08-20** (unit suite) and **2026-08-06** (the
+complement-source fix, 20d8ff1). Items are ordered by what blocks the next result, not by
 how interesting they are. Closed items and the reasoning for dropping them are at the
-bottom rather than deleted silently.
+bottom rather than deleted silently — including things deliberately *not* done, so they do
+not get proposed again.
 
-**The one-line state of things:** the linear merge is correct again and cheap on haploid
-data (Mtb, 500 paths, l=100 in 3.3 s at 111 MB once long alleles are filtered), so the open
-problems are (a) results produced before the fix that must be regenerated, (b) `vcf2eds`
-emitting one full-span haplotype per allele, which makes the EDS grow *superlinearly* with
-panel size on any data containing long indels, and (c) diploid/heterozygous data, now the
-only surviving cause of combinatorial blow-up in the merge itself.
+**The one-line state of things:** the library is in good shape — `ctest` 7/7, e2e 9/9, the
+linear merge correct and cheap on haploid data (Mtb, 500 paths, l=100 in 3.3 s at 111 MB once
+long alleles are filtered). What blocks the next *result* is not code but data and write-up:
+the TB panels are gone from this machine (1b), three specs have runs but no notebook and one
+batch of runs is empty (3g), and results produced before the complement fix still need marking
+(0a). The two real code items left are `vcf2eds` growing *superlinearly* with panel size on
+long indels (1a) and the memory estimate that cannot be trusted for admission control (1d).
+Diploid heterozygosity stays expensive by choice — see "Sources stay sample-level".
 
 ---
 
 ## P0 — correctness; blocks publishable numbers
 
-### 0. Repair the unit test suite — **done 2026-08-20**
-
-`ctest` is 7/7 and e2e is 9/9. Triage answered the question this item asked:
-neither `test_stats` nor `test_vcf` was a regression — every failure was a stale
-expectation — but repairing them surfaced four real defects, now fixed:
-
-- **`find_symbol_at_common_position()` out-of-bounds read** for a common position
-  at or past the total common-character count (`upper_bound` → `end()` →
-  `symbol_idx == n`). Segfaulted ~2 runs in 3, reachable from the public
-  `check_position()`. Valgrind catches it, ASan does not.
-- **Out-of-range degenerate string id** reported as an "Internal error" rather
-  than `out_of_range`.
-- **Stray `}` absorbed as a sequence character**, so truncated files parsed
-  "successfully" with braces inside their strings.
-- **`vcf2eds` counted out-of-range variants as processed** and then dropped them,
-  reporting 100% success while discarding the tail of a mismatched reference.
-
-Also settled: `total_change_size` counts **characters** in degenerate symbols
-(matching its declaration and its display next to `num_common_chars`, which it
-now partitions N with) rather than alternatives-beyond-the-first, which was
-exactly `m - n`.
-
-Follow-ups this opened, both small and both new items below: 0d (`check_position`
-has no caller and so no real specification) and 0e (`vcf2eds` never validates REF
-against the reference).
-
-### 0a. Regenerate every result produced at ≤ 63 paths
+### 0a. Regenerate the yeast sweep — **bundles marked 2026-08-30**
 
 The bitset fast path in `compute_merge_metadata()` read complement source sets (`{0,e1,e2}`
 = all paths except e1,e2) as universal until 20d8ff1, so intersections never pruned and the
 merge kept combinations no path carries. It engages only when all path IDs fit in [1,63],
 which makes the boundary exact: **≤ 63 samples/sequences affected, > 63 unaffected.**
 
-- **Invalid:** the whole `experiments/results/yeast1011_50` sweep (50 samples), at *every*
-  l — not only the rows marked OOM. Those `.leds` files contain strings no strain carries,
-  so sizes, string-expansion ratios and peak-memory figures are all measuring the bug.
-  Also `experiments/results/tb_100` (collected before the rerun; superseded by `tb_p100`).
-- **Valid:** anything at more than 63 paths — `hgp1000` (2504 samples) never took the fast
-  path. Also `tb_p100`/`tb_p500` and their `snv50` twins, produced after the fix.
-- **Action:** delete or clearly mark the invalid bundles; re-run yeast if it is still wanted
-  as a dataset (see 1b — its diploid heterozygosity is a separate problem the fix does not
-  solve).
-
-### 0b. Add the regression test that would have caught it — **done**
-
-`test_merge.cpp` has `test_linear_merge_respects_path_count_bound` (3 paths, 6
-adjacent degenerate symbols, complement-spelled sources: cartesian would give 64,
-correct pruning gives 3) plus `test_universal_marker_still_matches_every_path`,
-so a genuinely universal `{0}` is not "fixed" into behaving like a complement.
-Both pass. They were present but unreachable while the suite was red, and one
-asserted `size()` where it meant `length()`.
+- **Invalid:** `~/Data/experiments/edsparser/results/yeast1011_50` (50 samples, collected
+  2026-08-03, one day before the fix) at *every* l — not only the rows marked OOM. Those
+  `.leds` files contain strings no strain carries, so sizes, string-expansion ratios and
+  peak-memory figures all measure the bug, and the OOM rows died *of* it. Now carries
+  `INVALID.md` saying so.
+- **Not invalid after all:** `tb_100` was listed here, wrongly. It has **100 paths** — above
+  the threshold, so the buggy path was never reached — and its binary (`4054de4`,
+  2026-08-05) postdates the fix. Its `MANIFEST.txt` warning is boilerplate that
+  `collect_results.sh` stamps on every bundle. It is merely **superseded** by `tb_p100`, and
+  now carries `SUPERSEDED.md` explaining the difference.
+- **Valid:** `hgp1000` (2504 samples, never took the fast path), `tb_p100`/`tb_p500`/`tb_p1141`
+  and their `snv50` twins, all produced after the fix.
+- **Remaining:** re-run yeast only if it is still wanted as a dataset. Its diploid
+  heterozygosity is a separate problem the fix does not solve — see "Sources stay
+  sample-level" — so haploidise the VCF first.
 
 ### 0c. Surface the boundary-context exemption where users meet it *(mostly resolved)*
 
@@ -106,18 +80,6 @@ implementation is self-consistent and is now pinned by
 Confirm this is the convention biofmi expects before building on it — if it wants
 to start a match inside a degenerate symbol, the API cannot express that today.
 
-### 0e. `vcf2eds` never checks REF against the reference
-
-It takes only the *length* of the REF field and reads the allele from the FASTA,
-so a VCF whose coordinates belong to a different assembly produces a
-well-formed EDS built from the wrong spans, silently. Every position in the
-CNV/INV unit fixture was off by one and nothing noticed for as long as the
-fixture has existed.
-
-The reference span is already read in order to emit it, so comparing it to REF is
-nearly free. Wire it to a counter plus a warning (as 0-fix did for out-of-range
-POS) rather than a hard failure, since real VCFs do contain mismatches, and
-decide the threshold at which the run should refuse to continue.
 
 ---
 
@@ -161,9 +123,9 @@ assembly-derived data.
 - **Note this is also a correctness question**, not only size: because haplotypes are built
   one variant at a time, a sample carrying ALTs at two variants inside the same group is
   recorded as present in *both* single-variant strings rather than in one combined string.
-  That is the same "path is in several strings at one symbol" shape as 9c/1b, arising from
-  grouping rather than from zygosity.
-- **Workaround in place:** `experiments/scripts/make_allele_subset.sh` drops alleles over
+  That is the same "sample is in several strings at one symbol" shape as the sample-level
+  source model, arising from grouping rather than from zygosity.
+- **Workaround in place:** `~/Data/experiments/edsparser/scripts/make_allele_subset.sh` drops alleles over
   N bp before conversion — 3.9% of sites removed took that EDS from 18.0 MB to 4.3 MB,
   i.e. down to reference size. Good enough to keep experiments moving, but it discards real
   structural variation rather than representing it.
@@ -172,52 +134,67 @@ assembly-derived data.
   separate symbols. Until then, document the behaviour and keep publishing both the filtered
   and unfiltered datasets.
 
-### 1b. Haplotype-resolved paths — the only surviving cause of blow-up (was 9c)
+### Sources stay sample-level — **decided 2026-08-30, won't fix**
 
-With the complement bug fixed, this is what remains. Measured on synthetic 50-path clustered
-data: the haploidised VCF runs l=5..30 in ~0.1 s under 19 MB, while its **heterozygous
-diploid twin is still killed at an 8 GB cap at every l**. Real confirmation: 1000G chr7 at
-l=5 (2504 samples, above the fast-path threshold, so never affected by the bug) genuinely
-peaks at 28.3 GiB and expands 17.9×.
+One path per **sample**, not per chromosome copy: `num_paths = n_samples`. A path answers
+*"did this sample carry this combination on some copy"*, not *"does this chromosome carry
+it"*. This is a deliberate modelling choice, not an oversight.
 
-- **Cause:** `parse_genotype()` (`vcf_transforms.cpp` ~L340) and the per-sample allele
-  collection in `merge_variant_group()` (~L646-677) map each diploid **sample** to a single
-  path. Phase is ignored (`0/1` is treated as `0|1`), the two alleles go into a per-sample
-  `std::set<int>`, so a het sample is marked present in *both* the reference and the ALT
-  string. `intersect_sources()` then rarely returns empty and a chain of k adjacent
-  degenerate sites survives up to 2^k combinations.
-- **Consequence for interpretation:** traversing one path does not reconstruct a physical
-  chromosome. `num_paths` counts samples, not haplotypes.
-- **Fix:** split each phased diploid sample into two paths (`2*n_samples`), assigning a0 and
-  a1 to separate paths so each path is a consistent single-chromosome walk; keep the
-  sample-level collapse as a documented fallback for unphased input. 1000G phase 3 is phased.
-- **Why this before the alternatives:** it should remove the 2^k explosion rather than
-  bounding it, and it is a modelling correction justified independently of performance.
-  Two fallbacks if it does not suffice:
-  1. *Do not materialise the product* — keep a merged symbol's strings factored (per-position
-     alternatives plus a source-compatibility structure) and expand on read. Changes the
-     on-disk l-EDS model, so it is a research contribution rather than an optimisation.
-  2. *Accept and document a limit* — publish the tractable-path-count curve and treat
-     subsetting as the supported workflow. Honest, but caps what the index can claim about
-     population-scale pangenomes.
-- **Interim workaround that works today:** haploidise the VCF before conversion (one allele
-  per sample). This is what makes the Mtb pipeline cheap and is legitimate for clonal or
-  inbred panels; it is a modelling choice, not a fix, for genuinely diploid data.
+**Why haplotype-resolved paths were rejected.** They double the path universe — 2504 →
+5008 for 1000G — and a bitset entry costs ⌈paths/8⌉ bytes, so every SEDS/EDZ entry doubles
+with it. Sources are already the dominant artifact on disk (~33 GB against ~3.4 GB of EDS
+on 1000G, see 3d), and on rare-variant panels the binary formats already lose to plain text
+(2e, where edz-sparse reached 34 MB against 7.8 MB of SEDS at 1141 paths). Doubling that is
+not a trade worth making for the datasets this project targets.
 
-### 1b-bis. Build biofmi indexes on the TB family *(the actual goal; dataset is ready)*
+**A working prototype was built and reverted on 2026-08-30.** Recorded so it is not
+rebuilt from scratch by someone reading the symptom: it did what it claimed. Building each
+group's haplotype per path rather than per (variant, allele) made every symbol's source
+sets partition the path universe, and the synthetic 50-sample clustered heterozygous case
+that is killed at an 8 GB cap at every l ran in **22 MB and 0.5 s at l ∈ {5,10,20,30}**,
+with at most 92 alternatives per symbol against the 100-path bound. It was rejected on
+source-file size, not on whether the mechanism works.
+
+**What the sample-level model costs, so nobody re-derives it.** A heterozygous sample is
+marked present in *both* the reference and the ALT string at a site, so `intersect_sources()`
+rarely returns empty and a chain of k adjacent degenerate sites can survive up to 2^k
+combinations. Measured: 1000G chr7 at l=5 peaks at 28.3 GiB and expands 17.9×; a synthetic
+50-sample heterozygous diploid VCF is killed at an 8 GB cap at every l while its
+haploidised twin runs l=5..30 in ~0.1 s under 19 MB.
+
+Three things follow, and all three are permanent:
+
+- `path_cap = num_paths` in `estimate_worst_case_merge_memory()` is **not** a true bound, so
+  1d cannot be fixed by trusting it.
+- Traversing one path does not reconstruct a physical chromosome. `num_paths` counts
+  samples.
+- biofmi's source validation can only answer "this sample could carry this combination",
+  never "this haplotype does" — see its TODO B4.
+
+**Supported workflow for genuinely diploid data:** haploidise the VCF before conversion
+(one allele per sample), or subset samples. Both are modelling choices and should be stated
+wherever the resulting numbers are published. This is what makes the Mtb pipeline cheap and
+is legitimate for clonal or inbred panels.
+
+### 1b. Build biofmi indexes on the TB family *(the actual goal — but the dataset is gone)*
 
 Everything so far has been dataset preparation. The filtered family — 3 panels × l ∈ {10, 20,
-50}, all correct, all under 100 MB, all converging in 1 iteration — is ready to index. Measure
+50}, all correct, all under 100 MB, all converging in 1 iteration — is what to index: measure
 index size, build time and query time against panel size and l. This is the first experiment
 that answers the thesis question rather than enabling it.
 
+**Blocked on the data.** `~/Data/tb/` is **empty** on this machine (checked 2026-08-30), so
+the `vcf2leds_tb` spec has never produced a single `ok` row — its last run is 12 `error` + 12
+`skipped`. Rebuild the panels with `fetch_tb_dataset.sh` (no root or conda needed) before
+anything here can start.
+
 Confirm 0c first: biofmi must not assume every context is ≥ l.
 
-### 1c. Re-run the path-count curve on the fixed binary
+### 1c. Re-run the path-count curve on a post-complement-fix binary
 
 The 2026-08-02 yeast 1011-vs-50 comparison is **void**: the two runs straddled the 63-path
 threshold, so it compared a correct run against a buggy one. No magnitude from it survives —
-only the mechanism in 1b.
+only the mechanism described under "Sources stay sample-level".
 
 Tooling is ready: `make_sample_subset.sh` (seeded, nested subsets) and `run_subset_dataset.sh`
 (each run under a kernel-enforced `MemoryMax` scope). The haploid arm is partly delivered —
@@ -240,7 +217,8 @@ Measured 2026-08-01 on 1000G chr7, l=5: predicted `RECOMMENDED_BUDGET_BYTES` 0.6
 an **actual peak of 28.3 GiB**. Unaffected by the complement fix — chr7 has 2504 paths.
 
 - **Root cause:** `estimate_worst_case_merge_memory()` caps each group's `merged_size` at
-  `path_cap = num_paths`, which is exactly the invariant 1b breaks. Without the cap the raw
+  `path_cap = num_paths`, which the sample-level source model breaks: a sample sits in
+  several strings at one symbol, so a merge can outnumber the paths. Without the cap the raw
   cartesian bound estimates ~TB for the same input and would refuse everything, so neither
   existing bound is usable.
 - **Fix direction:** bound it by *doing* the fold, cheaply and partially — rank groups by
@@ -409,7 +387,7 @@ holds only `*_disk_size.txt` — no gzip measurements — while the newer bundle
   pruning shrinks the output. **Runner exists, results do not**: `run_subset_dataset.sh` now runs both
   arms per l (`MODES`, default both) into `leds_l<N>/` and `leds_l<N>_cart/`, records every attempt in
   `leds_runs.tsv` so a cartesian run killed at `MEM_CAP` is a recorded outcome, and
-  `experiments/compare_merge_modes.py` joins the two into string/byte/runtime/RSS ratios. Re-run the TB
+  `~/Data/experiments/edsparser/compare_merge_modes.py` joins the two into string/byte/runtime/RSS ratios. Re-run the TB
   matrix to fill it in. Expect the cartesian arm to hit the cap first at high l on the dense panels —
   that cell is the measurement, not a gap. Note the two arms are not symmetric on disk: linear must
   carry a `.seds` that is often larger than its `.leds`, so at low l cartesian can be the smaller
@@ -422,18 +400,57 @@ similar peak memory — a per-variant runtime gap, not a memory effect. Re-run b
 `/usr/bin/time -v` to rule out IO contention first (most likely if chromosomes ran concurrently);
 if it persists, check N-content/block distribution and multiallelic/indel density, then profile.
 
+
+### 3g. Three specs have no write-up, and a batch of runs produced nothing
+
+State of `~/Data/experiments/edsparser/` as of 2026-08-30 — worth recording because an empty
+`measurements.csv` looks exactly like a run that measured zero:
+
+- **8 specs, 5 notebooks.** `merge_mode`, `source_formats` and `vcf2eds` (the real-data one)
+  have runs but no notebook. `merge_mode` is what closes 3e's "linear vs cartesian on real
+  data"; `source_formats` is what closes 2e.
+- **`merge_mode` has not run green since 2026-08-16** (30 ok / 5 oom / 5 skipped). Five later
+  attempts on 08-25 and 08-26 all produced **0 rows**.
+- **Eight run directories dated 2026-08-26 17:29 are all empty**, created within five seconds
+  of each other — a batch invocation that aborted immediately. Find out why before trusting
+  anything in `runs/`.
+- **`vcf2leds_tb` has never produced an `ok` row** — see 1b, the input data is not on this
+  machine.
+
+Cheapest first step: re-run one spec by hand and watch it, rather than re-reading the CSVs.
 ---
 
 ## Closed since the last revision
 
+- **Unit suite repaired** (2026-08-20) — `ctest` 7/7, e2e 9/9. Every failure was a stale
+  expectation, not a regression, but repairing them surfaced four real defects, all fixed: an
+  out-of-bounds read in `find_symbol_at_common_position()` (segfaulted ~2 runs in 3, reachable
+  from `check_position()`; Valgrind catches it, ASan does not); an out-of-range degenerate
+  string id reported as "Internal error" rather than `out_of_range`; a stray `}` absorbed as a
+  sequence character, so truncated files parsed "successfully"; and `vcf2eds` counting
+  out-of-range variants as processed before dropping them. Also settled: `total_change_size`
+  counts *characters* in degenerate symbols, not alternatives-beyond-the-first. Opened 0d and 0e.
+- **Regression test for the complement bug** (0b) — `test_merge.cpp` has
+  `test_linear_merge_respects_path_count_bound` (3 paths, 6 adjacent degenerate symbols,
+  complement-spelled sources: cartesian gives 64, correct pruning gives 3) and
+  `test_universal_marker_still_matches_every_path`, so a genuinely universal `{0}` is not
+  "fixed" into behaving like a complement.
+- **`vcf2eds` REF validation** (0e) — done 2026-08-30. The transform used only the *length* of
+  REF, so a VCF from another assembly built a well-formed EDS from the wrong spans at a
+  reported 100% success rate. Now compared against the span already read for the group:
+  counted (`ref_mismatches` of `ref_checked`), first 10 named on stderr, N spans skipped, and
+  ≥ 50% disagreement over the first 1000 comparable alleles aborts with exit 1. It immediately
+  found three silently-wrong fixtures (`SMALL_VCF`, `tests/e2e/data/small.vcf`,
+  `test_overlaps.vcf`), one of which held a "variant" whose ALT equalled the reference base.
 - **Complement source sets read as universal in the merge** — fixed in 20d8ff1. 50-path haploid VCF
   at l=5: 6,557,335 strings / 3159 MB / 21.2 s → 2,491 strings / max 50 per symbol / 5.9 MB / 0.01 s.
   A 40-sequence 3 kb MSA at l=20 went from killed at 6 GB to 9.5 MB. Consequences tracked in 0a.
 - **"Path count is THE bottleneck"** — retired as a headline. The measurement behind it was void
   (see 1c) and the mechanism is more precisely heterozygosity, not path count as such: 500 haploid
-  Mtb paths are cheap. What survives is 1b.
-- **`vcf2eds` sources are sample-level, not haplotype-level** — the documentation half is done
-  (recorded in CLAUDE.md); the modelling half is 1b.
+  Mtb paths are cheap. What survives is the sample-level source model, now an accepted
+  limitation rather than an open item.
+- **`vcf2eds` sources are sample-level, not haplotype-level** — closed as **won't fix**
+  2026-08-30, see "Sources stay sample-level" in P1.
 - **`ctx_run_len` n-entry vector** — replaced by `CtxRunCursor` (2026-07-30). Removed a 4 B/symbol
   transient; did not move peak RSS, since that allocation never overlapped the peak.
 - **`--source-format` for `eds2leds` output** — shipped 2026-07-30. The pipeline-internal half remains
