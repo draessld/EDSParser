@@ -690,13 +690,81 @@ std::string apply_variant_to_span(
 }
 
 /**
+ * Apply several variants to a reference span at once: the haplotype of one
+ * allele copy that carries all of them.
+ *
+ * `applied` holds (index into `variants`, allele index >= 1) pairs whose
+ * reference spans are pairwise disjoint — merge_variant_group() guarantees it —
+ * so each ALT replaces its own stretch of `ref_span`, written in reference order.
+ */
+std::string apply_variants_to_span(
+    const std::string& ref_span,
+    size_t ref_start,
+    const std::vector<VCFVariant>& variants,
+    std::vector<std::pair<size_t, int>> applied)
+{
+    if (applied.empty()) return ref_span;
+    if (applied.size() == 1)
+        return apply_variant_to_span(ref_span, ref_start, variants[applied[0].first],
+                                     applied[0].second);
+
+    std::sort(applied.begin(), applied.end(),
+              [&](const std::pair<size_t, int>& a, const std::pair<size_t, int>& b) {
+                  return variants[a.first].pos < variants[b.first].pos;
+              });
+
+    std::string result;
+    size_t cursor = 0;  // next offset in ref_span not yet written
+    for (const auto& [var_idx, allele] : applied) {
+        const VCFVariant& v = variants[var_idx];
+        const size_t offset = (v.pos - 1) - ref_start;
+        result.append(ref_span, cursor, offset - cursor);
+        result += v.alts[allele - 1];
+        cursor = offset + v.ref.size();
+    }
+    if (cursor < ref_span.size()) result.append(ref_span, cursor, std::string::npos);
+    return result;
+}
+
+/**
  * Merge overlapping variants into a single VariantGroup.
- * Generates all valid haplotypes and remaps sample genotypes.
+ *
+ * Haplotypes are assigned per allele copy, and a copy's haplotype is the
+ * reference span with *every* ALT that copy carries in the group applied.
+ *
+ * This used to assign alleles one record at a time, so a copy carrying ALT at one
+ * record and REF at another was credited with both the ALT string and the
+ * reference — the reference option kept every sample in the panel. That breaks
+ * the partition LINEAR search relies on (each genome carries exactly one option
+ * per degenerate symbol) in the false-positive direction, and it does so on
+ * haploid data, where zygosity cannot be the cause: 309 of 19,801 symbols on
+ * tb_p100_snv50, 1,307 false-positive genome calls on 122 patterns (biofmi TODO
+ * 4b). It is also the "arising from grouping rather than from zygosity" case of
+ * TODO 1a. Now:
+ *
+ *   - a copy is on the reference option only if it carries no ALT anywhere in
+ *     the group;
+ *   - a copy carrying ALTs at records whose spans are disjoint gets one combined
+ *     haplotype, which is added to the symbol if no copy spelled it already;
+ *   - a copy carrying ALTs at records that overlap each other is contradictory —
+ *     one chromosome cannot carry both — and is resolved the way
+ *     `bcftools consensus` resolves it: the first record in file order applies
+ *     and the later one is ignored for that copy. Each ignored call is counted
+ *     in `*conflicting_calls` so the caller reports it instead of hiding it.
+ *
+ * Single-variant groups are unchanged. A heterozygous diploid sample still sits
+ * in two options, one per copy: sources are sample-level by decision (TODO,
+ * Standing decisions), which is a separate question from this one.
+ *
+ * Every single-record haplotype is still generated up front, whether or not a
+ * copy carries it alone: a VCF without genotype columns emits all of them with
+ * universal sources, and the emitter drops options no sample carries.
  */
 VariantGroup merge_variant_group(
     const std::vector<VCFVariant>& group_variants,
     const std::string& reference_span,
-    size_t span_start)
+    size_t span_start,
+    size_t* conflicting_calls)
 {
     VariantGroup group;
     group.start_pos = span_start;
@@ -710,54 +778,57 @@ VariantGroup merge_variant_group(
 
     // Use unordered_map for faster lookups (O(1) average) in this hot loop
     std::unordered_map<std::string, int> haplotype_to_index;
+    auto index_of = [&](std::string haplotype) -> int {
+        auto it = haplotype_to_index.find(haplotype);
+        if (it != haplotype_to_index.end()) return it->second;
+        const int idx = static_cast<int>(group.merged_haplotypes.size());
+        haplotype_to_index.emplace(haplotype, idx);
+        group.merged_haplotypes.push_back(std::move(haplotype));
+        return idx;
+    };
 
     // Always add reference haplotype first (index 0)
-    group.merged_haplotypes.push_back(reference_span);
-    haplotype_to_index[reference_span] = 0;
+    index_of(reference_span);
 
     // For each variant in the group, generate haplotypes for each ALT
-    for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
-        const VCFVariant& var = group_variants[var_idx];
+    for (const VCFVariant& var : group_variants)
+        for (size_t alt_idx = 0; alt_idx < var.alts.size(); alt_idx++)
+            index_of(apply_variant_to_span(reference_span, span_start, var, alt_idx + 1));
 
-        // For each ALT allele
-        for (size_t alt_idx = 0; alt_idx < var.alts.size(); alt_idx++) {
-            // Generate haplotype by applying this variant to reference span
-            std::string haplotype = apply_variant_to_span(
-                reference_span, span_start, var, alt_idx + 1);
+    // (variant index, allele) pairs carried by the copy being assigned
+    std::vector<std::pair<size_t, int>> applied;
 
-            // Add to merged haplotypes if not already present
-            if (haplotype_to_index.find(haplotype) == haplotype_to_index.end()) {
-                haplotype_to_index[haplotype] = group.merged_haplotypes.size();
-                group.merged_haplotypes.push_back(haplotype);
-            }
-        }
-    }
-
-    // Remap sample genotypes to merged haplotype indices
     for (size_t sample_idx = 0; sample_idx < n_samples; sample_idx++) {
         std::set<int> sample_haplotype_indices;
 
-        // For each variant in the group
-        for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
-            const VCFVariant& var = group_variants[var_idx];
-            size_t var_n_samples = var.genotypes.size() / 2;
+        // Flat layout: copy `copy` of this sample sits at [sample_idx*2 + copy]
+        for (int copy = 0; copy < 2; copy++) {
+            applied.clear();
+            bool called = false;  // no call at all: a hemizygous pad or a no-call
 
-            if (sample_idx >= var_n_samples) {
-                continue;  // Sample not in this variant
-            }
+            for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
+                const VCFVariant& var = group_variants[var_idx];
+                if (sample_idx >= var.genotypes.size() / 2) continue;  // sample not in this variant
 
-            // Flat layout: 2 ints per sample at [sample_idx*2] and [sample_idx*2+1]
-            for (int a = 0; a < 2; a++) {
-                int allele_idx = var.genotypes[sample_idx * 2 + a];
+                const int allele_idx = var.genotypes[sample_idx * 2 + copy];
                 if (allele_idx < 0) continue;  // missing / hemizygous pad
+                called = true;
+                // REF at this record. An out-of-range index always read as REF.
+                if (allele_idx == 0 || allele_idx > static_cast<int>(var.alts.size())) continue;
 
-                std::string haplotype = apply_variant_to_span(
-                    reference_span, span_start, var, allele_idx);
-
-                auto it = haplotype_to_index.find(haplotype);
-                if (it != haplotype_to_index.end())
-                    sample_haplotype_indices.insert(it->second);
+                bool clashes = false;
+                for (const auto& prior : applied)
+                    if (variants_overlap(group_variants[prior.first], var)) { clashes = true; break; }
+                if (clashes) {
+                    if (conflicting_calls) ++*conflicting_calls;
+                    continue;
+                }
+                applied.emplace_back(var_idx, allele_idx);
             }
+
+            if (called)
+                sample_haplotype_indices.insert(index_of(
+                    apply_variants_to_span(reference_span, span_start, group_variants, applied)));
         }
 
         // If no variants for this sample, they have reference (index 0)
@@ -779,7 +850,8 @@ std::vector<VariantGroup> group_overlapping_variants(
     const std::vector<VCFVariant>& variants,
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
-    RefCheckState* ref_check)
+    RefCheckState* ref_check,
+    size_t* conflicting_calls)
 {
     std::vector<VariantGroup> groups;
 
@@ -826,7 +898,8 @@ std::vector<VariantGroup> group_overlapping_variants(
         }
 
         // Merge the group
-        VariantGroup merged = merge_variant_group(current_group, ref_span, group_start);
+        VariantGroup merged =
+            merge_variant_group(current_group, ref_span, group_start, conflicting_calls);
         groups.push_back(merged);
 
         // Move to next ungrouped variant
@@ -882,12 +955,14 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     Sources::Format seds_format = Sources::Format::SEDS,
     std::vector<uint8_t>* presence_bitvec = nullptr,
     size_t* bitvec_bit_count = nullptr,
-    RefCheckState* ref_check = nullptr)
+    RefCheckState* ref_check = nullptr,
+    size_t* conflicting_calls = nullptr)
 {
 
     // Group overlapping variants
     std::vector<VariantGroup> groups =
-        group_overlapping_variants(variants, fasta_stream, fasta_meta, ref_check);
+        group_overlapping_variants(variants, fasta_stream, fasta_meta, ref_check,
+                                   conflicting_calls);
     size_t num_groups = groups.size();
 
     size_t current_pos = start_pos;
@@ -1059,6 +1134,10 @@ void parse_vcf_to_eds_streaming(
     // REF-vs-reference validation state, accumulated across every block so the
     // abort threshold sees the whole run rather than one block's worth.
     RefCheckState ref_check;
+
+    // Allele copies carrying ALTs at two overlapping records; see
+    // merge_variant_group(). Accumulated across blocks like ref_check.
+    size_t overlap_conflicts = 0;
 
     // If block_size is 0, use old behavior (load all variants)
     // Otherwise, if sequence is shorter than block size, process as single block
@@ -1242,7 +1321,7 @@ void parse_vcf_to_eds_streaming(
                 actual_write_pos, current_block_end, seds_format,
                 is_sparse_fmt ? &presence_bitvec  : nullptr,
                 is_sparse_fmt ? &bitvec_bit_count : nullptr,
-                &ref_check);
+                &ref_check, &overlap_conflicts);
         actual_write_pos = new_write_pos;
         total_seds_entries    += block_seds_entries;
         total_m_degen_entries += block_m_degen;
@@ -1311,6 +1390,7 @@ void parse_vcf_to_eds_streaming(
         stats->variant_groups = total_variant_groups;
         stats->ref_mismatches = ref_check.mismatches;
         stats->ref_checked    = ref_check.checked;
+        stats->overlap_conflicts = overlap_conflicts;
     }
 
     // Finalize header / trailer for binary or sparse formats.

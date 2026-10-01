@@ -101,10 +101,12 @@ Rule of thumb: 16 GB RAM → `--block-size 2000000`; 64 GB → default; 256 GB �
 
 ### What dominates EDS size
 
-`group_overlapping_variants()` merges variants whose spans overlap, and
-`merge_variant_group()` then applies **one variant at a time** to the whole group span, so
-a long deletion absorbs every variant inside it and emits one full-span string per allele.
-On assembly-derived data this, not the SNVs, sets the file size `[measured]`:
+`group_overlapping_variants()` merges variants whose spans overlap into one symbol spanning
+the whole group, so a long deletion absorbs every variant inside it and every string that
+symbol emits is full-span. On assembly-derived data this, not the SNVs, sets the file size
+`[measured]`. The table predates 2026-09-12: strings were then emitted one per (record,
+allele), and are now emitted one per distinct haplotype an allele copy carries (see
+[algorithms § Overlap Merging](algorithms.md#overlap-merging)). It has not been re-measured.
 
 | M. tuberculosis panel | EDS | ctx_avg |
 |---|---:|---:|

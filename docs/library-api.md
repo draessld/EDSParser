@@ -399,6 +399,8 @@ struct VCFStats {
     size_t skipped_malformed  = 0;
     size_t skipped_unsupported_sv = 0;
     size_t variant_groups     = 0;  // after overlap merging
+    size_t overlap_conflicts  = 0;  // ALT calls ignored: same allele copy already carries
+                                    // an ALT at an overlapping record (first in file order wins)
 
     size_t total_skipped() const { return skipped_malformed + skipped_unsupported_sv; }
 };

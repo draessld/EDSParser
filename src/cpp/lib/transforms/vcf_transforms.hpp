@@ -40,6 +40,14 @@ struct VCFStats {
     size_t ref_mismatches = 0;
     size_t ref_checked = 0;           // Variants whose REF could actually be compared
 
+    // ALT calls ignored because the same allele copy already carries an ALT at
+    // an overlapping record in its group. One chromosome cannot carry both, so
+    // the first record in file order applies and the later one does not — what
+    // `bcftools consensus` does. NOT a skip count: the record is still emitted
+    // for every other copy. Nonzero means the VCF makes contradictory calls;
+    // normalise it first if the genomes must match their assemblies exactly.
+    size_t overlap_conflicts = 0;
+
     // Helper to get total skipped count
     size_t total_skipped() const {
         return skipped_malformed + skipped_unsupported_sv + skipped_wrong_chrom +
