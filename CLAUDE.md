@@ -454,8 +454,8 @@ eds2leds -i file_84MB.eds -s file_13GB.seds -l 3 -o output.leds
 
 ## Dependencies
 
-- **CMake** 3.10+: Build system
-- **C++17**: Required language standard
+- **CMake** 3.12+: Build system
+- **C++20**: Required language standard
 - **Boost** (program_options): Command-line argument parsing for tools
 - **SDSL** (optional): Required for MSA transformations (suffix array construction). Install from https://github.com/simongog/sdsl-lite
 - **divsufsort/divsufsort64** (optional): Required by SDSL

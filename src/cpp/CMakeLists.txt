@@ -1,9 +1,9 @@
 # CMakeLists.txt for EDSParser
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.12)  # CXX_STANDARD 20 needs 3.12
 project(EDSParser VERSION 1.0.0 LANGUAGES CXX)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -150,6 +150,15 @@ add_subdirectory(tools)
 
 # Add test executables
 set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/unit)
+
+# The unit tests assert with plain cassert, and the default build type is
+# Release, which defines NDEBUG and compiles every assert() to nothing. Without
+# this the tests run, print PASSED and verify nothing: test_eds, test_merge,
+# test_sources, test_stats and test_vcf are 591 assertions between them, all of
+# which were dead. Keep assertions live in test binaries regardless of build
+# type. (Same fix as biofmi's src/cpp/CMakeLists.txt, 2026-08-30.)
+add_compile_options($<$<CONFIG:Release>:-UNDEBUG>)
+add_compile_options($<$<CONFIG:RelWithDebInfo>:-UNDEBUG>)
 
 # Test: EDS parsing
 add_executable(test_eds ${TEST_DIR}/test_eds.cpp)

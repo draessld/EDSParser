@@ -1,5 +1,5 @@
 # Root CMakeLists.txt for EDSParser
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.12)  # CXX_STANDARD 20 needs 3.12
 project(EDSParser VERSION 1.0.0 LANGUAGES CXX)
 
 # Include GNUInstallDirs for standard installation directories
