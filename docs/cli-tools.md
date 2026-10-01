@@ -84,6 +84,8 @@ vcf2eds -i <variants.vcf> --reference <genome.fasta> [OPTIONS]
 | `-l, --context-length` | uint | — | If set, produces l-EDS |
 | `--block-size` | uint | `10000000` | Genomic window size in bases; `0` = load all (legacy, high memory) |
 | `--keep-eds` | flag | off | With `-l`, also write the intermediate stage-1 EDS/SEDS instead of discarding them (no-op without `-l`) |
+| `--split-groups` | flag | off | Emit a group of overlapping records as one symbol per atomic segment of its span instead of one symbol of full-span haplotypes (see below) |
+| `--strict-overlaps` | flag | off | Exit with status **4**, removing the outputs, instead of warning when some sample's genome would differ from `bcftools consensus -s <sample>` (see below) |
 
 > **`-z` is ignored in l-EDS mode.** The two-stage VCF→EDS→l-EDS pipeline writes dense text
 > SEDS, so `-z` combined with `-l` prints a warning and falls back rather than producing a
@@ -111,6 +113,45 @@ vcf2eds -i <variants.vcf> --reference <genome.fasta> [OPTIONS]
 
 Unsupported SVs and malformed lines are **skipped with warnings**; a
 summary is printed to stderr on exit.
+
+### Overlapping Records
+
+Records whose REF spans overlap form one group. By default a group is one
+degenerate symbol whose alternatives are the distinct full-span haplotypes the
+samples carry; `--split-groups` cuts the span at every record boundary and emits
+one symbol per segment instead (REF, the ALT starting there, or empty inside a
+carried deletion; a segment every sample spells the same is common text). Same
+genome per sample, same source partition, much smaller EDS when long deletions
+overlap other variants. The l-EDS merge re-joins the segments, so the l-EDS is the
+same either way, and a split EDS must be given to `eds2leds` **with** its sources.
+
+**Which call wins.** One allele copy cannot carry two overlapping ALTs. vcf2eds
+applies the first ALT the copy carries in file order and ignores later
+overlapping ones (counted as "Overlapping ALT calls ignored"); a REF or missing
+call blocks nothing. `bcftools consensus -s <sample>` (1.19) resolves the same
+calls differently: any non-missing call, REF included, claims its REF span, a
+later record starting inside it is skipped, and only a pure indel anchored on the
+last claimed base (sharing its first base, not after an insertion) is applied on
+top. For example, a sample with `0` at `24 G>GCG` and `1` at `24 GCGT>C` gets the
+deletion from vcf2eds and the reference from bcftools.
+
+vcf2eds keeps its rule, but checks every allele copy with calls in a group of two
+or more records under both rules and reports the copies whose spelling actually
+differs — only those, not every overlap:
+
+```
+  Samples differing from bcftools consensus: 1 (1 copies, 1 groups, 2 records)
+Warning: 1 sample(s) would get a different genome from `bcftools consensus -s` ...
+  chr1:24 (2 records) S1: vcf2eds spells "C", bcftools consensus "GCGT"
+```
+
+A silent check means every genome equals what `bcftools consensus -s` writes for
+it (checked by `test_transform_fuzz` against bcftools itself). Use
+`--strict-overlaps` in pipelines whose ground truth is bcftools-materialised:
+it exits 4 instead. To make the two agree, normalise the VCF so no two records
+overlap. Not modelled: symbolic ALTs (bcftools rejects most of them), diploid
+genotypes (each copy is compared as if haploid; `consensus -s` writes IUPAC
+codes for heterozygous calls), unsorted VCFs.
 
 ### Memory Tuning via `--block-size`
 
@@ -142,6 +183,9 @@ vcf2eds -i variants.vcf -r ref.fasta -o out.eds -s out.seds
 
 # Binary EDZ sources instead of text SEDS
 vcf2eds -i variants.vcf -r ref.fasta -z
+
+# Refuse a VCF whose genomes would not match bcftools consensus
+vcf2eds -i variants.vcf -r ref.fasta --strict-overlaps || echo "normalise first"
 ```
 
 ---

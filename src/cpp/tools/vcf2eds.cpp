@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
         bool edz_flag = false;
         bool keep_eds_flag = false;
         bool split_groups_flag = false;
+        bool strict_overlaps_flag = false;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -51,7 +52,8 @@ int main(int argc, char** argv) {
             ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
             ("edz,z", po::bool_switch(&edz_flag), "Write sources in binary EDZ format instead of text SEDS (EDS mode only; ignored with -l, see WHY TWO-STAGE FOR l-EDS)")
             ("keep-eds", po::bool_switch(&keep_eds_flag), "With -l, also write the intermediate EDS/SEDS (the VCF→EDS stage output) to <base>.eds/<base>.seds instead of discarding them (no-op without -l)")
-            ("split-groups", po::bool_switch(&split_groups_flag), "Emit each group of overlapping records as one symbol per atomic segment of its span instead of one symbol of full-span haplotypes. Same genomes (LINEAR), same source partition, much smaller EDS when long deletions overlap other variants; see OVERLAPPING RECORDS");
+            ("split-groups", po::bool_switch(&split_groups_flag), "Emit each group of overlapping records as one symbol per atomic segment of its span instead of one symbol of full-span haplotypes. Same genomes (LINEAR), same source partition, much smaller EDS when long deletions overlap other variants; see OVERLAPPING RECORDS")
+            ("strict-overlaps", po::bool_switch(&strict_overlaps_flag), "Fail (exit 4, outputs removed) instead of warning when some sample's genome would differ from `bcftools consensus -s <sample>` because of calls at overlapping records; see OVERLAPPING RECORDS");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -99,6 +101,14 @@ int main(int argc, char** argv) {
             std::cout << "  l-EDS is the same size either way; the saving is in the EDS stage.\n";
             std::cout << "  Feed a split EDS to eds2leds only WITH its sources (-s): without them\n";
             std::cout << "  the re-join is a cartesian product and does not finish on real panels.\n\n";
+            std::cout << "  vcf2eds and `bcftools consensus -s <sample>` resolve calls at overlapping\n";
+            std::cout << "  records differently: vcf2eds applies the first ALT a copy carries in file\n";
+            std::cout << "  order and lets REF/missing calls block nothing; bcftools lets any\n";
+            std::cout << "  non-missing call, REF included, claim its span. Every copy with calls in\n";
+            std::cout << "  a multi-record group is checked under both rules, and the samples whose\n";
+            std::cout << "  genome would differ are reported as a warning (counts plus examples).\n";
+            std::cout << "  --strict-overlaps turns that warning into exit status 4. The conversion\n";
+            std::cout << "  is the same either way.\n\n";
             std::cout << "EXAMPLES:\n";
             std::cout << "  # Basic transformation (VCF → EDS):\n";
             std::cout << "  vcf2eds -i variants.vcf -r reference.fa\n";
@@ -280,15 +290,29 @@ int main(int argc, char** argv) {
         // Output written directly to files (memory-efficient for large VCF)
         edsparser::VCFStats stats;
 
-        {
+        try {
             edsparser::ProgressBar pb("VCF", vcf_file_size, vcf_cbuf);
             if (create_leds) {
                 const std::filesystem::path* keep_eds  = keep_eds_flag ? &kept_eds_path  : nullptr;
                 const std::filesystem::path* keep_seds = keep_eds_flag ? &kept_seds_path : nullptr;
-                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size, keep_eds, keep_seds, split_groups_flag);
+                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size, keep_eds, keep_seds, split_groups_flag, strict_overlaps_flag);
             } else {
-                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format, split_groups_flag);
+                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format, split_groups_flag, strict_overlaps_flag);
             }
+        } catch (const edsparser::OverlapDivergenceError& e) {
+            // Nothing half-written is left behind for a pipeline to pick up.
+            eds_out.close();
+            seds_out.close();
+            std::error_code ec;
+            std::filesystem::remove(eds_path, ec);
+            std::filesystem::remove(seds_path, ec);
+            if (keep_eds_flag && create_leds) {
+                std::filesystem::remove(kept_eds_path, ec);
+                std::filesystem::remove(kept_seds_path, ec);
+            }
+            std::cerr << "Error: " << e.what() << "\n";
+            print_performance();
+            return 4;
         }
 
         vcf_in.close();
@@ -318,6 +342,11 @@ int main(int argc, char** argv) {
         std::cout << "  REF mismatches:             " << stats.ref_mismatches << "\n";
         std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
         std::cout << "  Overlapping ALT calls ignored: " << stats.overlap_conflicts << "\n";
+        std::cout << "  Samples differing from bcftools consensus: "
+                  << stats.overlap_divergent_samples.size() << " ("
+                  << stats.overlap_divergent_copies << " copies, "
+                  << stats.overlap_divergent_groups << " groups, "
+                  << stats.overlap_divergent_records << " records)\n";
 
         if (stats.overlap_conflicts > 0) {
             std::cerr << "Warning: " << stats.overlap_conflicts
@@ -327,6 +356,9 @@ int main(int argc, char** argv) {
                          "consensus does. The emitted genomes differ from the calls there; "
                          "normalise the VCF (bcftools norm) if that matters.\n";
         }
+
+        if (stats.overlap_divergent_copies > 0)
+            std::cerr << "Warning: " << edsparser::format_overlap_divergence(stats) << "\n";
 
         if (stats.skipped_out_of_range > 0) {
             std::cerr << "Warning: " << stats.skipped_out_of_range

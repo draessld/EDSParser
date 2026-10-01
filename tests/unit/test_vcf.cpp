@@ -1134,6 +1134,106 @@ void test_single_sample_universal_sources() {
     std::cout << "  PASS" << std::endl;
 }
 
+// ---------------------------------------------------------------------------
+// Divergence from `bcftools consensus` at overlapping records
+// ---------------------------------------------------------------------------
+const std::string OVL_FA = ">chr1\nACGATTTTGGACGTCTGACTAACGCGTCT\n";
+
+void test_overlap_divergence_detected() {
+    std::cout << "Test 26: genomes bcftools consensus would spell differently are flagged..." << std::endl;
+    // S1 group 1: deletions CG>C at 12 and GT>G at 13 overlap on base 13.
+    //   vcf2eds keeps the first ALT; bcftools stacks the second on the claimed
+    //   base 13 (a pure deletion sharing its first base), deleting the T too.
+    // S1 group 2: REF at 24 G>GCG, ALT at 24 GCGT>C. vcf2eds applies the
+    //   deletion (a REF call blocks nothing); bcftools' REF call claims base 24
+    //   and GCGT>C (first base differs, so not an anchored indel) is skipped.
+    // S2: the insertion at 24, then REF at GCGT>C: both apply the insertion.
+    // S3 all REF; S4 missing then REF: both give the reference.
+    const std::string vcf_txt =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\tS4\n"
+        "chr1\t12\t.\tCG\tC\t99\tPASS\t.\tGT\t1\t0\t0\t0\n"
+        "chr1\t13\t.\tGT\tG\t99\tPASS\t.\tGT\t1\t0\t0\t0\n"
+        "chr1\t24\t.\tG\tGCG\t99\tPASS\t.\tGT\t0\t1\t0\t.\n"
+        "chr1\t24\t.\tGCGT\tC\t99\tPASS\t.\tGT\t1\t0\t0\t0\n";
+    VCFStats st;
+    std::stringstream vcf(vcf_txt), fa(OVL_FA);
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, &st);
+    const std::string msg = format_overlap_divergence(st);
+    std::cout << "  " << msg << std::endl;
+    assert(st.overlap_divergent_copies == 2);
+    assert(st.overlap_divergent_groups == 2);
+    assert(st.overlap_divergent_records == 4);
+    assert(st.overlap_divergent_samples == std::vector<size_t>{0});
+    assert(st.overlap_divergence_examples.size() == 2);
+    assert(st.overlap_divergence_examples[0].find("chr1:12") != std::string::npos);
+    assert(st.overlap_divergence_examples[0].find(" S1:") != std::string::npos);
+    assert(st.overlap_divergence_examples[1].find("chr1:24") != std::string::npos);
+    // The conversion itself is vcf2eds's rule, unchanged: S1 spells the first
+    // deletion only, and the deletion at 24.
+    const auto g = spell_paths(eds_str, seds_str, 4);
+    assert(g[1] == "ACGATTTTGGACTCTGACTAACCCT");
+    assert(g[2] == "ACGATTTTGGACGTCTGACTAACGCGCGTCT");
+    assert(g[3] == "ACGATTTTGGACGTCTGACTAACGCGTCT" && g[4] == g[3]);
+
+    // --strict-overlaps refuses it, in both entry points.
+    bool threw = false;
+    try {
+        std::stringstream v2(vcf_txt), f2(OVL_FA);
+        std::ostringstream e, s;
+        parse_vcf_to_eds_streaming(v2, f2, e, s, nullptr, 10000000, Sources::Format::SEDS,
+                                   false, /*strict_overlaps=*/true);
+    } catch (const OverlapDivergenceError& e) {
+        threw = std::string(e.what()).find("--strict-overlaps") != std::string::npos;
+    }
+    assert(threw);
+    threw = false;
+    try {
+        std::stringstream v3(vcf_txt), f3(OVL_FA);
+        std::ostringstream e, s;
+        parse_vcf_to_leds_streaming_direct(v3, f3, e, s, 3, nullptr, 10000000, nullptr,
+                                           nullptr, false, /*strict_overlaps=*/true);
+    } catch (const OverlapDivergenceError&) {
+        threw = true;
+    }
+    assert(threw);
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_overlap_divergence_no_false_alarm() {
+    std::cout << "Test 27: overlaps both rules resolve alike are not flagged..." << std::endl;
+    // Group at 12: CGT>C then T>A inside it. S1 carries both (both tools skip
+    //   the SNP), S2 missing then the SNP (both apply it), S3 REF at both.
+    // Group at 23: C>A then C>CTT at the same base. S1 REF then the insertion
+    //   (bcftools stacks it on the claimed base: same spelling), S2 REF at
+    //   both, S3 missing then the insertion.
+    // Records at 5 and 9 overlap nothing.
+    const std::string vcf_txt =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\n"
+        "chr1\t5\t.\tT\tA\t99\tPASS\t.\tGT\t1\t0\t.\n"
+        "chr1\t9\t.\tG\tC\t99\tPASS\t.\tGT\t0\t1\t1\n"
+        "chr1\t12\t.\tCGT\tC\t99\tPASS\t.\tGT\t1\t.\t0\n"
+        "chr1\t14\t.\tT\tA\t99\tPASS\t.\tGT\t1\t1\t0\n"
+        "chr1\t23\t.\tC\tA\t99\tPASS\t.\tGT\t0\t0\t.\n"
+        "chr1\t23\t.\tC\tCTT\t99\tPASS\t.\tGT\t1\t0\t1\n";
+    for (int split = 0; split < 2; split++) {
+        VCFStats st;
+        std::stringstream vcf(vcf_txt), fa(OVL_FA);
+        auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, &st, 10000000, split == 1);
+        std::cout << "  " << (split ? "split" : "whole") << ": " << eds_str << std::endl;
+        assert(st.overlap_divergent_copies == 0);
+        assert(st.overlap_divergent_samples.empty());
+        assert(format_overlap_divergence(st).empty());
+        // strict mode accepts it
+        std::stringstream v2(vcf_txt), f2(OVL_FA);
+        std::ostringstream e, s;
+        parse_vcf_to_eds_streaming(v2, f2, e, s, nullptr, 10000000, Sources::Format::SEDS,
+                                   split == 1, /*strict_overlaps=*/true);
+    }
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -1162,6 +1262,8 @@ int main() {
         test_split_groups_without_genotypes();
         test_same_pos_conflict_keeps_file_order();
         test_single_sample_universal_sources();
+        test_overlap_divergence_detected();
+        test_overlap_divergence_no_false_alarm();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

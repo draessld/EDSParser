@@ -7,6 +7,8 @@
 #include <string>
 #include <utility>
 #include <filesystem>
+#include <stdexcept>
+#include <vector>
 
 namespace edsparser {
 
@@ -48,12 +50,43 @@ struct VCFStats {
     // normalise it first if the genomes must match their assemblies exactly.
     size_t overlap_conflicts = 0;
 
+    // Where vcf2eds and `bcftools consensus -s <sample>` spell a genome
+    // differently (2026-10-01). The two tools resolve calls at overlapping
+    // records by different rules: vcf2eds applies the first ALT a copy carries
+    // in file order and lets REF/missing calls block nothing; bcftools lets any
+    // non-missing call, REF included, claim its REF span and skips a later
+    // record starting inside it, except a pure indel anchored on the last
+    // claimed base that does not follow an insertion. For every allele copy
+    // with calls in a group of two or more records, both rules are applied to
+    // the group's span and the haplotypes compared; only copies whose spelling
+    // actually differs are counted. The conversion itself is unchanged.
+    size_t overlap_divergent_copies = 0;   // (allele copy, group) pairs that differ
+    size_t overlap_divergent_groups = 0;   // groups holding at least one
+    size_t overlap_divergent_records = 0;  // records in those groups
+    std::vector<size_t> overlap_divergent_samples;   // 0-based sample indices, sorted
+    std::vector<std::string> overlap_divergence_examples;  // first few, human-readable
+
     // Helper to get total skipped count
     size_t total_skipped() const {
         return skipped_malformed + skipped_unsupported_sv + skipped_wrong_chrom +
                skipped_out_of_range;
     }
 };
+
+/**
+ * Thrown at the end of the VCF -> EDS stage when `strict_overlaps` is set and
+ * some genome would differ from `bcftools consensus` (see VCFStats). what() is
+ * format_overlap_divergence().
+ */
+struct OverlapDivergenceError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+/**
+ * The divergence summary (counts plus the first examples) vcf2eds prints as a
+ * warning and --strict-overlaps reports as its error. Empty when there is none.
+ */
+std::string format_overlap_divergence(const VCFStats& stats);
 
 /**
  * Parse VCF + FASTA reference to EDS with source tracking (file stream output).
@@ -72,6 +105,10 @@ struct VCFStats {
  *        haplotypes (`vcf2eds --split-groups`). Same LINEAR language, same
  *        source partition, far smaller EDS when long deletions overlap
  *        polymorphic sites; see merge_variant_group() in the .cpp.
+ * @param strict_overlaps Throw OverlapDivergenceError, once the EDS has been
+ *        written, if any genome differs from `bcftools consensus`
+ *        (`vcf2eds --strict-overlaps`). Without it the counts are only reported
+ *        in `stats`.
  */
 void parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
@@ -81,7 +118,8 @@ void parse_vcf_to_eds_streaming(
     VCFStats* stats = nullptr,
     size_t block_size = 10000000,
     Sources::Format seds_format = Sources::Format::SEDS,
-    bool split_groups = false);
+    bool split_groups = false,
+    bool strict_overlaps = false);
 
 /**
  * Parse VCF + FASTA reference to EDS with source tracking (string return).
@@ -155,7 +193,8 @@ void parse_vcf_to_leds_streaming_direct(
     size_t block_size = 10000000,
     const std::filesystem::path* keep_eds_path = nullptr,
     const std::filesystem::path* keep_seds_path = nullptr,
-    bool split_groups = false);
+    bool split_groups = false,
+    bool strict_overlaps = false);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking (string return).

@@ -781,6 +781,192 @@ static bool collect_copy_alleles(
     return called;
 }
 
+// ============================================================================
+// DIVERGENCE FROM `bcftools consensus` AT OVERLAPPING RECORDS
+// ============================================================================
+//
+// The genomes a LINEAR l-EDS stands for are what vcf2eds says each copy
+// carries. Experiments check them against genomes materialised with
+// `bcftools consensus -f ref.fa -s <sample>`, and the two tools resolve calls
+// at overlapping records by different rules:
+//
+//   vcf2eds   the first ALT the copy carries in file order applies; a later
+//             ALT overlapping an applied one is ignored; REF and missing calls
+//             block nothing (collect_copy_alleles()).
+//   bcftools  (1.19, consensus.c apply_variant(); with -s and no -H every call
+//             goes through the IUPAC path, so a REF call is *applied* as a
+//             no-op) any non-missing call, REF included, claims its REF span.
+//             A later record starting inside the claimed span is skipped, with
+//             one exception: a record starting on the last claimed base is
+//             applied on top when htslib types it as a pure indel whose first
+//             base equals REF's, and the previous applied record was not an
+//             insertion. Its first base is then not rewritten.
+//
+// The rule choice stays vcf2eds's. What must not happen is a silent divergence,
+// so for every copy with calls in a group of two or more records both rules
+// are run over the group's span and the haplotypes compared; a copy is reported
+// only when they differ. Groups are independent: bcftools' claimed span never
+// reaches past the group it belongs to (a record starting on it would overlap,
+// and so be in the same group).
+//
+// Not modelled: symbolic ALTs (vcf2eds has expanded <DEL>/<INV>/<CN*> by this
+// point, bcftools refuses most of them), diploid IUPAC output (each copy is
+// compared as if haploid), unsorted input (bcftools needs it sorted).
+
+struct OverlapCheckState {
+    size_t divergent_copies = 0;
+    size_t divergent_groups = 0;
+    size_t divergent_records = 0;
+    std::vector<char> sample_hit;
+    std::vector<std::string> examples;
+    const std::vector<std::string>* sample_names = nullptr;
+    std::string chrom;
+    static constexpr size_t MAX_EXAMPLES = 5;
+};
+
+// htslib's bcf_set_variant_type() (vcf.c, 1.19), reduced to what consensus
+// asks of it: is the allele a pure INDEL, and its length change `n`.
+static bool htslib_is_indel(const std::string& ref, const std::string& alt, long& n) {
+    n = 0;
+    auto up = [](char c) { return static_cast<char>(std::toupper(static_cast<unsigned char>(c))); };
+    if (ref.empty() || alt.empty()) return false;
+    if (alt == "*") return false;
+    if (ref.size() == 1 && alt.size() == 1) return false;               // SNP / REF
+    if (alt[0] == '<' || alt[0] == '[' || alt[0] == ']') return false;  // symbolic / breakend
+    size_t r = 0, a = 0;
+    while (r < ref.size() && a < alt.size() && up(ref[r]) == up(alt[a])) { r++; a++; }
+    if (a < alt.size() && r == ref.size()) {             // pure insertion after a shared prefix
+        if (alt[a] == ']' || alt[a] == '[') return false;
+        n = static_cast<long>(alt.size()) - static_cast<long>(ref.size());
+        return true;
+    }
+    if (r < ref.size() && a == alt.size()) {             // pure deletion
+        n = static_cast<long>(alt.size()) - static_cast<long>(ref.size());
+        return true;
+    }
+    if (r == ref.size() && a == alt.size()) return false;  // REF
+    size_t re = ref.size() - 1, ae = alt.size() - 1;
+    while (re > r && ae > a && up(ref[re]) == up(alt[ae])) { re--; ae--; }
+    if (ae == a) {
+        if (re == r) return false;                       // SNP
+        n = -static_cast<long>(re - r);
+        return up(ref[re]) == up(alt[ae]);               // DEL, else OTHER
+    }
+    if (re == r) {
+        n = static_cast<long>(ae - a);
+        return up(ref[re]) == up(alt[ae]);               // INS, else OTHER
+    }
+    return false;                                        // MNP / OTHER
+}
+
+// The span haplotype `bcftools consensus -s` writes for one copy of a group.
+static std::string bcftools_span_haplotype(
+    const std::vector<VCFVariant>& group_variants,
+    const std::string& reference_span,
+    size_t span_start,
+    size_t sample_idx,
+    int copy)
+{
+    std::string out;
+    size_t cur = 0;            // offset into reference_span written so far
+    long frz = -1;             // 0-based last claimed reference position
+    bool prev_ins = false;
+    for (const VCFVariant& var : group_variants) {
+        if (sample_idx >= var.genotypes.size() / 2) continue;
+        int g = var.genotypes[sample_idx * 2 + copy];
+        if (g < 0) continue;                                    // missing: claims nothing
+        if (g > static_cast<int>(var.alts.size())) g = 0;       // read as REF, as vcf2eds does
+        const std::string& alt = g ? var.alts[g - 1] : var.ref;
+        const long p0 = static_cast<long>(var.pos) - 1;
+        const size_t off = static_cast<size_t>(p0) - span_start;
+        long n = 0;
+        const bool indel = g > 0 && htslib_is_indel(var.ref, alt, n);
+        const bool trim_beg =
+            indel && std::toupper(static_cast<unsigned char>(var.ref[0])) ==
+                         std::toupper(static_cast<unsigned char>(alt[0]));
+        if (p0 <= frz) {
+            if (p0 < frz || !trim_beg || n == 0 || prev_ins) continue;  // "overlaps ... skipping"
+            out.append(alt, 1, std::string::npos);  // the anchor base is already written
+            cur = std::max(cur, off + var.ref.size());
+        } else {
+            out.append(reference_span, cur, off - cur);
+            out += alt;
+            cur = off + var.ref.size();
+        }
+        prev_ins = alt.size() > var.ref.size();
+        frz = p0 + static_cast<long>(var.ref.size()) - 1;
+    }
+    if (cur < reference_span.size()) out.append(reference_span, cur, std::string::npos);
+    return out;
+}
+
+static std::string clip_for_message(const std::string& s) {
+    return s.size() <= 40 ? s : s.substr(0, 37) + "...";
+}
+
+// Compare both rules for every called copy of a multi-record group.
+static void check_overlap_divergence(
+    const std::vector<VCFVariant>& group_variants,
+    const std::string& reference_span,
+    size_t span_start,
+    OverlapCheckState* check)
+{
+    if (!check || group_variants.size() < 2) return;
+    for (const VCFVariant& v : group_variants)
+        if (v.ref.empty()) return;  // nothing either tool can place
+    const size_t n_samples = group_variants[0].genotypes.size() / 2;
+    if (check->sample_hit.size() < n_samples) check->sample_hit.resize(n_samples, 0);
+    bool group_hit = false;
+    std::vector<std::pair<size_t, int>> applied;
+    for (size_t sample_idx = 0; sample_idx < n_samples; sample_idx++) {
+        for (int copy = 0; copy < 2; copy++) {
+            if (!collect_copy_alleles(group_variants, sample_idx, copy, applied, nullptr))
+                continue;  // no call anywhere in the group: reference under both rules
+            const std::string mine =
+                apply_variants_to_span(reference_span, span_start, group_variants, applied);
+            const std::string theirs = bcftools_span_haplotype(
+                group_variants, reference_span, span_start, sample_idx, copy);
+            if (mine == theirs) continue;
+            ++check->divergent_copies;
+            check->sample_hit[sample_idx] = 1;
+            group_hit = true;
+            if (check->examples.size() < OverlapCheckState::MAX_EXAMPLES) {
+                const std::string name =
+                    check->sample_names && sample_idx < check->sample_names->size()
+                        ? (*check->sample_names)[sample_idx]
+                        : "sample #" + std::to_string(sample_idx + 1);
+                check->examples.push_back(
+                    check->chrom + ":" + std::to_string(group_variants[0].pos) + " (" +
+                    std::to_string(group_variants.size()) + " records) " + name +
+                    (copy ? " copy 2" : "") + ": vcf2eds spells \"" + clip_for_message(mine) +
+                    "\", bcftools consensus \"" + clip_for_message(theirs) + "\"");
+            }
+        }
+    }
+    if (group_hit) {
+        ++check->divergent_groups;
+        check->divergent_records += group_variants.size();
+    }
+}
+
+std::string format_overlap_divergence(const VCFStats& st) {
+    if (st.overlap_divergent_copies == 0) return "";
+    std::ostringstream os;
+    os << st.overlap_divergent_samples.size() << " sample(s) would get a different genome from "
+       << "`bcftools consensus -s` than vcf2eds gives them (" << st.overlap_divergent_copies
+       << " allele cop" << (st.overlap_divergent_copies == 1 ? "y" : "ies") << " in "
+       << st.overlap_divergent_groups << " group(s) of overlapping records, "
+       << st.overlap_divergent_records << " record(s)). The two tools resolve calls at "
+       << "overlapping records differently: vcf2eds applies the first ALT in file order and "
+       << "lets REF/missing calls block nothing; bcftools lets any non-missing call, REF "
+       << "included, claim its span. Genomes materialised with bcftools consensus will not "
+       << "match this EDS there; normalise the VCF so no two records overlap "
+       << "(bcftools norm -m +any, then drop the remaining overlaps) to make them agree.";
+    for (const auto& e : st.overlap_divergence_examples) os << "\n  " << e;
+    if (st.overlap_divergence_examples.size() < st.overlap_divergent_copies) os << "\n  ...";
+    return os.str();
+}
+
 /**
  * Split mode (--split-groups): a group as a run of symbols, one per atomic
  * segment of its span, instead of one symbol of full-span haplotypes.
@@ -942,11 +1128,14 @@ VariantGroup merge_variant_group(
     const std::string& reference_span,
     size_t span_start,
     size_t* conflicting_calls,
-    bool split)
+    bool split,
+    OverlapCheckState* overlap_check = nullptr)
 {
     VariantGroup group;
     group.start_pos = span_start;
     group.end_pos = span_start + reference_span.size();
+
+    check_overlap_divergence(group_variants, reference_span, span_start, overlap_check);
 
     if (split && group_variants.size() > 1 &&
         split_variant_group(group_variants, reference_span, span_start,
@@ -1014,7 +1203,8 @@ std::vector<VariantGroup> group_overlapping_variants(
     const FASTAMetadata& fasta_meta,
     RefCheckState* ref_check,
     size_t* conflicting_calls,
-    bool split)
+    bool split,
+    OverlapCheckState* overlap_check = nullptr)
 {
     std::vector<VariantGroup> groups;
 
@@ -1062,7 +1252,8 @@ std::vector<VariantGroup> group_overlapping_variants(
 
         // Merge the group
         VariantGroup merged =
-            merge_variant_group(current_group, ref_span, group_start, conflicting_calls, split);
+            merge_variant_group(current_group, ref_span, group_start, conflicting_calls, split,
+                                overlap_check);
         groups.push_back(std::move(merged));
 
         // Move to next ungrouped variant
@@ -1121,13 +1312,14 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     RefCheckState* ref_check = nullptr,
     size_t* conflicting_calls = nullptr,
     std::string* pending_common = nullptr,
-    bool split = false)
+    bool split = false,
+    OverlapCheckState* overlap_check = nullptr)
 {
 
     // Group overlapping variants
     std::vector<VariantGroup> groups =
         group_overlapping_variants(variants, fasta_stream, fasta_meta, ref_check,
-                                   conflicting_calls, split);
+                                   conflicting_calls, split, overlap_check);
     size_t num_groups = groups.size();
 
     size_t current_pos = start_pos;
@@ -1339,7 +1531,8 @@ void parse_vcf_to_eds_streaming(
     VCFStats* stats,
     size_t block_size,
     Sources::Format seds_format,
-    bool split_groups)
+    bool split_groups,
+    bool strict_overlaps)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
@@ -1362,6 +1555,21 @@ void parse_vcf_to_eds_streaming(
     // Allele copies carrying ALTs at two overlapping records; see
     // merge_variant_group(). Accumulated across blocks like ref_check.
     size_t overlap_conflicts = 0;
+
+    // Copies whose genome bcftools consensus would spell differently; see
+    // check_overlap_divergence(). Sample names come from the #CHROM line.
+    std::vector<std::string> sample_names;
+    OverlapCheckState overlap_check;
+    overlap_check.sample_names = &sample_names;
+    overlap_check.chrom = fasta_meta.seq_name;
+    auto note_header = [&](const std::string& l) {
+        if (l.rfind("#CHROM", 0) != 0) return;
+        sample_names.clear();
+        std::istringstream hs(l);
+        std::string tok;
+        for (size_t col = 0; hs >> tok; col++)
+            if (col >= 9) sample_names.push_back(tok);
+    };
 
     // If block_size is 0, use old behavior (load all variants)
     // Otherwise, if sequence is shorter than block size, process as single block
@@ -1419,6 +1627,7 @@ void parse_vcf_to_eds_streaming(
         // Read more VCF lines for this block (if not finished)
         if (!vcf_finished) {
             while (std::getline(vcf_stream, line)) {
+                if (!line.empty() && line[0] == '#') note_header(line);
                 SkipReason skip_reason;
                 auto var = parse_vcf_line(line, n_samples, skip_reason);
 
@@ -1553,7 +1762,8 @@ void parse_vcf_to_eds_streaming(
                 actual_write_pos, current_block_end, seds_format,
                 is_sparse_fmt ? &presence_bitvec  : nullptr,
                 is_sparse_fmt ? &bitvec_bit_count : nullptr,
-                &ref_check, &overlap_conflicts, &pending_common, split_groups);
+                &ref_check, &overlap_conflicts, &pending_common, split_groups,
+                &overlap_check);
         actual_write_pos = new_write_pos;
         total_seds_entries    += block_seds_entries;
         total_m_degen_entries += block_m_degen;
@@ -1641,6 +1851,20 @@ void parse_vcf_to_eds_streaming(
         stats->ref_checked    = ref_check.checked;
         stats->overlap_conflicts = overlap_conflicts;
     }
+    VCFStats divergence;  // filled even without `stats`, for --strict-overlaps
+    divergence.overlap_divergent_copies  = overlap_check.divergent_copies;
+    divergence.overlap_divergent_groups  = overlap_check.divergent_groups;
+    divergence.overlap_divergent_records = overlap_check.divergent_records;
+    for (size_t i = 0; i < overlap_check.sample_hit.size(); i++)
+        if (overlap_check.sample_hit[i]) divergence.overlap_divergent_samples.push_back(i);
+    divergence.overlap_divergence_examples = overlap_check.examples;
+    if (stats) {
+        stats->overlap_divergent_copies    = divergence.overlap_divergent_copies;
+        stats->overlap_divergent_groups    = divergence.overlap_divergent_groups;
+        stats->overlap_divergent_records   = divergence.overlap_divergent_records;
+        stats->overlap_divergent_samples   = divergence.overlap_divergent_samples;
+        stats->overlap_divergence_examples = divergence.overlap_divergence_examples;
+    }
 
     // Finalize header / trailer for binary or sparse formats.
     seds_output.flush();
@@ -1677,6 +1901,11 @@ void parse_vcf_to_eds_streaming(
     // Final flush
     eds_output.flush();
     seds_output.flush();
+
+    // The EDS is complete and correct by vcf2eds's rule; strict mode refuses
+    // it anyway when a bcftools-materialised genome would not match it.
+    if (strict_overlaps && divergence.overlap_divergent_copies > 0)
+        throw OverlapDivergenceError("--strict-overlaps: " + format_overlap_divergence(divergence));
 }
 
 /**
@@ -1728,7 +1957,8 @@ void parse_vcf_to_leds_streaming_direct(
     size_t block_size,
     const std::filesystem::path* keep_eds_path,
     const std::filesystem::path* keep_seds_path,
-    bool split_groups)
+    bool split_groups,
+    bool strict_overlaps)
 {
     // Two-stage pipeline VCF→EDS→l-EDS routed through temp files.
     //
@@ -1775,7 +2005,8 @@ void parse_vcf_to_leds_streaming_direct(
             throw std::runtime_error("Failed to create temp SEDS file: " + temp_seds.string());
         }
         parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_tmp, seds_tmp,
-                                   stats, block_size, Sources::Format::SEDS, split_groups);
+                                   stats, block_size, Sources::Format::SEDS, split_groups,
+                                   strict_overlaps);
     }  // ofstreams flushed and closed here before stage 2 reopens them
 
     // ── Stage 2: EDS → l-EDS ─────────────────────────────────────────────────
