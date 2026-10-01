@@ -4,7 +4,7 @@ EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
-TOOL=$(find_tool "edsparser-genpatterns") || { echo "ERROR: edsparser-genpatterns not found"; exit 1; }
+resolve_tool TOOL edsparser-genpatterns
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 

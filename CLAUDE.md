@@ -585,7 +585,7 @@ Not run by ctest — shell suites driving the installed CLI tools. `bash tests/e
 
 **All e2e tests are expected to pass.** An older note claimed some `test_eds2leds.sh` tests fail intentionally to document a compact-output bug — that bug is fixed and those tests are gone.
 
-**The suites resolve tools via `PATH` first** (`find_tool()` in `tests/e2e/helpers.sh`), falling back to `build/tools/` only when the name isn't on `PATH`. A stale `~/.local/bin` copy silently fails every test for a flag it predates — run `make install`, or `PATH="$PWD/build/tools:$PATH" bash tests/e2e/run_all.sh`, before believing a failure.
+**The suites test the build tree and refuse a stale binary** (2026-10-01; `resolve_tool()` in `tests/e2e/helpers.sh`). Tools come from `build/tools/` only (`EDSPARSER_TOOLS_DIR` overrides; `EDSPARSER_TOOLS_FROM_PATH=1` tests installed ones deliberately) — the old PATH-first lookup, and then the build-first lookup's silent PATH fallback, both tested whatever was last installed. Each suite prints every tool's path and `--version` and exits 1 when `COMMIT` ≠ `HEAD`, `DIRTY` disagrees with the work tree, or a modified tracked file is newer than the binary; `EDSPARSER_ALLOW_STALE_TOOLS=1` downgrades that to a warning. A missing tool fails the suite unless `EDSPARSER_ALLOW_MISSING_TOOLS=1`, which turns missing *optional* tools into skips. Skips (`skip "reason"; return` → exit 77) are counted separately from passes and totalled by `run_all.sh`.
 
 ### Benchmark Scenarios ([tests/bench/](tests/bench/))
 

@@ -24,10 +24,10 @@ source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
 VCF_EXPECTED="$SCRIPT_DIR/expected/vcf2eds"
-STATS=$(find_tool "edsparser-stats")             || { echo "ERROR: edsparser-stats not found"; exit 1; }
-LEDS=$(find_tool "eds2leds")                      || { echo "ERROR: eds2leds not found"; exit 1; }
-MSA=$(find_tool "msa2eds")                        || { echo "ERROR: msa2eds not found"; exit 1; }
-XFORM=$(find_tool "edsparser-source-transform")   || { echo "ERROR: edsparser-source-transform not found"; exit 1; }
+resolve_tool STATS edsparser-stats
+resolve_tool LEDS eds2leds
+resolve_tool MSA msa2eds
+resolve_tool XFORM edsparser-source-transform
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -144,8 +144,12 @@ test_garbage_seds_text_rejected() {
 # used to hard-force the uncompressed parser, making EDZ_COMPRESSED sources —
 # e.g. eds2leds --source-format edz-compressed output — unreadable via -z.
 test_stats_z_accepts_compressed_edz() {
-    "$XFORM" -i "$DATA_DIR/small.seds" -o "$TMPDIR/comp.edz" --compress >/dev/null 2>&1 || {
-        echo "  SKIP: built without zstd"; return 0; }
+    # Skip only when the build lacks zstd; any other failure to compress is a FAIL.
+    local probe
+    if ! probe=$("$XFORM" -i "$DATA_DIR/small.seds" -o "$TMPDIR/comp.edz" --compress 2>&1); then
+        echo "$probe" | grep -qi "without zstd" && { skip "built without zstd"; return; }
+        echo -e "  ${RED}FAIL${NC}: --compress failed: $probe"; return 1
+    fi
     local via_z via_s
     via_z=$("$STATS" -i "$DATA_DIR/small.eds" -z "$TMPDIR/comp.edz" 2>&1)
     assert_exit_code 0 $? "stats -z loads EDZ_COMPRESSED" || return 1

@@ -21,12 +21,11 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
-: "${YELLOW:=\033[0;33m}"   # helpers.sh defines RED/GREEN/NC but not YELLOW
 
 DATA_DIR="$SCRIPT_DIR/data"
-VCF2EDS=$(find_tool "vcf2eds")                    || { echo "ERROR: vcf2eds not found";                    exit 1; }
-XFORM=$(find_tool "edsparser-source-transform")   || { echo "ERROR: edsparser-source-transform not found"; exit 1; }
-GENEDS=$(find_tool "genrandomeds")                || { echo "ERROR: genrandomeds not found";               exit 1; }
+resolve_tool VCF2EDS vcf2eds
+resolve_tool XFORM edsparser-source-transform
+resolve_tool GENEDS genrandomeds
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -194,8 +193,7 @@ test_roundtrip_edz_compressed() {
     local probe
     probe=$("$XFORM" -i "$TMPDIR/${d}.seds" -o "$cz" --to edz_compressed 2>&1)
     if echo "$probe" | grep -qi "without zstd"; then
-        echo -e "  ${YELLOW}SKIP${NC}: tool built without zstd (EDZ_COMPRESSED disabled)"
-        return 0
+        skip "tool built without zstd (EDZ_COMPRESSED disabled)"; return
     fi
     if ! echo "$probe" | grep -q "source sets to"; then
         echo -e "  ${RED}FAIL${NC}: [$d] SEDS→EDZ_COMPRESSED failed: $probe"; return 1
