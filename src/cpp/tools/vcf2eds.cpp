@@ -1,3 +1,8 @@
+// vcf2eds — transform a VCF plus its reference FASTA into an EDS or l-EDS,
+// with one source path per sample.
+//
+// With -l the work is two staged transforms (VCF to EDS, then EDS to l-EDS)
+// through a temp file; --keep-eds also writes that intermediate out.
 #include "transforms/vcf_transforms.hpp"
 #include "formats/sources.hpp"
 #include "common.hpp"
@@ -302,6 +307,16 @@ int main(int argc, char** argv) {
         std::cout << "  REF checked against ref:    " << stats.ref_checked << "\n";
         std::cout << "  REF mismatches:             " << stats.ref_mismatches << "\n";
         std::cout << "  Variant groups created:     " << stats.variant_groups << "\n";
+        std::cout << "  Overlapping ALT calls ignored: " << stats.overlap_conflicts << "\n";
+
+        if (stats.overlap_conflicts > 0) {
+            std::cerr << "Warning: " << stats.overlap_conflicts
+                      << " ALT call(s) were ignored because the same allele copy already "
+                         "carries an ALT at an overlapping record. One chromosome cannot carry "
+                         "both, so the first record in file order was applied, as bcftools "
+                         "consensus does. The emitted genomes differ from the calls there; "
+                         "normalise the VCF (bcftools norm) if that matters.\n";
+        }
 
         if (stats.skipped_out_of_range > 0) {
             std::cerr << "Warning: " << stats.skipped_out_of_range

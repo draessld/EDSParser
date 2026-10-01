@@ -7,6 +7,7 @@
 #include <cassert>
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <set>
 
 using namespace edsparser;
@@ -740,6 +741,114 @@ void test_ref_mismatch_detection() {
     std::cout << "  PASS" << std::endl;
 }
 
+// A haploid panel whose records collide in both ways a VCF can. Every REF is
+// what PARTITION_FA holds.
+//   POS 5, twice  — two records at one position, the tb_p100_snv50 shape
+//                   (NC_000962.3:55553 C->T beside C->CCGT,CCGCCGT). S3 and S4
+//                   are reference there, and only they are.
+//   POS 9, 10, 11 — a chain of overlaps across positions. 9 and 11 are
+//                   disjoint, so S1 carrying both is one combined haplotype,
+//                   AT. 10 overlaps 11, so S3 carrying both is contradictory:
+//                   10 applies, 11 is ignored and counted.
+const std::string PARTITION_VCF =
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\tS4\n"
+    "chr1\t5\t.\tA\tT\t99\tPASS\t.\tGT\t1\t0\t0\t0\n"
+    "chr1\t5\t.\tA\tAGG\t99\tPASS\t.\tGT\t0\t1\t0\t0\n"
+    "chr1\t9\t.\tAC\tA\t99\tPASS\t.\tGT\t1\t0\t0\t0\n"
+    "chr1\t10\t.\tCG\tC\t99\tPASS\t.\tGT\t0\t1\t1\t0\n"
+    "chr1\t11\t.\tG\tT\t99\tPASS\t.\tGT\t1\t0\t1\t0\n";
+
+const std::string PARTITION_FA = ">chr1\nACGTACGTACGTACGTACGT\n";
+
+// Symbols of a fully braced EDS string, each as its list of alternatives.
+static std::vector<std::vector<std::string>> eds_symbols(const std::string& eds_str) {
+    std::vector<std::vector<std::string>> out;
+    for (size_t i = eds_str.find('{'); i != std::string::npos; i = eds_str.find('{', i)) {
+        const size_t j = eds_str.find('}', i);
+        std::vector<std::string> alts(1);
+        for (size_t k = i + 1; k < j; k++) {
+            if (eds_str[k] == ',') alts.emplace_back();
+            else                   alts.back() += eds_str[k];
+        }
+        out.push_back(std::move(alts));
+        i = j + 1;
+    }
+    return out;
+}
+
+// Entries of a dense SEDS string as explicit path sets. A leading 0 marks a
+// complement, which is expanded against n_paths; `a-b` is a range.
+static std::vector<std::set<int>> seds_sets(const std::string& seds_str, int n_paths) {
+    std::vector<std::set<int>> out;
+    for (size_t i = seds_str.find('{'); i != std::string::npos; i = seds_str.find('{', i)) {
+        const size_t j = seds_str.find('}', i);
+        std::set<int> ids;
+        bool complement = false;
+        std::stringstream entry(seds_str.substr(i + 1, j - i - 1));
+        for (std::string tok; std::getline(entry, tok, ',');) {
+            if (tok == "0") { complement = true; continue; }
+            const size_t dash = tok.find('-');
+            const int a = std::stoi(tok.substr(0, dash));
+            const int b = (dash == std::string::npos) ? a : std::stoi(tok.substr(dash + 1));
+            for (int p = a; p <= b; p++) ids.insert(p);
+        }
+        if (complement) {
+            std::set<int> kept;
+            for (int p = 1; p <= n_paths; p++) if (!ids.count(p)) kept.insert(p);
+            ids = std::move(kept);
+        }
+        out.push_back(std::move(ids));
+        i = j + 1;
+    }
+    return out;
+}
+
+void test_grouping_keeps_partition() {
+    std::cout << "Test 17: Colliding records keep the source partition..." << std::endl;
+
+    std::stringstream vcf(PARTITION_VCF), fa(PARTITION_FA);
+    VCFStats stats;
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, &stats);
+    std::cout << "  EDS:  " << eds_str  << std::endl;
+    std::cout << "  sEDS: " << seds_str << std::endl;
+
+    const auto symbols = eds_symbols(eds_str);
+    const auto sets    = seds_sets(seds_str, 4);
+    size_t total = 0;
+    for (const auto& s : symbols) total += s.size();
+    assert(sets.size() == total && "one source entry per EDS string");
+
+    // LINEAR reads a path as a genome, so at every degenerate symbol each of
+    // the four must sit in exactly one alternative. Before per-copy assignment
+    // the reference alternative held all four at both groups.
+    std::map<std::string, std::set<int>> carriers;  // alternative -> paths, degenerate only
+    size_t k = 0;
+    for (const auto& alts : symbols) {
+        std::set<int> seen;
+        for (const auto& alt : alts) {
+            const std::set<int>& paths = sets[k++];
+            if (alts.size() < 2) continue;
+            for (int p : paths) {
+                assert(!seen.count(p) && "a genome sits in two alternatives of one symbol");
+                seen.insert(p);
+            }
+            carriers[alt] = paths;
+        }
+        if (alts.size() >= 2)
+            assert(seen == (std::set<int>{1, 2, 3, 4}) && "a genome sits in no alternative");
+    }
+
+    assert(carriers["A"]   == (std::set<int>{3, 4}) && "reference at POS 5 is only S3, S4");
+    assert(carriers["T"]   == (std::set<int>{1}));
+    assert(carriers["AGG"] == (std::set<int>{2}));
+    assert(carriers["ACG"] == (std::set<int>{4})    && "reference over 9..11 is only S4");
+    assert(carriers["AT"]  == (std::set<int>{1})    && "S1 carries 9 and 11 as one haplotype");
+    assert(carriers["AC"]  == (std::set<int>{2, 3}) && "S3's call at 11 overlaps 10 and loses");
+    assert(stats.overlap_conflicts == 1 && "exactly S3's call at 11 was ignored");
+
+    std::cout << "  PASS" << std::endl;
+}
 
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
@@ -761,6 +870,7 @@ int main() {
         test_edz_vs_seds_agreement();
         test_no_genotype_seds_cardinality();
         test_ref_mismatch_detection();
+        test_grouping_keeps_partition();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;
