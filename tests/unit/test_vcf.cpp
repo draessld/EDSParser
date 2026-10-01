@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <unistd.h>
 
 using namespace edsparser;
 
@@ -898,6 +899,48 @@ void test_fixed_variant_is_common_text() {
     std::cout << "  PASS" << std::endl;
 }
 
+// Regression (found by test_transform_fuzz): with a single sample, every
+// universal source entry was written as {0,1}. write_seds_entry() sent the
+// universal marker {0} down its complement branch (1 member > 1/2 of the
+// paths), which listed path 1 as the exception — "every path except path 1",
+// carried by nobody. LINEAR merging, genpatterns and biofmi's source-aware
+// search then had a genome that spelled nothing.
+void test_single_sample_universal_sources() {
+    std::cout << "Test 19: Single-sample VCF keeps universal sources universal..." << std::endl;
+    const std::string vcf_text =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+        "chr1\t3\t.\tG\tA\t99\tPASS\t.\tGT\t1\n";
+    std::stringstream vcf(vcf_text);
+    std::stringstream fa(">chr1\nACGTACGT\n");
+    auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, nullptr, 0);
+    std::cout << "  EDS: " << eds_str << std::endl;
+
+    auto dir = std::filesystem::temp_directory_path() / ("test_vcf_single_" + std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / "x.eds") << eds_str; std::ofstream(dir / "x.seds") << seds_str; }
+    EDS eds = EDS::load(dir / "x.eds", dir / "x.seds");
+    auto src = eds.get_sources_object();
+    assert(src->num_paths() == 1);
+    size_t id = 0;
+    std::string genome;
+    for (size_t i = 0; i < eds.length(); ++i) {
+        auto sym = eds.read_symbol(i);
+        size_t carried = 0;
+        for (const auto& alt : sym) {
+            PathSet ps = eds.read_source(id++);
+            bool has1 = !ps.empty() && (ps[0] == 0
+                ? std::find(ps.begin() + 1, ps.end(), 1) == ps.end()
+                : std::find(ps.begin(), ps.end(), 1) != ps.end());
+            if (has1) { genome += alt; ++carried; }
+        }
+        assert(carried == 1);  // the one path is on exactly one alternative
+    }
+    std::filesystem::remove_all(dir);
+    assert(genome == "ACATACGT");
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -920,6 +963,7 @@ int main() {
         test_ref_mismatch_detection();
         test_grouping_keeps_partition();
         test_fixed_variant_is_common_text();
+        test_single_sample_universal_sources();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;
