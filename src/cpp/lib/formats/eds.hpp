@@ -81,9 +81,31 @@ public:
         std::vector<bool> is_degenerate;              // Degenerate flag per symbol
 
         // Statistics (computed from index data)
-        Length min_context_length;        // Minimum non-degenerate symbol length
-        Length max_context_length;        // Maximum non-degenerate symbol length
-        double avg_context_length;        // Average non-degenerate symbol length
+        //
+        // Context statistics are over context SEGMENTS, not symbols: a segment
+        // is a maximal run of consecutive non-degenerate symbols, measured by
+        // their summed length. {CGCG}{A}{TGCC} is one 9-character segment —
+        // the three spell one conserved stretch, and nothing (not the l-EDS
+        // definition, not eds2leds, not the index) can tell them apart from
+        // {CGCGATGCC}. vcf2eds used to emit such runs, and measured per symbol
+        // they read as short internal contexts that are not there.
+        // See finalize_context_statistics().
+        Length min_context_length = 0;    // Shortest segment, boundary ones included
+        Length max_context_length = 0;    // Longest segment
+        double avg_context_length = 0.0;  // Mean segment length
+        // Internal segments: a degenerate symbol on both sides. These, and only
+        // these, the l-EDS property constrains (>= l); a boundary segment has a
+        // degenerate neighbour on one side only and may be shorter. So a valid
+        // l-EDS has min_internal_context_length >= l even when
+        // min_context_length < l. 0 when there is no internal segment.
+        Length min_internal_context_length = 0;
+        size_t num_internal_context_segments = 0;
+        size_t num_context_segments = 0;      // maximal runs of non-degenerate symbols
+        size_t num_split_regular_symbols = 0; // non-degenerate symbols directly after another
+                                              // (= non-degenerate symbols - segments)
+        size_t num_adjacent_degenerate = 0;   // degenerate symbols directly after another:
+                                              // an internal segment of length 0, not counted
+                                              // in min_internal_context_length
         size_t num_degenerate_symbols;    // Count of degenerate symbols
         size_t num_common_chars;          // Total chars in non-degenerate symbols
         size_t total_change_size;         // Total chars in degenerate symbols
@@ -102,6 +124,12 @@ public:
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
+
+    // Recompute the context statistics above from is_degenerate,
+    // string_lengths and cum_set_sizes, which must already be filled. One
+    // O(n) pass over in-memory arrays. Both EDS::parse and the l-EDS merge
+    // writer call this, so the two can never disagree on what a segment is.
+    static void finalize_context_statistics(Metadata& meta);
 
     // Factory: construct a METADATA_ONLY EDS directly from pre-built metadata + file path.
     // The file at file_path must already exist and contain the EDS data described by metadata.

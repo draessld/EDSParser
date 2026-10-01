@@ -69,6 +69,11 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
   - **Stream/string constructors** (`EDS(istream&)`, `EDS(string&)`): all strings loaded into `sets_` in RAM
   - **File loader** (`EDS::load(path)`): only metadata in RAM; strings streamed on demand from the file via `read_symbol(pos)` — used throughout the transform pipeline for memory efficiency
 - Supports source tracking via separate .seds files (managed by `Sources` class)
+- Context statistics in `Metadata` are per **segment** (maximal run of regular symbols), with
+  the l-EDS-relevant `min_internal_context_length` beside the overall minimum; both `parse()`
+  and the l-EDS merge writer fill them through `EDS::finalize_context_statistics()`. Symbols
+  themselves are never merged on load — that would renumber strings against the `.seds`.
+  `vcf2eds` and `eds2leds` both emit no two regular symbols in a row (TODO 0c).
 - Key operations:
   - Loading/parsing from streams or files
   - Metadata access via `get_metadata()` (`Metadata` struct: `cum_common_positions`, `cum_degenerate_counts`, `is_degenerate`, `string_lengths`, etc.)

@@ -374,9 +374,54 @@ void test_statistics_all_regular() {
     assert(meta.total_change_size == 0);
     // Every symbol is non-degenerate, so all four characters are common.
     assert(meta.num_common_chars == 4);
-    assert(meta.min_context_length == 1);
-    assert(meta.max_context_length == 1);
-    assert(meta.avg_context_length == 1.0);
+    // Four regular symbols in a row are ONE context segment, ACGT: context
+    // statistics are over maximal runs, not symbols (2026-10-01).
+    assert(meta.num_context_segments == 1);
+    assert(meta.num_split_regular_symbols == 3);
+    assert(meta.min_context_length == 4);
+    assert(meta.max_context_length == 4);
+    assert(meta.avg_context_length == 4.0);
+    // No degenerate symbol, so nothing is internal.
+    assert(meta.num_internal_context_segments == 0);
+    assert(meta.min_internal_context_length == 0);
+
+    std::cout << "PASSED\n";
+}
+
+void test_statistics_segments() {
+    std::cout << "Test 15b: Context segments, internal minimum, adjacency... ";
+
+    // Boundary segments AC (2) and T (1); internal segments CGCG+A+TGCC (9,
+    // split over three symbols the way vcf2eds wrote fixed SNPs) and GG (2);
+    // one pair of adjacent degenerate symbols ({G,T}{A,C}).
+    edsparser::EDS eds = create_temp_eds(
+        "{AC}{A,C}{CGCG}{A}{TGCC}{G,T}{A,C}{GG}{A,T}{T}");
+    const auto& meta = eds.get_metadata();
+
+    assert(meta.num_context_segments == 4);
+    assert(meta.num_split_regular_symbols == 2);
+    assert(meta.num_internal_context_segments == 2);
+    assert(meta.min_internal_context_length == 2);   // GG, not A (1) or T (1)
+    assert(meta.min_context_length == 1);            // the trailing boundary T
+    assert(meta.max_context_length == 9);            // CGCGATGCC as one
+    assert(meta.avg_context_length == (2 + 9 + 2 + 1) / 4.0);
+    assert(meta.num_adjacent_degenerate == 1);
+
+    // A valid l-EDS whose boundary segments are short: the internal minimum is
+    // what the l-EDS property constrains, the overall minimum is not.
+    edsparser::EDS leds = create_temp_eds("{AC}{A,C}{CGCGA}{G,T}{TT}{A,T}{T}");
+    const auto& lm = leds.get_metadata();
+    assert(lm.min_context_length == 1);
+    assert(lm.min_internal_context_length == 2);
+    assert(lm.num_adjacent_degenerate == 0);
+
+    // The in-memory (string) and file-backed parsers agree on all of it.
+    edsparser::EDS mem(std::string("{AC}{A,C}{CGCG}{A}{TGCC}{G,T}{A,C}{GG}{A,T}{T}"));
+    const auto& mm = mem.get_metadata();
+    assert(mm.num_context_segments == meta.num_context_segments);
+    assert(mm.min_internal_context_length == meta.min_internal_context_length);
+    assert(mm.num_split_regular_symbols == meta.num_split_regular_symbols);
+    assert(mm.num_adjacent_degenerate == meta.num_adjacent_degenerate);
 
     std::cout << "PASSED\n";
 }
@@ -1686,6 +1731,7 @@ int main() {
         test_statistics_simple();
         test_statistics_with_empty();
         test_statistics_all_regular();
+        test_statistics_segments();
         test_print_output();
         test_string_constructor();
         test_stream_constructor();

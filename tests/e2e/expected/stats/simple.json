@@ -13,7 +13,12 @@
   "context_lengths": {
     "min": 3,
     "max": 4,
-    "avg": 3.50
+    "avg": 3.50,
+    "internal_min": 3,
+    "segments": 2,
+    "internal_segments": 1,
+    "split_regular_symbols": 0,
+    "adjacent_degenerate": 0
   },
   "variations": {
     "total_change_size": 7,
@@ -38,7 +43,8 @@
     "needs_transformation": true,
     "ready_for_indexing": false,
     "min_context_length": 3,
-    "suggested_command": "edsparser-transform -i simple.eds -l 5"
+    "max_l_without_merge": 3,
+    "suggested_command": "eds2leds -i simple.eds -l 5"
   },
   "performance": {
     "runtime_s": 0.00,
