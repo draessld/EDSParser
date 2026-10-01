@@ -7,6 +7,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <algorithm>
 #include <unistd.h>
 
 using namespace edsparser;
@@ -643,6 +644,29 @@ void test_block_mode_keeps_source_encoding() {
     pass();
 }
 
+// Regression (found by test_transform_fuzz): above 63 paths the merge folds
+// PathSets instead of bitsets, and intersect_sources() returns compl(E1) ∩
+// compl(E2) as the complement of E1 ∪ E2 — a non-empty vector even when E1 ∪ E2
+// is every path. Such a combination is carried by nobody but was kept, so the
+// l-EDS gained strings no genome spells (the 20d8ff1 complement bug, on the
+// side of the 63-path threshold that fix did not reach).
+void test_complement_intersection_above_63_paths() {
+    test("Complement ∩ complement covering every path is empty (64 paths)");
+
+    // 64 paths. {A,C}: A = paths 1-32, C = 33-64; {G,T}: G = 33-64, T = 1-32,
+    // all written as complements. Only AT and CG are carried by anyone.
+    std::ostringstream seds;
+    seds << "{0}{0,33-64}{0,1-32}{0,1-32}{0,33-64}{0}";
+    Sources::write_seds_dense_finalize(seds, 6, 64);
+    EDS t = transform_to_leds_with_sources("{AAAA}{A,C}{G,T}{AAAA}", seds.str(), 2);
+    assert(t.length() == 3);
+    auto merged = t.read_symbol(1);
+    std::sort(merged.begin(), merged.end());
+    assert((merged == std::vector<std::string>{"AT", "CG"}));
+
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -832,6 +856,7 @@ int main() {
     test_compact_output_keeps_empty_regular_symbol();
     test_untouched_sources_are_written_as_text();
     test_block_mode_keeps_source_encoding();
+    test_complement_intersection_above_63_paths();
 
     // Edge cases
     test_single_symbol_input();

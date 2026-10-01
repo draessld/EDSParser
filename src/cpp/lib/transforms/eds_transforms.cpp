@@ -272,6 +272,19 @@ namespace {
             for (int id : s) b |= (1ULL << (id - 1));
             return b;
         };
+        // The PathSet path (more than 63 paths) has the same complement trap
+        // the bitset path had before 20d8ff1: intersect_sources() returns
+        // compl(E1) ∩ compl(E2) as {0} + (E1 ∪ E2), a non-empty vector even
+        // when E1 ∪ E2 names every path and the intersection is empty. Such a
+        // combination is carried by no path and must be dropped like any other
+        // empty intersection. Exceptions are sorted and unique.
+        auto excludes_every_path = [np](const PathSet& s) -> bool {
+            if (s.empty() || s[0] != 0 || np == 0) return false;
+            size_t excluded = 0;
+            for (size_t i = 1; i < s.size(); ++i)
+                if (s[i] >= 1 && static_cast<size_t>(s[i]) <= np) ++excluded;
+            return excluded >= np;
+        };
         auto bits_to_set = [universe](uint64_t b) -> PathSet {
             if (b == universe) return {0};
             PathSet s;
@@ -421,7 +434,7 @@ namespace {
                                 new_bits.push_back(isect);
                             } else {
                                 PathSet isect = Sources::intersect_sources(cur_src_sets[m], srcj[j]);
-                                if (isect.empty()) continue;
+                                if (isect.empty() || excludes_every_path(isect)) continue;
                                 new_src.push_back(std::move(isect));
                             }
                         }
