@@ -551,6 +551,34 @@ void test_leading_split_run_is_measured_whole() {
     pass();
 }
 
+// Regression (found by test_transform_fuzz): compact output wrote an empty
+// regular symbol as nothing at all. {} survives the merge wherever it is a
+// boundary context, and without brackets it vanished on reparse, so the l-EDS
+// had one string fewer than its sources and EDS::load(leds, seds) refused the
+// pair (cardinality mismatch); block mode also dropped the wrong symbol when
+// shedding a duplicated empty barrier. It is written "{}" now.
+void test_compact_output_keeps_empty_regular_symbol() {
+    test("Compact output keeps an empty regular symbol as {}");
+
+    for (bool compact : {true, false}) {
+        std::istringstream eds_in("{}{A,C}{GGG}");
+        std::istringstream seds_in("{0}{1}{2}{0}");
+        std::ostringstream out, sout;
+        eds_to_leds_linear(eds_in, out, 2, &seds_in, &sout, 1, compact);
+        assert(out.str() == (compact ? "{}{A,C}GGG\n" : "{}{A,C}{GGG}\n"));
+
+        std::istringstream cin_("{}{A,C}{GGG}");
+        std::ostringstream cout_;
+        eds_to_leds_cartesian(cin_, cout_, 2, 1, compact);
+        assert(cout_.str() == out.str());
+    }
+    // ... and the pair loads: 4 strings, 4 sources
+    EDS t = transform_to_leds_with_sources("{}{A,C}{GGG}", "{0}{1}{2}{0}", 2);
+    assert(t.length() == 3 && t.cardinality() == 4);
+
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -737,6 +765,7 @@ int main() {
     test_metadata_consistency();
     test_split_regular_symbols_are_one_context();
     test_leading_split_run_is_measured_whole();
+    test_compact_output_keeps_empty_regular_symbol();
 
     // Edge cases
     test_single_symbol_input();

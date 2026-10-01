@@ -1217,7 +1217,10 @@ static void leds_linear_transform(
 
     for (size_t i = 0; i < eds.length(); ++i) {
         const StringSet sym = eds.read_symbol(i);
-        bool use_brackets = !compact || sym.size() > 1;
+        // An empty regular symbol has no bare spelling: written without
+        // brackets it vanishes, and the output EDS has one string fewer than
+        // its sources. Keep "{}" for it in compact mode.
+        bool use_brackets = !compact || sym.size() != 1 || sym[0].empty();
         if (use_brackets) output << '{';
         for (size_t j = 0; j < sym.size(); ++j) {
             if (j > 0) output << ',';
@@ -1529,7 +1532,10 @@ void eds_to_leds_cartesian(
     // honoured even when the input was already l-EDS compliant (zero iterations run).
     for (size_t i = 0; i < eds.length(); ++i) {
         const StringSet sym = eds.read_symbol(i);
-        bool use_brackets = !compact || sym.size() > 1;
+        // An empty regular symbol has no bare spelling: written without
+        // brackets it vanishes, and the output EDS has one string fewer than
+        // its sources. Keep "{}" for it in compact mode.
+        bool use_brackets = !compact || sym.size() != 1 || sym[0].empty();
         if (use_brackets) output << '{';
         for (size_t j = 0; j < sym.size(); ++j) {
             if (j > 0) output << ',';

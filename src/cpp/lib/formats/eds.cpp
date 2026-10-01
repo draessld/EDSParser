@@ -480,7 +480,10 @@ void EDS::save(std::ostream& os, OutputFormat format) const {
         const StringSet& set = symbol_view(i, scratch);
 
         // Determine if we should use brackets for this set
-        bool use_brackets = (format == OutputFormat::FULL) || metadata_.is_degenerate[i];
+        // An empty regular symbol has no bare spelling — without brackets it
+        // would vanish on reparse — so it keeps "{}" even in compact output.
+        bool use_brackets = (format == OutputFormat::FULL) || metadata_.is_degenerate[i] ||
+                            (set.size() == 1 && set[0].empty());
 
         if (use_brackets) {
             os << "{";
