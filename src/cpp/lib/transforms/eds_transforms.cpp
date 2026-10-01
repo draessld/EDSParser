@@ -680,10 +680,10 @@ namespace {
                 // and is neutral at 800 MB.)
                 result_.metadata.string_lengths.reserve(in_meta_.string_lengths.size());
             }
-            // min_context_length starts at UINT32_MAX so the first real context
-            // length (which may be small) correctly replaces it via std::min logic.
-            result_.metadata.min_context_length = UINT32_MAX;
-            result_.metadata.max_context_length = 0;
+            // Context statistics (min/max/avg, internal minimum, segment
+            // counts) are computed once in finish() by
+            // EDS::finalize_context_statistics(), the same routine EDS::parse
+            // uses, so the merged metadata and a re-parse of the output agree.
             result_.metadata.num_degenerate_symbols = 0;
             result_.metadata.num_common_chars = 0;
             result_.metadata.total_change_size = 0;
@@ -728,11 +728,7 @@ namespace {
                 Sources::write_seds_dense_finalize(*sources_out_, result_.m, np);
             }
 
-            result_.metadata.avg_context_length = (num_context_blocks_ > 0)
-                ? static_cast<double>(total_context_length_) / num_context_blocks_
-                : 0.0;
-            if (result_.metadata.min_context_length == UINT32_MAX)
-                result_.metadata.min_context_length = 0;
+            EDS::finalize_context_statistics(result_.metadata);
 
             return std::move(result_);
         }
@@ -745,8 +741,6 @@ namespace {
         const EDS::Metadata& in_meta_;
 
         StreamResult result_;
-        size_t total_context_length_ = 0;   // used to compute avg at the end
-        size_t num_context_blocks_ = 0;     // number of non-degenerate symbols seen
 
         // SEDS copy-batch state (see the header comment above): the pending
         // run of consecutive unmodified symbols' source entries, flushed in a
@@ -798,14 +792,7 @@ namespace {
                 result_.metadata.num_degenerate_symbols++;
                 result_.metadata.total_change_size += sym_chars;
             } else {
-                Length ctx_len = result_.metadata.string_lengths.back();
-                result_.metadata.num_common_chars += ctx_len;
-                total_context_length_ += ctx_len;
-                num_context_blocks_++;
-                if (ctx_len < result_.metadata.min_context_length)
-                    result_.metadata.min_context_length = ctx_len;
-                if (ctx_len > result_.metadata.max_context_length)
-                    result_.metadata.max_context_length = ctx_len;
+                result_.metadata.num_common_chars += result_.metadata.string_lengths.back();
             }
 
             result_.m += sym_size;
@@ -1184,6 +1171,7 @@ static void leds_linear_transform(
                       << ", " << stream_result.m << " strings"
                       << ", " << stream_result.N << " chars\n";
             std::cerr << "[l-EDS]   Metadata: ctx min=" << m.min_context_length
+                      << " (internal " << m.min_internal_context_length << ")"
                       << " max=" << m.max_context_length
                       << std::fixed << std::setprecision(1)
                       << " avg=" << m.avg_context_length
@@ -1505,6 +1493,7 @@ void eds_to_leds_cartesian(
                       << ", " << stream_result.m << " strings"
                       << ", " << stream_result.N << " chars\n";
             std::cerr << "[l-EDS]   Metadata: ctx min=" << m.min_context_length
+                      << " (internal " << m.min_internal_context_length << ")"
                       << " max=" << m.max_context_length
                       << std::fixed << std::setprecision(1)
                       << " avg=" << m.avg_context_length

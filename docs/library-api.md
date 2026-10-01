@@ -132,10 +132,17 @@ struct EDS::Metadata {
     std::vector<Length> cum_set_sizes;            // cumulative string IDs
     std::vector<bool>   is_degenerate;            // true if symbol has ≥2 alternatives
 
-    // Statistics
-    Length min_context_length;
+    // Statistics. Context statistics are over SEGMENTS — maximal runs of
+    // consecutive non-degenerate symbols, {CGCG}{A}{TGCC} being one segment
+    // of 9 — computed by EDS::finalize_context_statistics() (2026-10-01).
+    Length min_context_length;                    // boundary segments included
     Length max_context_length;
     double avg_context_length;
+    Length min_internal_context_length;           // degenerate on both sides: what l-EDS constrains
+    size_t num_internal_context_segments;
+    size_t num_context_segments;
+    size_t num_split_regular_symbols;             // regular symbols directly after another
+    size_t num_adjacent_degenerate;               // degenerate directly after degenerate
     size_t num_degenerate_symbols;
     size_t num_common_chars;                      // chars in non-degenerate symbols
     size_t total_change_size;                     // chars in degenerate symbols

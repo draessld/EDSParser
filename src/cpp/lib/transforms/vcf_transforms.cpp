@@ -956,7 +956,8 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     std::vector<uint8_t>* presence_bitvec = nullptr,
     size_t* bitvec_bit_count = nullptr,
     RefCheckState* ref_check = nullptr,
-    size_t* conflicting_calls = nullptr)
+    size_t* conflicting_calls = nullptr,
+    std::string* pending_common = nullptr)
 {
 
     // Group overlapping variants
@@ -1009,20 +1010,41 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
         ++m_degen_entries;
     };
 
+    // CANONICAL FORM: never two regular symbols in a row.
+    //
+    // Text every path carries is accumulated in `common` and written as ONE
+    // regular symbol only when a degenerate symbol (or the end of the
+    // reference) follows. Two sources feed it: the reference between variant
+    // groups, and a variant group that resolves to a single haplotype carried
+    // by every sample — e.g. a SNP fixed in the whole panel relative to the
+    // reference, which made up all 72 extra regular symbols on
+    // panel_100_snv50 ({CGCG}{A}{TGCC...}). Written separately, such a run is
+    // the same string as its concatenation, but every per-symbol measurement
+    // — E1, edsparser-stats, biofmi-build's l-EDS check — saw a conserved
+    // stretch as several short internal contexts.
+    //
+    // A single haplotype carried by only SOME samples (others missing) is not
+    // absorbed: its source set is a real restriction and is kept as written.
+    //
+    // `pending_common` carries the run across calls (block boundaries); the
+    // caller passes the same string to every block, and the run is flushed
+    // once the reference is exhausted.
+    std::string local_common;
+    std::string& common = pending_common ? *pending_common : local_common;
+    auto flush_common = [&]() {
+        if (common.empty()) return;
+        eds_out << '{' << common << '}';
+        write_source(universal_ps);
+        common.clear();
+    };
+
     for (const auto& group : groups) {
-        // Flush reference region before this variant group
+        // Reference region before this variant group joins the common run
         if (group.start_pos > current_pos) {
-            std::string ref_region = read_fasta_region(fasta_stream, fasta_meta,
-                                                        current_pos, group.start_pos - current_pos);
-            if (!ref_region.empty()) {
-                eds_out << '{' << ref_region << '}';
-                write_source(universal_ps);
-            }
+            common += read_fasta_region(fasta_stream, fasta_meta,
+                                        current_pos, group.start_pos - current_pos);
             current_pos = group.start_pos;
         }
-
-        // Generate degenerate symbol from merged haplotypes
-        eds_out << '{';
 
         // Build map: haplotype -> set of sample IDs that have it
         std::map<std::string, std::set<int>> haplotype_to_samples;
@@ -1045,6 +1067,13 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
         // If no samples were tracked, use universal path for all haplotypes
         // (happens when VCF has no genotype columns)
         if (haplotype_to_samples.empty()) {
+            if (group.merged_haplotypes.size() == 1) {
+                common += group.merged_haplotypes[0];   // universal: common text
+                current_pos = group.end_pos;
+                continue;
+            }
+            flush_common();
+            eds_out << '{';
             for (size_t i = 0; i < group.merged_haplotypes.size(); i++) {
                 eds_out << group.merged_haplotypes[i];
                 if (i < group.merged_haplotypes.size() - 1) {
@@ -1068,7 +1097,17 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
             }
         }
 
+        // One haplotype carried by every sample is common text, not a variant.
+        if (ordered_haplotypes.size() == 1 &&
+            ordered_haplotypes[0].second.size() == n_samples) {
+            common += ordered_haplotypes[0].first;
+            current_pos = group.end_pos;
+            continue;
+        }
+
         // Output EDS symbol
+        flush_common();
+        eds_out << '{';
         for (size_t i = 0; i < ordered_haplotypes.size(); i++) {
             eds_out << ordered_haplotypes[i].first;
             if (i < ordered_haplotypes.size() - 1) {
@@ -1087,14 +1126,13 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     // Flush remaining reference sequence up to end_pos
     size_t flush_end = std::min(end_pos, fasta_meta.seq_size);
     if (current_pos < flush_end) {
-        std::string ref_region = read_fasta_region(fasta_stream, fasta_meta,
-                                                    current_pos, flush_end - current_pos);
-        if (!ref_region.empty()) {
-            eds_out << '{' << ref_region << '}';
-            write_source(universal_ps);
-        }
+        common += read_fasta_region(fasta_stream, fasta_meta,
+                                    current_pos, flush_end - current_pos);
         current_pos = flush_end;
     }
+    // Hold the run open across a block boundary; close it at the end of the
+    // reference (or always, when the caller does not carry it).
+    if (!pending_common || current_pos >= fasta_meta.seq_size) flush_common();
 
     // Return: num_groups, true write cursor, total EDS strings, non-universal written.
     // current_pos may exceed end_pos when a variant's REF spans a block boundary.
@@ -1173,6 +1211,9 @@ void parse_vcf_to_eds_streaming(
     // block boundary; the next generate_eds_from_variants call must start here
     // (not at current_block_start) to avoid re-emitting that reference region.
     size_t actual_write_pos = 0;
+    // Common text not yet written, carried across blocks so a block boundary
+    // never splits a regular symbol (see generate_eds_from_variants).
+    std::string pending_common;
     size_t total_seds_entries = 0;
     size_t total_m_degen_entries = 0;
 
@@ -1321,7 +1362,7 @@ void parse_vcf_to_eds_streaming(
                 actual_write_pos, current_block_end, seds_format,
                 is_sparse_fmt ? &presence_bitvec  : nullptr,
                 is_sparse_fmt ? &bitvec_bit_count : nullptr,
-                &ref_check, &overlap_conflicts);
+                &ref_check, &overlap_conflicts, &pending_common);
         actual_write_pos = new_write_pos;
         total_seds_entries    += block_seds_entries;
         total_m_degen_entries += block_m_degen;
@@ -1346,6 +1387,23 @@ void parse_vcf_to_eds_streaming(
         if (vcf_finished && carryover_variants.empty() && current_block_start >= fasta_meta.seq_size) {
             break;
         }
+    }
+
+    // The last block reaches the end of the reference, which flushes the
+    // carried common run. Should it ever not, close it here rather than drop
+    // text: a call with no variants flushes from actual_write_pos to the end.
+    if (!pending_common.empty()) {
+        std::vector<VCFVariant> none;
+        auto [g, pos, seds_n, degen_n] = generate_eds_from_variants(
+            fasta_stream, fasta_meta, none, n_samples, eds_output, seds_output,
+            actual_write_pos, fasta_meta.seq_size, seds_format,
+            is_sparse_fmt ? &presence_bitvec  : nullptr,
+            is_sparse_fmt ? &bitvec_bit_count : nullptr,
+            &ref_check, &overlap_conflicts, &pending_common);
+        (void)g;
+        actual_write_pos = pos;
+        total_seds_entries    += seds_n;
+        total_m_degen_entries += degen_n;
     }
 
     // Variants whose POS lies beyond the end of the reference never reach a

@@ -500,6 +500,34 @@ void test_metadata_consistency() {
     pass();
 }
 
+// ===== SPLIT REGULAR SYMBOLS =====
+
+void test_split_regular_symbols_are_one_context() {
+    test("Consecutive regular symbols are one context (coalesced, judged by run length)");
+
+    // {CGCG}{A}{TGCC} is how vcf2eds wrote a SNP fixed in the whole panel: one
+    // 9-character context over three symbols. At l=5 none of the three is
+    // long enough alone, but the run is, so nothing may merge into the
+    // degenerate neighbours — only the run itself is coalesced.
+    EDS t5 = transform_to_leds("{AC}{A,C}{CGCG}{A}{TGCC}{G,T}{TTTTT}{A,T}{T}", 5);
+    assert(t5.length() == 7);
+    assert(t5.read_symbol(2).size() == 1 && t5.read_symbol(2)[0] == "CGCGATGCC");
+    assert(t5.read_symbol(1).size() == 2);   // {A,C} untouched
+    assert(t5.read_symbol(3).size() == 2);   // {G,T} untouched
+    const auto& m5 = t5.get_metadata();
+    assert(m5.num_split_regular_symbols == 0);
+    assert(m5.min_internal_context_length == 5);
+    assert(m5.min_context_length == 1);      // boundary {T}
+
+    // At l=10 the 9-character run is short as a whole and does merge.
+    EDS t10 = transform_to_leds("{AC}{A,C}{CGCG}{A}{TGCC}{G,T}{TTTTTTTTTT}{A,T}{T}", 10);
+    assert(t10.read_symbol(1).size() == 4);  // {A,C}CGCGATGCC{G,T}
+    assert(t10.read_symbol(1)[0] == "ACGCGATGCCG");
+    assert(t10.get_metadata().min_internal_context_length == 10);
+
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -684,6 +712,7 @@ int main() {
     // Statistics and metadata
     test_statistics_after_transform();
     test_metadata_consistency();
+    test_split_regular_symbols_are_one_context();
 
     // Edge cases
     test_single_symbol_input();
