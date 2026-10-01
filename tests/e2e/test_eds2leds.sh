@@ -5,7 +5,10 @@ source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
 EXPECTED_DIR="$SCRIPT_DIR/expected/eds2leds"
-TOOL=$(find_tool "eds2leds") || { echo "ERROR: eds2leds not found"; exit 1; }
+resolve_tool TOOL eds2leds
+resolve_tool GEN genrandomeds optional
+resolve_tool STAT edsparser-stats optional
+resolve_tool XFORM edsparser-source-transform optional
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -164,9 +167,8 @@ test_raw_copy_passthrough_roundtrip() {
     #   2. re-transforming the already-l-compliant output at the same l must
     #      converge in 0 iterations (idempotent), proving the pass-through
     #      preserved structure byte-for-byte.
-    local GEN STAT
-    GEN=$(find_tool "genrandomeds")     || { echo "  SKIP: genrandomeds not found"; return 0; }
-    STAT=$(find_tool "edsparser-stats") || { echo "  SKIP: edsparser-stats not found"; return 0; }
+    need_tool "$GEN" genrandomeds || return
+    need_tool "$STAT" edsparser-stats || return
 
     "$GEN" --ref-size-mb 1 -v 0.05 --min-context 0 --seed 123 -o "$TMPDIR/rc.eds" >/dev/null 2>&1
     assert_file_exists "$TMPDIR/rc.eds" "generated input EDS" || return 1
@@ -213,7 +215,7 @@ test_max_memory_refuses_over_budget() {
 # the product of cardinalities and is vastly larger, so it must be refused where
 # the linear (num_paths-capped) estimate is not.
 test_max_memory_cartesian_vs_linear() {
-    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    need_tool "$GEN" genrandomeds || return
     "$GEN" --ref-size-mb 1 -v 0.1 --min-context 0 --seed 7 -o "$TMPDIR/mm.eds" >/dev/null 2>&1
     assert_file_exists "$TMPDIR/mm.eds" "generated dense EDS" || return 1
     # linear: num_paths cap keeps it small → passes a modest budget
@@ -248,8 +250,7 @@ test_source_format_edz() {
 # Round-trip: EDZ output → SEDS must reproduce every source set (--verify expands
 # complement/universal spellings before comparing, so encoding differences are OK).
 test_source_format_edz_roundtrip() {
-    local XFORM; XFORM=$(find_tool "edsparser-source-transform") || {
-        echo "  SKIP: edsparser-source-transform not found"; return 0; }
+    need_tool "$XFORM" edsparser-source-transform || return
     "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
         -o "$TMPDIR/rt.leds" -l 3 --source-format edz >/dev/null 2>&1
     local out
@@ -261,13 +262,12 @@ test_source_format_edz_roundtrip() {
 # edz-compressed must be accepted (zstd builds), produce a .edz, and be readable
 # by a consumer tool — the format is only useful if something can load it back.
 test_source_format_edz_compressed() {
-    local STATS; STATS=$(find_tool "edsparser-stats") || {
-        echo "  SKIP: edsparser-stats not found"; return 0; }
+    need_tool "$STAT" edsparser-stats || return
     local out
     out=$("$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
         -o "$TMPDIR/sc.leds" -l 3 --source-format edz-compressed 2>&1)
     if echo "$out" | grep -q "requires a zstd-enabled build"; then
-        echo "  SKIP: built without zstd"; return 0
+        skip "built without zstd"; return
     fi
     assert_file_exists "$TMPDIR/sc.edz" "compressed sources written as .edz" || return 1
     assert_contains "$out" "re-encoded as edz-compressed" "reports the re-encode" || return 1
@@ -275,10 +275,10 @@ test_source_format_edz_compressed() {
     # Same path universe whether read from the compressed EDZ or the text SEDS.
     cp "$TMPDIR/sc.leds" "$TMPDIR/sc_as.eds"
     local via_edz via_seds
-    via_edz=$("$STATS" -i "$TMPDIR/sc_as.eds" -z "$TMPDIR/sc.edz" 2>&1 | grep -i "Total paths")
+    via_edz=$("$STAT" -i "$TMPDIR/sc_as.eds" -z "$TMPDIR/sc.edz" 2>&1 | grep -i "Total paths")
     "$TOOL" -i "$DATA_DIR/small.eds" -s "$DATA_DIR/small.seds" \
         -o "$TMPDIR/sc_txt.leds" -l 3 >/dev/null 2>&1
-    via_seds=$("$STATS" -i "$TMPDIR/sc_as.eds" -s "$TMPDIR/sc_txt.seds" 2>&1 | grep -i "Total paths")
+    via_seds=$("$STAT" -i "$TMPDIR/sc_as.eds" -s "$TMPDIR/sc_txt.seds" 2>&1 | grep -i "Total paths")
     [ -n "$via_edz" ] && [ "$via_edz" = "$via_seds" ] || {
         echo -e "  ${RED}FAIL${NC}: path count differs (edz='$via_edz' seds='$via_seds')"; return 1; }
 }
@@ -294,7 +294,7 @@ test_source_format_rejects_unknown() {
 # output byte for byte — that equality is the whole correctness argument for the
 # feature. Checked for linear (with sources) and cartesian (without).
 test_block_size_matches_whole_file() {
-    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    need_tool "$GEN" genrandomeds || return
     "$GEN" --ref-size-mb 2 -v 0.02 --min-context 0 --seed 5 -o "$TMPDIR/blk.eds" >/dev/null 2>&1
     assert_file_exists "$TMPDIR/blk.eds" "generated block-mode input" || return 1
 
@@ -365,7 +365,7 @@ test_estimate_memory_is_parseable_and_safe() {
 
 # --block-size must lower the estimate, since it bounds the per-symbol indices.
 test_estimate_memory_block_mode_is_lower() {
-    local GEN; GEN=$(find_tool "genrandomeds") || { echo "  SKIP: genrandomeds not found"; return 0; }
+    need_tool "$GEN" genrandomeds || return
     "$GEN" --ref-size-mb 2 -v 0.02 --min-context 0 --seed 9 -o "$TMPDIR/est.eds" >/dev/null 2>&1
     local whole blocked
     whole=$("$TOOL" -i "$TMPDIR/est.eds" -s "$TMPDIR/est.seds" -l 10 --estimate-memory 2>/dev/null \

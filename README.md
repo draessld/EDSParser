@@ -449,8 +449,8 @@ Available unit tests:
 | `test_msa` | MSA parsing | Yes |
 | `test_vcf` | VCF parsing | Yes |
 | `test_integration` | End-to-end CLI tool workflows | Yes |
-| `test_memory_smoke` | Quick memory validation (~1-2 min) | **No — run manually** |
-| `test_memory_stress` | Full memory stress + leak detection (~30+ min) | **No — run manually** |
+| `test_memory_smoke` | Quick memory validation (~1-2 min) | Yes — Skipped without generated data |
+| `test_memory_stress` | Full memory stress + leak detection (~30+ min) | Disabled unless `-DEDSPARSER_CTEST_MEMORY_STRESS=ON` |
 
 #### End-to-End Tests
 

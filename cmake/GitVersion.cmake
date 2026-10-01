@@ -28,9 +28,17 @@ if(GIT_FOUND AND EXISTS "${GIT_SRC_DIR}")
     endif()
 
     # Committer date, ISO-8601, UTC. Sortable as a plain string, which is what
-    # lets a shell guard compare it against a cutoff without a date parser.
+    # lets a shell guard (and xbench's `provenance.require_after`) compare it
+    # against a cutoff without a date parser.
+    #
+    # `format-local:` formats in the *process* time zone, so git must be run
+    # with TZ=UTC0 for the trailing `Z` to be true. Until 2026-10-01 it was run
+    # in the builder's zone, and a commit at 14:16:54+02:00 was stamped
+    # 14:16:54Z — two hours late in CEST. Gates written against those stamps
+    # were corrected by -2h in the same change.
     execute_process(
-        COMMAND "${GIT_EXECUTABLE}" log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ
+        COMMAND "${CMAKE_COMMAND}" -E env TZ=UTC0
+                "${GIT_EXECUTABLE}" log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ
         WORKING_DIRECTORY "${GIT_SRC_DIR}"
         OUTPUT_VARIABLE _date
         OUTPUT_STRIP_TRAILING_WHITESPACE

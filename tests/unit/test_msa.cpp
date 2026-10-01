@@ -225,6 +225,14 @@ void test_msa_gap_at_beginning() {
         exit(1);
     }
 
+    // expected_seds was declared and never compared until 2026-10-01.
+    if (!compare_ignore_whitespace(seds_str, expected_seds)) {
+        std::cerr << "ERROR: sEDS output mismatch for gap at beginning!\n";
+        std::cerr << "  Got:      '" << seds_str << "'\n";
+        std::cerr << "  Expected: '" << expected_seds << "'\n";
+        exit(1);
+    }
+
     std::cout << "  ✓ PASSED\n\n";
 }
 
@@ -257,6 +265,14 @@ void test_msa_gap_at_end() {
         exit(1);
     }
 
+    // expected_seds was declared and never compared until 2026-10-01.
+    if (!compare_ignore_whitespace(seds_str, expected_seds)) {
+        std::cerr << "ERROR: sEDS output mismatch for gap at end!\n";
+        std::cerr << "  Got:      '" << seds_str << "'\n";
+        std::cerr << "  Expected: '" << expected_seds << "'\n";
+        exit(1);
+    }
+
     std::cout << "  ✓ PASSED\n\n";
 }
 
@@ -272,29 +288,35 @@ void test_msa_multiple_context_lengths() {
         ">seq3\n"
         "AGTC--TATATA\n";
 
-    // Test with l=2
-    {
+    // This test used to print both outputs and pass on "manual inspection".
+    // The only internal regular segment is {T} (length 1), so it is short at
+    // both l=2 and l=10 and {,CC}{T}{C,A} merges linearly into one symbol. The
+    // flanking AGTC and TATA are boundary segments, which may be shorter than l
+    // and are never merged — so l=10 must give exactly what l=2 gives, not
+    // "fewer symbols" as the old comment guessed.
+    const std::string expected_leds = "{AGTC}{TC,CCTA,TA}{TATA}";
+    const std::string expected_seds = "{0}{1}{2}{3}{0}";
+    for (size_t l : {size_t(2), size_t(10)}) {
         std::istringstream msa_stream(msa_input);
         std::ostringstream leds_out, seds_out;
-        parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, 2);
+        parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, l);
         std::string leds_str = leds_out.str();
-        std::cout << "  l=2: " << leds_str << "\n";
-        // With l=2, middle variants should still merge
-        // AGTC (len 4 >= 2, standalone), variants merge, TATA (len 4 >= 2, standalone)
+        std::cout << "  l=" << l << ": " << leds_str << "\n";
+        if (!compare_ignore_whitespace(leds_str, expected_leds)) {
+            std::cerr << "ERROR: l-EDS mismatch at l=" << l << "\n";
+            std::cerr << "  Got:      '" << leds_str << "'\n";
+            std::cerr << "  Expected: '" << expected_leds << "'\n";
+            exit(1);
+        }
+        if (!compare_ignore_whitespace(seds_out.str(), expected_seds)) {
+            std::cerr << "ERROR: sEDS mismatch at l=" << l << "\n";
+            std::cerr << "  Got:      '" << seds_out.str() << "'\n";
+            std::cerr << "  Expected: '" << expected_seds << "'\n";
+            exit(1);
+        }
     }
 
-    // Test with l=10
-    {
-        std::istringstream msa_stream(msa_input);
-        std::ostringstream leds_out, seds_out;
-        parse_msa_to_leds_streaming(msa_stream, leds_out, seds_out, 10);
-        std::string leds_str = leds_out.str();
-        std::cout << "  l=10: " << leds_str << "\n";
-        // With l=10, AGTC (len 4 < 10, merge), TATA (len 4 < 10, merge)
-        // Should result in fewer symbols
-    }
-
-    std::cout << "  ✓ PASSED (manual inspection)\n\n";
+    std::cout << "  ✓ PASSED\n\n";
 }
 
 // Regression test: the MSA transform seeks its input stream (records per-sequence

@@ -17,7 +17,7 @@ EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
-TOOL=$(find_tool "eds2leds") || { echo "ERROR: eds2leds not found"; exit 1; }
+resolve_tool TOOL eds2leds
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 

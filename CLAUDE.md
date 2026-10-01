@@ -37,7 +37,8 @@ cd build/src/cpp && ctest --output-on-failure
 # Run specific test
 cd build/tools && ./test_eds
 
-# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration
+# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration,
+# plus test_memory_smoke (Skipped without generated data) and test_memory_stress (Disabled by default)
 
 # Manual memory stress tests (too slow for CI, run manually):
 cd build/tools && ./test_memory_stress
@@ -573,8 +574,10 @@ Two things worth knowing about the tests themselves:
 |------|-------------|---------|
 | `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
-| `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
-| `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
+| `test_memory_smoke` | Yes — **Skipped** (exit 77) without generated data | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
+| `test_memory_stress` | Registered **Disabled** unless `-DEDSPARSER_CTEST_MEMORY_STRESS=ON` | Full stress testing with 100-500MB files, leak detection (~30+ min) |
+
+**Skips are never passes (2026-10-01).** `test_memory_smoke` used to exit 0 with every input missing; both memory tests now exit 77 when nothing ran, which `SKIP_RETURN_CODE` turns into "Skipped" in ctest (data comes from `tests/stress/generate_quick_data.sh` / `generate_data.sh`, never committed). A partial run (some sizes missing) exits 0 and prints its skip count. `test_integration` compares exact outputs and parsed `n`/`m`/`N` (it used to accept `find("4")` for n=4 and "contains `{`" for every transform) and works in a `mkdtemp` directory it removes, not the fixed `/tmp/edsparser_integration_test`. `test_msa` test 7 asserted nothing ("manual inspection") and tests 5–6 never compared their sources; all three now do.
 
 **`test_eds` coverage note**: Both construction modes are tested.
 - METADATA_ONLY (file loader via `EDS::load`): covered by most existing tests via `create_temp_eds()`
@@ -587,7 +590,7 @@ Not run by ctest — shell suites driving the installed CLI tools. `bash tests/e
 
 **All e2e tests are expected to pass.** An older note claimed some `test_eds2leds.sh` tests fail intentionally to document a compact-output bug — that bug is fixed and those tests are gone.
 
-**The suites resolve tools via `PATH` first** (`find_tool()` in `tests/e2e/helpers.sh`), falling back to `build/tools/` only when the name isn't on `PATH`. A stale `~/.local/bin` copy silently fails every test for a flag it predates — run `make install`, or `PATH="$PWD/build/tools:$PATH" bash tests/e2e/run_all.sh`, before believing a failure.
+**The suites test the build tree and refuse a stale binary** (2026-10-01; `resolve_tool()` in `tests/e2e/helpers.sh`). Tools come from `build/tools/` only (`EDSPARSER_TOOLS_DIR` overrides; `EDSPARSER_TOOLS_FROM_PATH=1` tests installed ones deliberately) — the old PATH-first lookup, and then the build-first lookup's silent PATH fallback, both tested whatever was last installed. Each suite prints every tool's path and `--version` and exits 1 when `COMMIT` ≠ `HEAD`, `DIRTY` disagrees with the work tree, or a modified tracked file is newer than the binary; `EDSPARSER_ALLOW_STALE_TOOLS=1` downgrades that to a warning. A missing tool fails the suite unless `EDSPARSER_ALLOW_MISSING_TOOLS=1`, which turns missing *optional* tools into skips. Skips (`skip "reason"; return` → exit 77) are counted separately from passes and totalled by `run_all.sh`.
 
 ### Benchmark Scenarios ([tests/bench/](tests/bench/))
 

@@ -3,8 +3,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDSPARSER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
-TOOL=$(find_tool "genrandomeds") || { echo "ERROR: genrandomeds not found"; exit 1; }
-STATS=$(find_tool "edsparser-stats") || { echo "ERROR: edsparser-stats not found"; exit 1; }
+resolve_tool TOOL genrandomeds
+resolve_tool STATS edsparser-stats
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 

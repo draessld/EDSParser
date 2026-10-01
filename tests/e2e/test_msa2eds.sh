@@ -5,7 +5,7 @@ source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
 EXPECTED_DIR="$SCRIPT_DIR/expected/msa2eds"
-TOOL=$(find_tool "msa2eds") || { echo "ERROR: msa2eds not found"; exit 1; }
+resolve_tool TOOL msa2eds
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 

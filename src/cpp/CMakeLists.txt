@@ -157,54 +157,77 @@ set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/unit)
 # test_sources, test_stats and test_vcf are 591 assertions between them, all of
 # which were dead. Keep assertions live in test binaries regardless of build
 # type. (Same fix as biofmi's src/cpp/CMakeLists.txt, 2026-08-30.)
-add_compile_options($<$<CONFIG:Release>:-UNDEBUG>)
-add_compile_options($<$<CONFIG:RelWithDebInfo>:-UNDEBUG>)
+#
+# It was a directory-level add_compile_options() for Release and RelWithDebInfo
+# only, so MinSizeRel (which also defines NDEBUG) and any custom configuration
+# or -DNDEBUG in CMAKE_CXX_FLAGS compiled the asserts out again. Now every test
+# target gets -UNDEBUG unconditionally (2026-10-01). Target compile options come
+# after CMAKE_CXX_FLAGS / CMAKE_CXX_FLAGS_<CONFIG> and after -D definitions on
+# the command line, so the -U wins whatever defined NDEBUG.
+function(edsparser_test_target name)
+    target_link_libraries(${name} edsparser_lib)
+    target_compile_options(${name} PRIVATE
+        $<IF:$<CXX_COMPILER_ID:MSVC>,/UNDEBUG,-UNDEBUG>)
+endfunction()
 
 # Test: EDS parsing
 add_executable(test_eds ${TEST_DIR}/test_eds.cpp)
-target_link_libraries(test_eds edsparser_lib)
+edsparser_test_target(test_eds)
 add_test(NAME test_eds COMMAND test_eds)
 
 # Test: Sources parsing
 add_executable(test_sources ${TEST_DIR}/test_sources.cpp)
-target_link_libraries(test_sources edsparser_lib)
+edsparser_test_target(test_sources)
 add_test(NAME test_sources COMMAND test_sources)
 
 # Test: Statistics
 add_executable(test_stats ${TEST_DIR}/test_stats.cpp)
-target_link_libraries(test_stats edsparser_lib)
+edsparser_test_target(test_stats)
 add_test(NAME test_stats COMMAND test_stats)
 
 # Test: Merging
 add_executable(test_merge ${TEST_DIR}/test_merge.cpp)
-target_link_libraries(test_merge edsparser_lib)
+edsparser_test_target(test_merge)
 add_test(NAME test_merge COMMAND test_merge)
 
 # Test: MSA transformation
 add_executable(test_msa ${TEST_DIR}/test_msa.cpp)
-target_link_libraries(test_msa edsparser_lib)
+edsparser_test_target(test_msa)
 add_test(NAME test_msa COMMAND test_msa)
 
 # Test: VCF transformation
 add_executable(test_vcf ${TEST_DIR}/test_vcf.cpp)
-target_link_libraries(test_vcf edsparser_lib)
+edsparser_test_target(test_vcf)
 add_test(NAME test_vcf COMMAND test_vcf)
 
 # Test: CLI tool integration tests
 add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
-target_link_libraries(test_integration edsparser_lib)
+edsparser_test_target(test_integration)
 add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# Memory stress tests (built but NOT run automatically - too slow for CI)
-# Run manually when needed: ./test_memory_smoke or ./test_memory_stress
-add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
-target_link_libraries(test_memory_stress edsparser_lib)
+# Memory tests. Their input is generated, not committed
+# (tests/stress/generate_quick_data.sh / generate_data.sh), and without it they
+# exit 77, which SKIP_RETURN_CODE makes ctest report as *skipped*. Before
+# 2026-10-01 test_memory_smoke exited 0 having tested nothing.
+set(EDSPARSER_STRESS_DATA_DIR "${EDSPARSER_REPO_ROOT}/tests/stress/data")
 
 add_executable(test_memory_smoke ${TEST_DIR}/test_memory_smoke.cpp)
-target_link_libraries(test_memory_smoke edsparser_lib)
+edsparser_test_target(test_memory_smoke)
+add_test(NAME test_memory_smoke COMMAND test_memory_smoke ${EDSPARSER_STRESS_DATA_DIR})
+set_tests_properties(test_memory_smoke PROPERTIES SKIP_RETURN_CODE 77 LABELS memory)
 
-# Note: These are excluded from 'ctest' / 'make test'
-# To run: cd build/src/cpp && ./test_memory_smoke
+# test_memory_stress takes 30+ min once its data exists, so it is registered but
+# DISABLED (ctest lists it as "Not Run (Disabled)", never as passed) unless
+# configured with -DEDSPARSER_CTEST_MEMORY_STRESS=ON. Run it by hand any time:
+# build/tools/test_memory_stress tests/stress/data [--quick|--large]
+option(EDSPARSER_CTEST_MEMORY_STRESS "Run test_memory_stress under ctest" OFF)
+add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
+edsparser_test_target(test_memory_stress)
+add_test(NAME test_memory_stress COMMAND test_memory_stress ${EDSPARSER_STRESS_DATA_DIR})
+set_tests_properties(test_memory_stress PROPERTIES SKIP_RETURN_CODE 77 LABELS "memory;stress")
+if(NOT EDSPARSER_CTEST_MEMORY_STRESS)
+    set_tests_properties(test_memory_stress PROPERTIES DISABLED TRUE)
+endif()
 
 # Print configuration summary
 message(STATUS "")

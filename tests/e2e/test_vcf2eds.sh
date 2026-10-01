@@ -13,9 +13,9 @@ source "$SCRIPT_DIR/helpers.sh"
 
 DATA_DIR="$SCRIPT_DIR/data"
 EXPECTED_DIR="$SCRIPT_DIR/expected/vcf2eds"
-TOOL=$(find_tool "vcf2eds")          || { echo "ERROR: vcf2eds not found";          exit 1; }
-LEDS=$(find_tool "eds2leds")         || { echo "ERROR: eds2leds not found";         exit 1; }
-STATS=$(find_tool "edsparser-stats") || { echo "ERROR: edsparser-stats not found";  exit 1; }
+resolve_tool TOOL vcf2eds
+resolve_tool LEDS eds2leds
+resolve_tool STATS edsparser-stats
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 

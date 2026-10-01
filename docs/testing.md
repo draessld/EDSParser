@@ -7,7 +7,7 @@ EDSParser has four layers of testing:
 | **Unit** | Core C++ library logic | < 30 s | ✅ Yes |
 | **Integration** | End-to-end CLI tool workflows (in-process) | < 60 s | ✅ Yes |
 | **End-to-end (e2e)** | Shell invocations of installed CLIs | ~1 min | ❌ Manual |
-| **Memory** | Streaming memory bounds and leak detection | 1–30 min | ❌ Manual |
+| **Memory** | Streaming memory bounds and leak detection | 1–30 min | smoke: ✅ (Skipped without data); stress: Disabled unless `-DEDSPARSER_CTEST_MEMORY_STRESS=ON` |
 
 ---
 
@@ -143,14 +143,20 @@ bash tests/e2e/test_genrandomeds.sh
 | `test_genpatterns.sh` | Pattern generation |
 | `test_genrandomeds.sh` | Synthetic EDS generation |
 
-> **The suites run whichever tool `PATH` finds first**, falling back to
-> `build/tools/` only when the name is not on `PATH` (`find_tool()` in
-> `tests/e2e/helpers.sh`). A stale `~/.local/bin` copy will therefore fail tests
-> for flags it predates. Run `make install`, or prefix the run with
-> `PATH="$PWD/build/tools:$PATH"`, before concluding a failure is real.
+> **The suites test the build tree, and refuse a binary that is not it**
+> (`resolve_tool()` in `tests/e2e/helpers.sh`, 2026-10-01). Tools come from
+> `build/tools/` (`EDSPARSER_TOOLS_DIR` overrides) and never fall back to `PATH`;
+> `EDSPARSER_TOOLS_FROM_PATH=1` tests installed binaries deliberately. Each tool's
+> path and `--version` are printed, and the suite exits 1 if its `COMMIT` is not
+> `git rev-parse HEAD`, its `DIRTY` flag disagrees with the work tree, or (both
+> dirty) a modified tracked file is newer than it. Rebuild, or opt out loudly
+> with `EDSPARSER_ALLOW_STALE_TOOLS=1`. A missing tool is a failure;
+> `EDSPARSER_ALLOW_MISSING_TOOLS=1` turns a missing *optional* tool into skips.
 
-Each suite prints individual test results and a per-suite pass/fail count.
-`run_all.sh` prints an overall summary.
+Each suite prints individual results as PASS / FAIL / SKIP and a per-suite
+`passed, failed, skipped` count; a test skips by returning 77 (`skip "reason";
+return`), and a skip is never counted as a pass. `run_all.sh` totals all three
+across suites and names the skip count when it is non-zero.
 
 ### Test Data
 
@@ -181,6 +187,14 @@ tool on `PATH` — see the note above).
 ---
 
 ## 4. Memory Tests
+
+Their input is generated (`tests/stress/generate_quick_data.sh`,
+`generate_data.sh`), not committed. With no input present they exit **77** and
+ctest, through `SKIP_RETURN_CODE`, reports them as *Skipped* — before
+2026-10-01 `test_memory_smoke` exited 0 having tested nothing. A run where only
+some sizes exist exits 0 and prints how many were skipped.
+`test_memory_stress` is registered with ctest but Disabled unless configured
+with `-DEDSPARSER_CTEST_MEMORY_STRESS=ON`.
 
 ### test_memory_smoke (Quick, ~1–2 min)
 

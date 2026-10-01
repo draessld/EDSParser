@@ -10,7 +10,10 @@
 #include <sstream>
 #include <cassert>
 #include <cstring>
+#include <cctype>
 #include <vector>
+#include <algorithm>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -63,11 +66,64 @@ bool file_exists_with_content(const fs::path& path) {
     return fs::exists(path) && fs::file_size(path) > 0;
 }
 
-// Create temp directory for test outputs
+// Per-run scratch directory, made by mkdtemp in main() and removed at exit. It
+// used to be the fixed /tmp/edsparser_integration_test, shared by every
+// concurrent run on the machine and never cleaned up.
+fs::path TEMP_DIR;
+
 fs::path create_temp_dir() {
-    auto temp = fs::temp_directory_path() / "edsparser_integration_test";
-    fs::create_directories(temp);
-    return temp;
+    return TEMP_DIR;
+}
+
+std::string read_file(const fs::path& path) {
+    std::ifstream ifs(path);
+    return std::string((std::istreambuf_iterator<char>(ifs)),
+                       std::istreambuf_iterator<char>());
+}
+
+// Strip trailing whitespace/newlines (tools may or may not end with '\n').
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+
+// Parse the integer on an edsparser-stats line such as
+// "  Number of symbols (n):                   4". Returns -1 if the label is
+// absent or not followed by an integer, so a missing line can never compare
+// equal to an expected count.
+long stat_value(const std::string& output, const std::string& label) {
+    std::istringstream iss(output);
+    std::string line;
+    while (std::getline(iss, line)) {
+        auto at = line.find(label);
+        if (at == std::string::npos) continue;
+        auto colon = line.find(':', at + label.size());
+        if (colon == std::string::npos) continue;
+        try {
+            size_t used = 0;
+            std::string rest = line.substr(colon + 1);
+            long v = std::stol(rest, &used);
+            if (trimmed(rest.substr(used)).empty()) return v;
+        } catch (const std::exception&) {}
+        return -1;
+    }
+    return -1;
+}
+
+// Check n / m / N of an EDS file via edsparser-stats; "" on success, else why.
+std::string check_stats(const fs::path& eds, long n, long m, long N) {
+    std::string output;
+    int code = run_cmd(TOOLS_DIR + "/edsparser-stats -i " + eds.string(), &output);
+    if (code != 0) return "edsparser-stats exited " + std::to_string(code) + ": " + output;
+    long got_n = stat_value(output, "Number of symbols (n)");
+    long got_m = stat_value(output, "Total strings (m)");
+    long got_N = stat_value(output, "Total characters (N)");
+    if (got_n != n || got_m != m || got_N != N) {
+        return "expected n=" + std::to_string(n) + " m=" + std::to_string(m) +
+               " N=" + std::to_string(N) + ", got n=" + std::to_string(got_n) +
+               " m=" + std::to_string(got_m) + " N=" + std::to_string(got_N);
+    }
+    return "";
 }
 
 // ===== EDSPARSER-STATS TESTS =====
@@ -92,12 +148,12 @@ void test_stats_from_string() {
         std::ofstream ofs(eds_file);
         ofs << "{A,G}{C}{T,A}";
     }
-    std::string output;
-    int code = run_cmd(TOOLS_DIR + "/edsparser-stats -i " + eds_file.string(), &output);
-    if (code == 0 && output.find("Number of symbols") != std::string::npos) {
+    // {A,G}{C}{T,A}: 3 symbols, 5 strings, 5 characters.
+    std::string why = check_stats(eds_file, 3, 5, 5);
+    if (why.empty()) {
         pass();
     } else {
-        fail("stats not computed: " + output);
+        fail(why);
     }
     fs::remove(eds_file);
 }
@@ -113,14 +169,13 @@ void test_stats_file() {
         ofs << "{ACGT}{A,G,C}{TT}{AAA,GGG,CCC}";
     }
 
-    std::string output;
-    int code = run_cmd(TOOLS_DIR + "/edsparser-stats -i " + eds_file.string(), &output);
-    // Output format: "Number of symbols (n):                   4"
-    if (code == 0 && output.find("Number of symbols") != std::string::npos &&
-        output.find("4") != std::string::npos) {
+    // n=4 symbols; m=1+3+1+3=8 strings; N=4+3+2+9=18 characters. This used to
+    // check output.find("4"), which any '4' anywhere in the report satisfied.
+    std::string why = check_stats(eds_file, 4, 8, 18);
+    if (why.empty()) {
         pass();
     } else {
-        fail("expected n=4, got: " + output);
+        fail(why);
     }
 
     fs::remove(eds_file);
@@ -156,15 +211,15 @@ void test_eds2leds_basic() {
                        " -o " + leds_file.string() + " -l 2", &output);
 
     if (code == 0 && file_exists_with_content(leds_file)) {
-        // Verify output has merged symbols
-        std::ifstream ifs(leds_file);
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
-        // After merging with l=2, should have fewer symbols
-        if (content.find("{") != std::string::npos) {
+        // The internal {T} is shorter than l=2, so {G,C}{T}{A,G} merges
+        // (cartesian, no sources); the leading {A} is a boundary segment and is
+        // exempt. Compact output.
+        std::string content = trimmed(read_file(leds_file));
+        const std::string expected = "A{GTA,GTG,CTA,CTG}";
+        if (content == expected) {
             pass();
         } else {
-            fail("output not valid EDS");
+            fail("expected " + expected + ", got " + content);
         }
     } else {
         fail("transformation failed: " + output);
@@ -191,15 +246,14 @@ void test_eds2leds_cartesian() {
                        " -o " + leds_file.string() + " -l 2", &output);
 
     if (code == 0 && file_exists_with_content(leds_file)) {
-        std::ifstream ifs(leds_file);
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
-        // Cartesian of {A,G}x{C,T} = {AC,AT,GC,GT}
-        if (content.find("AC") != std::string::npos ||
-            content.find("GC") != std::string::npos) {
+        // Cartesian of {A,G}x{C,T} = {AC,AT,GC,GT}: all four, nothing else. The
+        // old check accepted any output containing "AC" *or* "GC".
+        std::string content = trimmed(read_file(leds_file));
+        const std::string expected = "{AC,AT,GC,GT}";
+        if (content == expected) {
             pass();
         } else {
-            fail("cartesian merge not correct: " + content);
+            fail("cartesian merge: expected " + expected + ", got " + content);
         }
     } else {
         fail("transformation failed: " + output);
@@ -245,14 +299,14 @@ void test_msa2eds_basic() {
                        " -o " + eds_file.string(), &output);
 
     if (code == 0 && file_exists_with_content(eds_file)) {
-        std::ifstream ifs(eds_file);
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
-        // Should contain degenerate symbols
-        if (content.find("{") != std::string::npos) {
+        // Columns 1-2 vary (CG / GG / C-), so they form one degenerate symbol
+        // with one alternative per distinct sequence, gap removed.
+        std::string content = trimmed(read_file(eds_file));
+        const std::string expected = "{A}{CG,GG,C}{T}";
+        if (content == expected) {
             pass();
         } else {
-            fail("output not valid EDS format");
+            fail("expected " + expected + ", got " + content);
         }
     } else {
         fail("transformation failed: " + output);
@@ -305,14 +359,13 @@ void test_vcf2eds_basic() {
                        " -o " + eds_file.string(), &output);
 
     if (code == 0 && file_exists_with_content(eds_file)) {
-        std::ifstream ifs(eds_file);
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
-        // Should have degenerate symbol for the SNP
-        if (content.find("{") != std::string::npos) {
+        // SNP G>A at 1-based position 3 of ACGTACGTACGT, heterozygous.
+        std::string content = trimmed(read_file(eds_file));
+        const std::string expected = "{AC}{G,A}{TACGTACGT}";
+        if (content == expected) {
             pass();
         } else {
-            fail("output not valid EDS format");
+            fail("expected " + expected + ", got " + content);
         }
     } else {
         fail("transformation failed: " + output);
@@ -355,17 +408,24 @@ void test_genpatterns_basic() {
                        " -o " + patterns_file.string() + " -n 5 -l 4", &output);
 
     if (code == 0 && file_exists_with_content(patterns_file)) {
-        // Count lines (patterns)
+        // Exactly 5 patterns, each of length 4 and each a substring of one of
+        // the EDS's two paths — not merely five non-empty lines.
+        const std::vector<std::string> paths = {"ACGTACGTATTTTTTTT", "ACGTACGTGTTTTTTTT"};
         std::ifstream ifs(patterns_file);
         int lines = 0;
-        std::string line;
+        std::string line, bad;
         while (std::getline(ifs, line)) {
-            if (!line.empty()) lines++;
+            if (line.empty()) continue;
+            lines++;
+            bool occurs = std::any_of(paths.begin(), paths.end(),
+                [&](const std::string& p) { return p.find(line) != std::string::npos; });
+            if (line.size() != 4 || !occurs) bad += " '" + line + "'";
         }
-        if (lines == 5) {
+        if (lines == 5 && bad.empty()) {
             pass();
         } else {
-            fail("expected 5 patterns, got " + std::to_string(lines));
+            fail("expected 5 length-4 patterns occurring in the EDS, got " +
+                 std::to_string(lines) + (bad.empty() ? "" : "; invalid:" + bad));
         }
     } else {
         fail("pattern generation failed: " + output);
@@ -414,12 +474,20 @@ void test_pipeline_msa_to_leds() {
         return;
     }
 
-    // Verify l-EDS is valid (check for any statistics output)
-    int code3 = run_cmd(TOOLS_DIR + "/edsparser-stats -i " + leds_file.string(), &output);
-    if (code3 == 0 && output.find("Number of symbols") != std::string::npos) {
+    // Both variable sites are flanked by >= 3 common characters, so l=3 merges
+    // nothing; the l-EDS is the EDS in compact form, and it must reload with
+    // the same shape: 5 symbols, 1+2+1+2+1 = 7 strings, 1+2+5+1+4 = 13 chars.
+    std::string content = trimmed(read_file(leds_file));
+    const std::string expected = "A{C,G}GTACG{T,}ACGT";
+    if (content != expected) {
+        fail("l-EDS: expected " + expected + ", got " + content);
+        return;
+    }
+    std::string why = check_stats(leds_file, 5, 7, 13);
+    if (why.empty()) {
         pass();
     } else {
-        fail("l-EDS stats failed: " + output);
+        fail("l-EDS reload: " + why);
     }
 
     fs::remove(msa_file);
@@ -473,7 +541,20 @@ void test_pipeline_vcf_to_leds() {
         return;
     }
 
-    pass();
+    // S1 is 1/1 at position 7, so every path carries T there and it is
+    // applied to the common sequence; only the 0/1 SNP at 3 stays degenerate.
+    std::string content = trimmed(read_file(leds_file));
+    const std::string expected = "AC{G,A}TACTTACGTACGT";
+    if (content != expected) {
+        fail("l-EDS: expected " + expected + ", got " + content);
+        return;
+    }
+    std::string why = check_stats(leds_file, 3, 4, 17);
+    if (why.empty()) {
+        pass();
+    } else {
+        fail("l-EDS reload: " + why);
+    }
 
     fs::remove(vcf_file);
     fs::remove(ref_file);
@@ -557,7 +638,15 @@ int main(int argc, char* argv[]) {
     }
     TOOLS_DIR = argv[1];
 
-    std::cout << "Tools directory: " << TOOLS_DIR << "\n\n";
+    std::string tmpl = (fs::temp_directory_path() / "edsparser_integration_XXXXXX").string();
+    if (!mkdtemp(tmpl.data())) {
+        std::cerr << "ERROR: mkdtemp failed for " << tmpl << "\n";
+        return 1;
+    }
+    TEMP_DIR = tmpl;
+
+    std::cout << "Tools directory: " << TOOLS_DIR << "\n";
+    std::cout << "Scratch directory: " << TEMP_DIR << "\n\n";
 
     // edsparser-stats tests
     std::cout << "--- edsparser-stats ---\n";
@@ -599,6 +688,9 @@ int main(int argc, char* argv[]) {
         std::cout << "FAILED: " << failed << " tests\n";
     }
     std::cout << "===========================================\n";
+
+    std::error_code ec;
+    fs::remove_all(TEMP_DIR, ec);
 
     return failed > 0 ? 1 : 0;
 }
