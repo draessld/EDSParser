@@ -95,6 +95,16 @@ struct VariantGroup {
     size_t end_pos;              // 0-indexed end position (exclusive)
     std::vector<std::string> merged_haplotypes;  // All possible haplotype strings
     std::vector<std::vector<int>> merged_genotypes;  // Remapped genotypes per sample
+
+    // Split mode (--split-groups) only: the group as a run of consecutive
+    // symbols, one per atomic segment of the span. A piece with a single
+    // alternative and no carriers is common text; otherwise carriers[k] holds
+    // the 1-based path ids spelling alts[k]. Empty in whole-span mode.
+    struct Piece {
+        std::vector<std::string> alts;
+        std::vector<std::set<int>> carriers;
+    };
+    std::vector<Piece> pieces;
 };
 
 // ============================================================================
@@ -727,6 +737,169 @@ std::string apply_variants_to_span(
 }
 
 /**
+ * The ALTs one allele copy carries in a group, as (variant index, allele >= 1)
+ * pairs with pairwise disjoint reference spans, in file order.
+ *
+ * Returns false when the copy has no call at any record of the group (a
+ * hemizygous pad or a no-call everywhere); a missing call at some records only
+ * reads as REF there. An ALT overlapping one the copy already carries is
+ * contradictory — one chromosome cannot carry both — and is dropped and counted,
+ * keeping the first in file order as `bcftools consensus` does.
+ */
+static bool collect_copy_alleles(
+    const std::vector<VCFVariant>& group_variants,
+    size_t sample_idx,
+    int copy,
+    std::vector<std::pair<size_t, int>>& applied,
+    size_t* conflicting_calls)
+{
+    applied.clear();
+    bool called = false;
+    for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
+        const VCFVariant& var = group_variants[var_idx];
+        if (sample_idx >= var.genotypes.size() / 2) continue;  // sample not in this variant
+
+        const int allele_idx = var.genotypes[sample_idx * 2 + copy];
+        if (allele_idx < 0) continue;  // missing / hemizygous pad
+        called = true;
+        // REF at this record. An out-of-range index always read as REF.
+        if (allele_idx == 0 || allele_idx > static_cast<int>(var.alts.size())) continue;
+
+        bool clashes = false;
+        for (const auto& prior : applied)
+            if (variants_overlap(group_variants[prior.first], var)) { clashes = true; break; }
+        if (clashes) {
+            if (conflicting_calls) ++*conflicting_calls;
+            continue;
+        }
+        applied.emplace_back(var_idx, allele_idx);
+    }
+    return called;
+}
+
+/**
+ * Split mode (--split-groups): a group as a run of symbols, one per atomic
+ * segment of its span, instead of one symbol of full-span haplotypes.
+ *
+ * The span is cut at every record's start and end, so each segment lies either
+ * wholly inside or wholly outside each record's REF span. A copy then spells,
+ * per segment, exactly one of: the reference segment (no ALT it carries covers
+ * it), the ALT of the record whose span *begins* at this segment, or nothing
+ * (the segment is interior to an ALT it carries — the rest of a deletion).
+ * Concatenating a copy's segments gives the same haplotype whole-span mode
+ * builds, so the LINEAR language (paths read as genomes) is unchanged and every
+ * piece's source sets still partition the samples: each copy lands on one
+ * content per segment. What changes is size: a 100 kb deletion carried by one
+ * isolate costs its segments once, not once per distinct haplotype of the
+ * other isolates across the whole span.
+ *
+ * A segment every sample spells the same way is common text. The CARTESIAN
+ * language does widen — it may combine one copy's segment with another's — as
+ * it already does across neighbouring groups. That makes a split EDS a LINEAR-
+ * only input to eds2leds: the segments of a group have no common text between
+ * them, so the l-EDS merge must re-join them, and without sources it does so
+ * as a cartesian product (tb_p100 at l=10: killed after 120 s, against 2 s and
+ * 450 MB whole-span). With sources the merge keeps only combinations some path
+ * carries, which are exactly the whole-span haplotypes, so the l-EDS comes out
+ * the same size as whole-span mode's (within 0.1% on tb_p100/tb_p500).
+ *
+ * Copy-to-allele assignment, conflicts and no-calls are exactly as in
+ * merge_variant_group(). Returns false (caller falls back to whole-span mode)
+ * when there is nothing to partition: no samples, or a record with an empty REF.
+ */
+static bool split_variant_group(
+    const std::vector<VCFVariant>& group_variants,
+    const std::string& reference_span,
+    size_t span_start,
+    size_t* conflicting_calls,
+    VariantGroup& group)
+{
+    const size_t n_samples =
+        group_variants.empty() ? 0 : group_variants[0].genotypes.size() / 2;
+    if (n_samples == 0) return false;
+    for (const VCFVariant& v : group_variants)
+        if (v.ref.empty()) return false;
+
+    // Segment boundaries, as offsets into reference_span.
+    std::vector<size_t> bp{0, reference_span.size()};
+    for (const VCFVariant& v : group_variants) {
+        const size_t off = (v.pos - 1) - span_start;
+        bp.push_back(off);
+        bp.push_back(std::min(off + v.ref.size(), reference_span.size()));
+    }
+    std::sort(bp.begin(), bp.end());
+    bp.erase(std::unique(bp.begin(), bp.end()), bp.end());
+    const size_t n_seg = bp.size() - 1;
+    auto seg_of = [&](size_t off) {
+        return static_cast<size_t>(std::lower_bound(bp.begin(), bp.end(), off) - bp.begin());
+    };
+
+    // Content code per segment: kRef, kEmpty, or an index into `alleles`.
+    constexpr int kRef = -1, kEmpty = -2;
+    std::vector<std::pair<size_t, int>> alleles;            // (variant, allele)
+    std::map<std::pair<size_t, int>, int> allele_code;
+    // carriers_by_code[seg][code] = sample ids (1-based)
+    std::vector<std::map<int, std::set<int>>> by_code(n_seg);
+
+    std::vector<std::pair<size_t, int>> applied;
+    std::vector<int> codes(n_seg);
+    std::vector<char> touched(n_seg);
+    for (size_t sample_idx = 0; sample_idx < n_samples; sample_idx++) {
+        const int path_id = static_cast<int>(sample_idx) + 1;
+        bool any_called = false;
+        for (int copy = 0; copy < 2; copy++) {
+            if (!collect_copy_alleles(group_variants, sample_idx, copy, applied,
+                                      conflicting_calls))
+                continue;
+            any_called = true;
+            std::fill(codes.begin(), codes.end(), kRef);
+            for (const auto& a : applied) {
+                const VCFVariant& v = group_variants[a.first];
+                const size_t off = (v.pos - 1) - span_start;
+                const size_t first = seg_of(off);
+                const size_t last = seg_of(std::min(off + v.ref.size(), reference_span.size()));
+                auto [it, inserted] = allele_code.try_emplace(a, static_cast<int>(alleles.size()));
+                if (inserted) alleles.push_back(a);
+                codes[first] = it->second;
+                for (size_t k = first + 1; k < last; k++) codes[k] = kEmpty;
+            }
+            for (size_t k = 0; k < n_seg; k++) by_code[k][codes[k]].insert(path_id);
+        }
+        if (!any_called)  // no call anywhere in the group: reference, as whole-span mode
+            for (size_t k = 0; k < n_seg; k++) by_code[k][kRef].insert(path_id);
+    }
+
+    // Each segment's codes become strings; identical strings (a deletion's
+    // interior beside an empty ALT, say) are one alternative.
+    for (size_t k = 0; k < n_seg; k++) {
+        const std::string ref_seg = reference_span.substr(bp[k], bp[k + 1] - bp[k]);
+        VariantGroup::Piece piece;
+        std::unordered_map<std::string, size_t> index;
+        for (const auto& [code, ids] : by_code[k]) {  // map order: kEmpty, kRef, alleles
+            std::string content;
+            if (code == kRef)        content = ref_seg;
+            else if (code >= 0)      content = group_variants[alleles[code].first]
+                                                   .alts[alleles[code].second - 1];
+            auto [it, inserted] = index.try_emplace(content, piece.alts.size());
+            if (inserted) {
+                piece.alts.push_back(std::move(content));
+                piece.carriers.emplace_back();
+            }
+            piece.carriers[it->second].insert(ids.begin(), ids.end());
+        }
+        // REF first, as in whole-span mode.
+        auto ref_it = index.find(ref_seg);
+        if (ref_it != index.end() && ref_it->second != 0) {
+            std::swap(piece.alts[0], piece.alts[ref_it->second]);
+            std::swap(piece.carriers[0], piece.carriers[ref_it->second]);
+        }
+        if (piece.alts.size() == 1) piece.carriers.clear();  // everyone spells it: common
+        group.pieces.push_back(std::move(piece));
+    }
+    return true;
+}
+
+/**
  * Merge overlapping variants into a single VariantGroup.
  *
  * Haplotypes are assigned per allele copy, and a copy's haplotype is the
@@ -764,11 +937,17 @@ VariantGroup merge_variant_group(
     const std::vector<VCFVariant>& group_variants,
     const std::string& reference_span,
     size_t span_start,
-    size_t* conflicting_calls)
+    size_t* conflicting_calls,
+    bool split)
 {
     VariantGroup group;
     group.start_pos = span_start;
     group.end_pos = span_start + reference_span.size();
+
+    if (split && group_variants.size() > 1 &&
+        split_variant_group(group_variants, reference_span, span_start,
+                            conflicting_calls, group))
+        return group;
 
     // Flat layout: 2 ints per sample; n_samples = genotypes.size() / 2
     size_t n_samples = group_variants.empty() ? 0 : group_variants[0].genotypes.size() / 2;
@@ -803,29 +982,8 @@ VariantGroup merge_variant_group(
 
         // Flat layout: copy `copy` of this sample sits at [sample_idx*2 + copy]
         for (int copy = 0; copy < 2; copy++) {
-            applied.clear();
-            bool called = false;  // no call at all: a hemizygous pad or a no-call
-
-            for (size_t var_idx = 0; var_idx < group_variants.size(); var_idx++) {
-                const VCFVariant& var = group_variants[var_idx];
-                if (sample_idx >= var.genotypes.size() / 2) continue;  // sample not in this variant
-
-                const int allele_idx = var.genotypes[sample_idx * 2 + copy];
-                if (allele_idx < 0) continue;  // missing / hemizygous pad
-                called = true;
-                // REF at this record. An out-of-range index always read as REF.
-                if (allele_idx == 0 || allele_idx > static_cast<int>(var.alts.size())) continue;
-
-                bool clashes = false;
-                for (const auto& prior : applied)
-                    if (variants_overlap(group_variants[prior.first], var)) { clashes = true; break; }
-                if (clashes) {
-                    if (conflicting_calls) ++*conflicting_calls;
-                    continue;
-                }
-                applied.emplace_back(var_idx, allele_idx);
-            }
-
+            const bool called = collect_copy_alleles(group_variants, sample_idx, copy,
+                                                     applied, conflicting_calls);
             if (called)
                 sample_haplotype_indices.insert(index_of(
                     apply_variants_to_span(reference_span, span_start, group_variants, applied)));
@@ -851,7 +1009,8 @@ std::vector<VariantGroup> group_overlapping_variants(
     std::istream& fasta_stream,
     const FASTAMetadata& fasta_meta,
     RefCheckState* ref_check,
-    size_t* conflicting_calls)
+    size_t* conflicting_calls,
+    bool split)
 {
     std::vector<VariantGroup> groups;
 
@@ -899,8 +1058,8 @@ std::vector<VariantGroup> group_overlapping_variants(
 
         // Merge the group
         VariantGroup merged =
-            merge_variant_group(current_group, ref_span, group_start, conflicting_calls);
-        groups.push_back(merged);
+            merge_variant_group(current_group, ref_span, group_start, conflicting_calls, split);
+        groups.push_back(std::move(merged));
 
         // Move to next ungrouped variant
         i = j;
@@ -957,13 +1116,14 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
     size_t* bitvec_bit_count = nullptr,
     RefCheckState* ref_check = nullptr,
     size_t* conflicting_calls = nullptr,
-    std::string* pending_common = nullptr)
+    std::string* pending_common = nullptr,
+    bool split = false)
 {
 
     // Group overlapping variants
     std::vector<VariantGroup> groups =
         group_overlapping_variants(variants, fasta_stream, fasta_meta, ref_check,
-                                   conflicting_calls);
+                                   conflicting_calls, split);
     size_t num_groups = groups.size();
 
     size_t current_pos = start_pos;
@@ -1044,6 +1204,27 @@ std::tuple<size_t, size_t, size_t, size_t> generate_eds_from_variants(
             common += read_fasta_region(fasta_stream, fasta_meta,
                                         current_pos, group.start_pos - current_pos);
             current_pos = group.start_pos;
+        }
+
+        // Split mode: the group is a run of symbols, one per atomic segment.
+        // A segment every sample spells is common text and joins the run.
+        if (!group.pieces.empty()) {
+            for (const auto& piece : group.pieces) {
+                if (piece.carriers.empty()) {  // every sample spells it
+                    common += piece.alts[0];
+                    continue;
+                }
+                flush_common();
+                eds_out << '{';
+                for (size_t i = 0; i < piece.alts.size(); i++) {
+                    if (i) eds_out << ',';
+                    eds_out << piece.alts[i];
+                }
+                eds_out << '}';
+                for (const auto& ids : piece.carriers) write_source_set(ids);
+            }
+            current_pos = group.end_pos;
+            continue;
         }
 
         // Build map: haplotype -> set of sample IDs that have it
@@ -1153,7 +1334,8 @@ void parse_vcf_to_eds_streaming(
     std::ostream& seds_output,
     VCFStats* stats,
     size_t block_size,
-    Sources::Format seds_format)
+    Sources::Format seds_format,
+    bool split_groups)
 {
     // Step 1: Parse FASTA metadata
     FASTAMetadata fasta_meta = parse_fasta_metadata(fasta_stream);
@@ -1346,8 +1528,13 @@ void parse_vcf_to_eds_streaming(
             }
         }
 
-        // Sort block variants by position (should mostly be sorted already from VCF)
-        std::sort(block_variants.begin(), block_variants.end(),
+        // Sort block variants by position (should mostly be sorted already from VCF).
+        // Stable: records sharing a POS must stay in file order, because a copy
+        // carrying ALTs at two overlapping records keeps the *first in file
+        // order* (merge_variant_group()). std::sort reordered them depending on
+        // what else was in the block, so on tb_p500 changing -b from 10M to 1M
+        // changed which of two same-POS indels sample 2 was given.
+        std::stable_sort(block_variants.begin(), block_variants.end(),
                   [](const VCFVariant& a, const VCFVariant& b) {
                       return a.pos < b.pos;
                   });
@@ -1362,7 +1549,7 @@ void parse_vcf_to_eds_streaming(
                 actual_write_pos, current_block_end, seds_format,
                 is_sparse_fmt ? &presence_bitvec  : nullptr,
                 is_sparse_fmt ? &bitvec_bit_count : nullptr,
-                &ref_check, &overlap_conflicts, &pending_common);
+                &ref_check, &overlap_conflicts, &pending_common, split_groups);
         actual_write_pos = new_write_pos;
         total_seds_entries    += block_seds_entries;
         total_m_degen_entries += block_m_degen;
@@ -1496,14 +1683,16 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
     VCFStats* stats,
-    size_t block_size)
+    size_t block_size,
+    bool split_groups)
 {
     // Use stringstreams for backward compatibility
     std::ostringstream eds_output;
     std::ostringstream seds_output;
 
     // Call file stream version
-    parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_output, seds_output, stats, block_size);
+    parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_output, seds_output, stats, block_size,
+                               Sources::Format::SEDS, split_groups);
 
     return {eds_output.str(), seds_output.str()};
 }
@@ -1534,7 +1723,8 @@ void parse_vcf_to_leds_streaming_direct(
     VCFStats* stats,
     size_t block_size,
     const std::filesystem::path* keep_eds_path,
-    const std::filesystem::path* keep_seds_path)
+    const std::filesystem::path* keep_seds_path,
+    bool split_groups)
 {
     // Two-stage pipeline VCF→EDS→l-EDS routed through temp files.
     //
@@ -1581,7 +1771,7 @@ void parse_vcf_to_leds_streaming_direct(
             throw std::runtime_error("Failed to create temp SEDS file: " + temp_seds.string());
         }
         parse_vcf_to_eds_streaming(vcf_stream, fasta_stream, eds_tmp, seds_tmp,
-                                   stats, block_size);
+                                   stats, block_size, Sources::Format::SEDS, split_groups);
     }  // ofstreams flushed and closed here before stage 2 reopens them
 
     // ── Stage 2: EDS → l-EDS ─────────────────────────────────────────────────

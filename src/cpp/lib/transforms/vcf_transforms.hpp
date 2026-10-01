@@ -67,6 +67,11 @@ struct VCFStats {
  * @param seds_output Output stream for sEDS (written incrementally per block)
  * @param stats Optional pointer to VCFStats structure to receive statistics
  * @param block_size Genomic window size in bases (0 = load all, default 10M)
+ * @param split_groups Emit a group of overlapping records as one symbol per
+ *        atomic segment of its span instead of one symbol of full-span
+ *        haplotypes (`vcf2eds --split-groups`). Same LINEAR language, same
+ *        source partition, far smaller EDS when long deletions overlap
+ *        polymorphic sites; see merge_variant_group() in the .cpp.
  */
 void parse_vcf_to_eds_streaming(
     std::istream& vcf_stream,
@@ -75,7 +80,8 @@ void parse_vcf_to_eds_streaming(
     std::ostream& seds_output,
     VCFStats* stats = nullptr,
     size_t block_size = 10000000,
-    Sources::Format seds_format = Sources::Format::SEDS);
+    Sources::Format seds_format = Sources::Format::SEDS,
+    bool split_groups = false);
 
 /**
  * Parse VCF + FASTA reference to EDS with source tracking (string return).
@@ -112,7 +118,8 @@ std::pair<std::string, std::string> parse_vcf_to_eds_streaming_str(
     std::istream& vcf_stream,
     std::istream& fasta_stream,
     VCFStats* stats = nullptr,
-    size_t block_size = 10000000);
+    size_t block_size = 10000000,
+    bool split_groups = false);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking (file stream output).
@@ -147,7 +154,8 @@ void parse_vcf_to_leds_streaming_direct(
     VCFStats* stats = nullptr,
     size_t block_size = 10000000,
     const std::filesystem::path* keep_eds_path = nullptr,
-    const std::filesystem::path* keep_seds_path = nullptr);
+    const std::filesystem::path* keep_seds_path = nullptr,
+    bool split_groups = false);
 
 /**
  * Parse VCF + FASTA reference directly to l-EDS with source tracking (string return).

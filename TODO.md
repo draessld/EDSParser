@@ -12,8 +12,9 @@ linear merge correct and cheap on haploid data (Mtb, 500 paths, l=100 in 3.3 s a
 long alleles are filtered). What blocks the next *result* is not code but data and write-up:
 the TB panels are gone from this machine (1b), three specs have runs but no notebook and one
 batch of runs is empty (3g), and results produced before the complement fix still need marking
-(0a). The two real code items left are `vcf2eds` growing *superlinearly* with panel size on
-long indels (1a) and the memory estimate that cannot be trusted for admission control (1d).
+(0a). The two real code items left were `vcf2eds` growing *superlinearly* with panel size on
+long indels (1a — the EDS is fixed as of 2026-10-01, the l-EDS cost is inherent, see there)
+and the memory estimate that cannot be trusted for admission control (1d).
 Diploid heterozygosity stays expensive by choice — see "Sources stay sample-level".
 
 ---
@@ -97,7 +98,73 @@ to start a match inside a degenerate symbol, the API cannot express that today.
 
 ## P1 — needed before the next round of experiments
 
-### 1a. `vcf2eds` emits one full-span haplotype per (variant, allele) in a group
+### 1a. `vcf2eds` emits one full-span haplotype per (variant, allele) in a group — **EDS fixed 2026-10-01; the l-EDS cost is inherent**
+
+**State (2026-10-01, branch `vcf-group-split`, on `integration`).** Both candidates were built and measured on
+the TB panels; neither changes what biofmi indexes, and the reason is structural.
+
+- **(a) Per-copy combined haplotypes — default.** This is the 2026-09-12 partition fix
+  (made in the standalone clone's working tree, committed as `d2cef03` on
+  `submodule-advance`): each allele copy gets the span with *every* ALT it carries applied, so a
+  symbol holds the distinct haplotypes actually observed — at most one per copy, never a
+  cartesian product — and the partition is exact. That alone cuts the EDS 3.2–3.4×. It
+  also needed `std::stable_sort` for the block: `std::sort` reordered same-POS records, so
+  which of two overlapping calls a copy kept depended on `-b` (tb_p500, sample 2).
+- **(b) Split into atomic segments — `vcf2eds --split-groups`, opt-in.** The span is cut at
+  every record start/end and each segment is its own symbol: REF, the ALT beginning there,
+  or empty inside a carried deletion. Same genome per path (md5-identical on tb_p100 and
+  tb_p500, at EDS and l-EDS level), same partition, and the EDS goes flat: 5.3 → 8.8 MB
+  from 100 to 500 isolates, against 14.3 → 223 MB for (a).
+- **Why (b) is not the default.** The l-EDS merge must re-join the segments — a group has
+  no common text inside it — so with sources it reproduces (a)'s haplotypes (l-EDS within
+  0.1% of (a) at l=10 and 50) at 2–5× the `eds2leds` time, and **without sources the
+  re-join is a cartesian product** that did not finish in 120 s on tb_p100 (whole-span:
+  2 s). It also widens the CARTESIAN language. It is the right output when the EDS itself
+  is the artifact (storage, stats); it buys nothing for an index.
+- **Why the l-EDS cost is inherent.** A deletion carried by one isolate removes the
+  common text over its whole span for *every* path, so an exact l-EDS must spell each
+  distinct path string across it in one symbol. tb_p500's largest symbol is a 118 kb span
+  with 348 distinct haplotypes, 34 MB on its own; the top 100 symbols are 98% of the
+  degenerate text. No grouping or splitting in `vcf2eds` changes that — only dropping or
+  truncating long alleles (lossy: the `make_allele_subset.sh` workaround), or a different
+  index model, does.
+
+Measured 2026-10-01 (Ryzen 7 PRO 6850U laptop, shared, single-threaded tools, `MemoryMax=8G`;
+"old" = `1cba45e`; filtered = `make_allele_subset.sh … 50` run through (a); sources are
+dense text SEDS; breaches from `source_partition_audit.py`):
+
+| panel | mode | EDS | SEDS | vcf2eds | peak RSS | breaches |
+|---|---|---:|---:|---:|---:|---:|
+| tb_p100 | old | 48.2 MB | 0.56 MB | 2.0 s | 237 MB | 396 |
+| tb_p100 | (a) default | 14.3 MB | 0.55 MB | 0.8 s | 211 MB | 0 |
+| tb_p100 | (b) `--split-groups` | 5.3 MB | 0.85 MB | 0.8 s | 156 MB | 0 |
+| tb_p100 | filtered, (a) | 4.5 MB | 0.60 MB | 0.8 s | 137 MB | 0 |
+| tb_p500 | old | 722.9 MB | 3.51 MB | 88.3 s | 2.61 GB | 869 |
+| tb_p500 | (a) default | 223.3 MB | 3.15 MB | 8.3 s | 2.72 GB | 0 |
+| tb_p500 | (b) `--split-groups` | 8.8 MB | 10.17 MB | 13.5 s | 2.58 GB | 0 |
+| tb_p500 | filtered, (a) | 4.9 MB | 4.17 MB | 9.7 s | 2.07 GB | 0 |
+
+`eds2leds` (LINEAR) on those EDS — l-EDS size / time / peak RSS:
+
+| panel | input | l=10 | l=50 |
+|---|---|---|---|
+| tb_p100 | (a) | 14.4 MB / 0.14 s / 17 MB | 15.0 MB / 0.18 s / 17 MB |
+| tb_p100 | (b) | 14.4 MB / 0.28 s / 17 MB | 15.0 MB / 0.34 s / 17 MB |
+| tb_p100 | filtered | 4.5 MB / 0.09 s / 9 MB | 5.0 MB / 0.13 s / 10 MB |
+| tb_p500 | (a) | 225.0 MB / 1.7 s / 84 MB | 231.6 MB / 2.1 s / 80 MB |
+| tb_p500 | (b) | 225.2 MB / 8.9 s / 118 MB | 231.8 MB / 8.9 s / 104 MB |
+| tb_p500 | filtered | 4.9 MB / 0.3 s / 16 MB | 9.9 MB / 0.6 s / 15 MB |
+
+`vcf2eds`'s ~2.6 GB on tb_p500 is the block of parsed records (genotype vectors), not the
+haplotypes — it is the same in every mode and drops to 0.98 GB at `-b 1000000`.
+
+**Still open:** whether biofmi wants long alleles at all (if not, the filter is the answer
+and should be stated as a modelling choice wherever numbers are published); tb_p1141 is
+not on this machine, so the 1141-isolate row is unmeasured. Overlapping ALT calls ignored:
+243 (tb_p100), 2531 (tb_p500).
+
+*History, kept for the reasoning:*
+
 
 Discovered 2026-08-06 evaluating the Mtb panels, and it is now the **dominant** cost on
 assembly-derived data.
@@ -141,10 +208,10 @@ assembly-derived data.
   N bp before conversion — 3.9% of sites removed took that EDS from 18.0 MB to 4.3 MB,
   i.e. down to reference size. Good enough to keep experiments moving, but it discards real
   structural variation rather than representing it.
-- **Action:** decide whether groups should emit *combined* haplotypes (correct, but that is
-  the cartesian product again) or whether long/overlapping variants should be split into
-  separate symbols. Until then, document the behaviour and keep publishing both the filtered
-  and unfiltered datasets.
+- **Action (2026-08-06, settled 2026-10-01 above):** decide whether groups should emit
+  *combined* haplotypes or whether long/overlapping variants should be split into separate
+  symbols. Combined haplotypes turned out *not* to be the cartesian product — only observed
+  combinations are emitted, bounded by the number of copies.
 
 ### Sources stay sample-level — **decided 2026-08-30, won't fix**
 

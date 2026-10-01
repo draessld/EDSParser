@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
         size_t block_size;
         bool edz_flag = false;
         bool keep_eds_flag = false;
+        bool split_groups_flag = false;
 
         po::options_description desc("Transform VCF (Variant Call Format) to EDS/l-EDS");
         desc.add_options()
@@ -49,7 +50,8 @@ int main(int argc, char** argv) {
             ("context-length,l", po::value<Length>(&context_length)->default_value(0), "Create l-EDS with minimum context length (0 = regular EDS)")
             ("block-size,b", po::value<size_t>(&block_size)->default_value(10000000), "Genomic window size in bases for block processing (default: 10M, 0 = load all)")
             ("edz,z", po::bool_switch(&edz_flag), "Write sources in binary EDZ format instead of text SEDS (EDS mode only; ignored with -l, see WHY TWO-STAGE FOR l-EDS)")
-            ("keep-eds", po::bool_switch(&keep_eds_flag), "With -l, also write the intermediate EDS/SEDS (the VCF→EDS stage output) to <base>.eds/<base>.seds instead of discarding them (no-op without -l)");
+            ("keep-eds", po::bool_switch(&keep_eds_flag), "With -l, also write the intermediate EDS/SEDS (the VCF→EDS stage output) to <base>.eds/<base>.seds instead of discarding them (no-op without -l)")
+            ("split-groups", po::bool_switch(&split_groups_flag), "Emit each group of overlapping records as one symbol per atomic segment of its span instead of one symbol of full-span haplotypes. Same genomes (LINEAR), same source partition, much smaller EDS when long deletions overlap other variants; see OVERLAPPING RECORDS");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -84,6 +86,19 @@ int main(int argc, char** argv) {
             std::cout << "  Sample-level tracking: Each sample contributes to one path.\n";
             std::cout << "  Path IDs are 1-indexed, matching sample order in VCF.\n";
             std::cout << "  Diploid samples contribute to a single path.\n\n";
+            std::cout << "OVERLAPPING RECORDS:\n";
+            std::cout << "  Records whose REF spans overlap form one group. By default a group is\n";
+            std::cout << "  one symbol whose alternatives are the distinct haplotypes samples carry\n";
+            std::cout << "  across the whole span. A long deletion makes that span long, so every\n";
+            std::cout << "  SNP combination inside it is spelled out at full length.\n";
+            std::cout << "  --split-groups cuts the span at every record boundary instead and emits\n";
+            std::cout << "  one symbol per segment (REF, the ALT starting there, or empty inside a\n";
+            std::cout << "  carried deletion). Each sample still sits in exactly one alternative per\n";
+            std::cout << "  symbol, so LINEAR search reads the same genomes; CARTESIAN admits more\n";
+            std::cout << "  recombinations. With -l the l-EDS merge re-joins the segments, so the\n";
+            std::cout << "  l-EDS is the same size either way; the saving is in the EDS stage.\n";
+            std::cout << "  Feed a split EDS to eds2leds only WITH its sources (-s): without them\n";
+            std::cout << "  the re-join is a cartesian product and does not finish on real panels.\n\n";
             std::cout << "EXAMPLES:\n";
             std::cout << "  # Basic transformation (VCF → EDS):\n";
             std::cout << "  vcf2eds -i variants.vcf -r reference.fa\n";
@@ -270,9 +285,9 @@ int main(int argc, char** argv) {
             if (create_leds) {
                 const std::filesystem::path* keep_eds  = keep_eds_flag ? &kept_eds_path  : nullptr;
                 const std::filesystem::path* keep_seds = keep_eds_flag ? &kept_seds_path : nullptr;
-                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size, keep_eds, keep_seds);
+                edsparser::parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_in, eds_out, seds_out, context_length, &stats, block_size, keep_eds, keep_seds, split_groups_flag);
             } else {
-                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format);
+                edsparser::parse_vcf_to_eds_streaming(vcf_stream, fasta_in, eds_out, seds_out, &stats, block_size, seds_format, split_groups_flag);
             }
         }
 

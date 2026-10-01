@@ -898,6 +898,199 @@ void test_fixed_variant_is_common_text() {
     std::cout << "  PASS" << std::endl;
 }
 
+// ---------------------------------------------------------------------------
+// --split-groups (TODO 1a)
+// ---------------------------------------------------------------------------
+
+// Every symbol of an EDS or l-EDS string, braced or bare (compact l-EDS output
+// writes common text without braces).
+static std::vector<std::vector<std::string>> all_symbols(const std::string& eds_str) {
+    std::vector<std::vector<std::string>> out;
+    size_t i = 0;
+    while (i < eds_str.size()) {
+        if (eds_str[i] == '{') {
+            const size_t j = eds_str.find('}', i);
+            std::vector<std::string> alts(1);
+            for (size_t k = i + 1; k < j; k++) {
+                if (eds_str[k] == ',') alts.emplace_back();
+                else                   alts.back() += eds_str[k];
+            }
+            out.push_back(std::move(alts));
+            i = j + 1;
+        } else {
+            const size_t j = std::min(eds_str.find('{', i), eds_str.size());
+            out.push_back({eds_str.substr(i, j - i)});
+            i = j;
+        }
+    }
+    return out;
+}
+
+// A dense SEDS ends in a 20-byte binary "SEDN" trailer, whose bytes may happen to
+// be '{'. Strip it before scanning for entries.
+static std::string strip_seds_trailer(const std::string& seds_str) {
+    if (seds_str.size() >= 20 && seds_str.compare(seds_str.size() - 20, 4, "SEDN") == 0)
+        return seds_str.substr(0, seds_str.size() - 20);
+    return seds_str;
+}
+
+// The genome each of n_paths haploid paths spells, asserting on the way that the
+// sources partition the paths at every symbol: each path in exactly one string.
+static std::vector<std::string> spell_paths(const std::string& eds_str,
+                                            const std::string& seds_str, int n_paths) {
+    const auto symbols = all_symbols(eds_str);
+    const auto sets    = seds_sets(strip_seds_trailer(seds_str), n_paths);
+    size_t total = 0;
+    for (const auto& s : symbols) total += s.size();
+    assert(sets.size() == total && "one source entry per EDS string");
+
+    std::vector<std::string> genome(n_paths + 1);
+    size_t k = 0;
+    for (const auto& alts : symbols) {
+        std::vector<int> hits(n_paths + 1, 0);
+        for (const auto& alt : alts) {
+            for (int p : sets[k]) { genome[p] += alt; hits[p]++; }
+            k++;
+        }
+        for (int p = 1; p <= n_paths; p++)
+            assert(hits[p] == 1 && "a path sits in no string or in two strings of one symbol");
+    }
+    return genome;
+}
+
+static size_t degenerate_chars(const std::string& eds_str) {
+    size_t n = 0;
+    for (const auto& alts : all_symbols(eds_str))
+        if (alts.size() > 1) for (const auto& a : alts) n += a.size();
+    return n;
+}
+
+void test_split_groups_partition() {
+    std::cout << "Test 19: --split-groups on colliding records..." << std::endl;
+
+    std::stringstream vcf_w(PARTITION_VCF), fa_w(PARTITION_FA);
+    VCFStats st_w;
+    auto [eds_w, seds_w] = parse_vcf_to_eds_streaming_str(vcf_w, fa_w, &st_w);
+
+    std::stringstream vcf_s(PARTITION_VCF), fa_s(PARTITION_FA);
+    VCFStats st_s;
+    auto [eds_s, seds_s] = parse_vcf_to_eds_streaming_str(vcf_s, fa_s, &st_s,
+                                                          10000000, /*split_groups=*/true);
+    std::cout << "  whole-span: " << eds_w << std::endl;
+    std::cout << "  split:      " << eds_s << std::endl;
+
+    // 9..11 is cut at 9, 10, 11: [A] is common (S1's deletion keeps its anchor),
+    // [C] is deleted by S1 only, [G] is S1's T, S2/S3's deletion, S4's REF.
+    assert(eds_s == "{ACGT}{A,T,AGG}{CGTA}{C,}{G,,T}{TACGTACGT}");
+    assert(spell_paths(eds_s, seds_s, 4) == spell_paths(eds_w, seds_w, 4) &&
+           "split mode must spell the same genomes");
+    assert(st_s.overlap_conflicts == 1 && st_w.overlap_conflicts == 1);
+    std::cout << "  PASS" << std::endl;
+}
+
+// A 21 bp deletion carried by S1 over three SNPs the others carry: the shape
+// that made tb_p500 one 118 kb symbol of 348 full-span haplotypes.
+const std::string LONGDEL_FA = ">chr1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n";
+const std::string LONGDEL_VCF =
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\tS4\tS5\n"
+    "chr1\t5\t.\tACGTACGTACGTACGTACGTA\tA\t99\tPASS\t.\tGT\t1\t0\t0\t0\t0\n"
+    "chr1\t10\t.\tC\tG\t99\tPASS\t.\tGT\t0\t1\t0\t0\t1\n"
+    "chr1\t15\t.\tG\tT\t99\tPASS\t.\tGT\t0\t0\t1\t0\t0\n"
+    "chr1\t20\t.\tT\tA\t99\tPASS\t.\tGT\t0\t0\t0\t1\t1\n";
+
+void test_split_groups_long_deletion() {
+    std::cout << "Test 20: --split-groups keeps a long deletion from copying the span..." << std::endl;
+
+    std::stringstream vcf_w(LONGDEL_VCF), fa_w(LONGDEL_FA);
+    auto [eds_w, seds_w] = parse_vcf_to_eds_streaming_str(vcf_w, fa_w);
+    std::stringstream vcf_s(LONGDEL_VCF), fa_s(LONGDEL_FA);
+    auto [eds_s, seds_s] = parse_vcf_to_eds_streaming_str(vcf_s, fa_s, nullptr,
+                                                          10000000, /*split_groups=*/true);
+    std::cout << "  whole-span: " << eds_w << std::endl;
+    std::cout << "  split:      " << eds_s << std::endl;
+
+    const auto g_w = spell_paths(eds_w, seds_w, 5);
+    assert(spell_paths(eds_s, seds_s, 5) == g_w && "split mode must spell the same genomes");
+    assert(g_w[1] == "ACGTACGTACGTACGTACGT" && "S1 lost 20 bp");
+
+    // Whole-span: five distinct haplotypes, four of them the full 21 bp. Split:
+    // the 21 bp span once, plus S1's one-base ALT and the three SNP ALTs.
+    assert(degenerate_chars(eds_w) == 1 + 4 * 21);
+    assert(degenerate_chars(eds_s) == 21 + 1 + 3);
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_split_groups_through_leds() {
+    std::cout << "Test 21: --split-groups through the l-EDS pipeline..." << std::endl;
+
+    for (size_t l : {3, 5, 10}) {
+        std::string leds[2], seds[2];
+        for (int split = 0; split < 2; split++) {
+            std::stringstream vcf(LONGDEL_VCF), fa(LONGDEL_FA);
+            std::ostringstream leds_out, seds_out;
+            parse_vcf_to_leds_streaming_direct(vcf, fa, leds_out, seds_out, l, nullptr,
+                                               10000000, nullptr, nullptr, split == 1);
+            leds[split] = leds_out.str();
+            seds[split] = seds_out.str();
+        }
+        std::cout << "  l=" << l << "  whole-span: " << leds[0] << std::endl;
+        std::cout << "  l=" << l << "  split:      " << leds[1] << std::endl;
+        // The merge re-joins the segments (no common text lies between them),
+        // so the l-EDS must spell the same genomes either way.
+        assert(spell_paths(leds[1], seds[1], 5) == spell_paths(leds[0], seds[0], 5));
+    }
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_split_groups_without_genotypes() {
+    std::cout << "Test 22: --split-groups falls back to whole-span without genotypes..." << std::endl;
+
+    const std::string vcf_txt =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t3\t.\tGT\tG\t.\tPASS\t.\n"
+        "chr1\t4\t.\tT\tA\t.\tPASS\t.\n";
+    std::string out[2], src[2];
+    for (int split = 0; split < 2; split++) {
+        std::stringstream vcf(vcf_txt), fa(">chr1\nACGTACGTAC\n");
+        auto [e, s] = parse_vcf_to_eds_streaming_str(vcf, fa, nullptr, 10000000, split == 1);
+        out[split] = e;
+        src[split] = s;
+    }
+    std::cout << "  EDS: " << out[1] << std::endl;
+    // No samples means nothing to partition: every single-record haplotype with
+    // universal sources, exactly as whole-span mode emits it.
+    assert(out[0] == out[1] && src[0] == src[1]);
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_same_pos_conflict_keeps_file_order() {
+    std::cout << "Test 23: same-POS conflicting calls keep the first record in file order..." << std::endl;
+
+    // 40 records at one POS, all carried by S1. One copy cannot carry more than
+    // one, so the first in file order applies and 39 calls are counted as
+    // conflicts. The block sort used to be std::sort, which may reorder equal
+    // positions once a block holds more than a handful of records, so which one
+    // survived depended on what else was in the block (on tb_p500, on -b).
+    std::string vcf_txt =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n";
+    for (int i = 0; i < 40; i++)
+        vcf_txt += "chr1\t5\t.\tA\tA" + std::string(i + 1, 'C') + "\t99\tPASS\t.\tGT\t1\t0\n";
+    const std::string ref = "ACGTACGTACGTACGTACGT";
+    for (int split = 0; split < 2; split++) {
+        std::stringstream vcf(vcf_txt), fa(PARTITION_FA);
+        VCFStats st;
+        auto [e, s] = parse_vcf_to_eds_streaming_str(vcf, fa, &st, 10000000, split == 1);
+        const auto g = spell_paths(e, s, 2);
+        assert(g[1] == ref.substr(0, 5) + "C" + ref.substr(5) && "S1 carries the first record");
+        assert(g[2] == ref && "S2 is reference");
+        assert(st.overlap_conflicts == 39);
+    }
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -920,6 +1113,11 @@ int main() {
         test_ref_mismatch_detection();
         test_grouping_keeps_partition();
         test_fixed_variant_is_common_text();
+        test_split_groups_partition();
+        test_split_groups_long_deletion();
+        test_split_groups_through_leds();
+        test_split_groups_without_genotypes();
+        test_same_pos_conflict_keeps_file_order();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;
