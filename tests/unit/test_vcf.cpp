@@ -1135,6 +1135,31 @@ void test_single_sample_universal_sources() {
 }
 
 // ---------------------------------------------------------------------------
+// --split-groups: a segment every sample spells is common text
+// ---------------------------------------------------------------------------
+void test_split_groups_common_segment() {
+    std::cout << "Test 25: --split-groups turns a segment every sample spells into common text..." << std::endl;
+    // S1, S2 delete CGT after the A at 5; S3 has C>G at 6. Cut at 5|6|7..8, the
+    // first segment is "A" for everybody (the deletion keeps its anchor), so it
+    // joins the reference run instead of becoming a one-alternative symbol.
+    const std::string vcf_txt =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\n"
+        "chr1\t5\t.\tACGT\tA\t99\tPASS\t.\tGT\t1\t1\t0\n"
+        "chr1\t6\t.\tC\tG\t99\tPASS\t.\tGT\t0\t0\t1\n";
+    std::stringstream vcf_w(vcf_txt), fa_w(PARTITION_FA);
+    auto [eds_w, seds_w] = parse_vcf_to_eds_streaming_str(vcf_w, fa_w);
+    std::stringstream vcf_s(vcf_txt), fa_s(PARTITION_FA);
+    auto [eds_s, seds_s] = parse_vcf_to_eds_streaming_str(vcf_s, fa_s, nullptr, 10000000,
+                                                          /*split_groups=*/true);
+    std::cout << "  whole-span: " << eds_w << std::endl;
+    std::cout << "  split:      " << eds_s << std::endl;
+    assert(eds_s == "{ACGTA}{,G}{GT,}{ACGTACGTACGT}");
+    assert(spell_paths(eds_s, seds_s, 3) == spell_paths(eds_w, seds_w, 3));
+    std::cout << "  PASS" << std::endl;
+}
+
+// ---------------------------------------------------------------------------
 // Divergence from `bcftools consensus` at overlapping records
 // ---------------------------------------------------------------------------
 const std::string OVL_FA = ">chr1\nACGATTTTGGACGTCTGACTAACGCGTCT\n";
@@ -1262,6 +1287,7 @@ int main() {
         test_split_groups_without_genotypes();
         test_same_pos_conflict_keeps_file_order();
         test_single_sample_universal_sources();
+        test_split_groups_common_segment();
         test_overlap_divergence_detected();
         test_overlap_divergence_no_false_alarm();
 

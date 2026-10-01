@@ -22,9 +22,14 @@
 //       --block-size values.
 //   P4  msa2eds: each MSA row with gaps removed is the genome its path spells,
 //       through the EDS and through the direct MSA -> l-EDS output.
-//   P5  vcf2eds on haploid VCFs: each sample's genome equals `bcftools
-//       consensus` for that sample (and an in-test model of vcf2eds's documented
-//       overlap rule), through the EDS and through the direct VCF -> l-EDS output.
+//   P5  vcf2eds on haploid VCFs, whole-span and --split-groups: each sample's
+//       genome equals an in-test model of vcf2eds's documented overlap rule,
+//       through the EDS and through the direct VCF -> l-EDS output; both modes
+//       give the same genomes, partition the samples and leave no degenerate
+//       symbol whose alternative every sample spells. Against `bcftools
+//       consensus`: a sample the overlap-divergence check leaves silent must
+//       match it exactly, and a sample it flags must differ (and
+//       --strict-overlaps refuses exactly when something is flagged).
 //   P6  Parser round trips: EDS text -> parse -> save -> parse is the identity;
 //       sources written in hand-varied SEDS encodings -> load -> save_as every
 //       format -> load preserve every set.
@@ -1085,62 +1090,12 @@ std::string model_genome(const VcfCase& c, int s) {
     return out + c.ref.substr(cur);
 }
 
-// Does this sample have calls (REF or ALT) at two records that overlap? Then
-// bcftools consensus and vcf2eds legitimately differ (see the report): bcftools
-// lets an earlier REF call block a later ALT, and lets an insertion follow a
-// SNP at the same position.
-bool touched_by_overlap(const VcfCase& c, int s) {
-    for (size_t i = 0; i < c.recs.size(); ++i)
-        for (size_t j = i + 1; j < c.recs.size(); ++j)
-            if (c.recs[i].gt[s] >= 0 && c.recs[j].gt[s] >= 0 && overlap(c.recs[i], c.recs[j]))
-                return true;
-    return false;
-}
-
-// What `bcftools consensus` 1.19 does instead, as observed (consensus.c,
-// apply_variant): any record the sample has a call at — REF included, missing
-// excluded — freezes the reference up to the end of its REF span, and a later
-// record starting inside the frozen span is skipped, except an insertion
-// starting exactly on its last base (unless the previous record applied was an
-// insertion too). Used only to explain divergences, never to judge vcf2eds.
-std::optional<std::string> bcftools_model_genome(const VcfCase& c, int s) {
-    std::string out;
-    size_t cur = 0;        // 0-based: reference consumed up to here
-    size_t frz = 0;        // 1-based last frozen position, 0 = none
-    bool prev_ins = false;
-    for (auto& r : c.recs) {
-        int g = r.gt[s];
-        if (g < 0) continue;
-        bool is_ins = g > 0 && r.alts[g - 1].size() > r.ref.size();
-        // htslib calls it an indel only when the alleles share the padding base
-        bool is_indel = g > 0 && r.alts[g - 1].size() != r.ref.size() &&
-                        r.alts[g - 1][0] == r.ref[0];
-        if (r.pos <= frz) {
-            if (!(r.pos == frz && is_indel && !prev_ins)) continue;
-            // an indel stacked on the previous record's last base: its padding
-            // base is already written, the rest replaces what follows
-            const std::string& a = r.alts[g - 1];
-            out += a.substr(1);
-            cur = std::max(cur, r.pos - 1 + r.ref.size());
-            frz = std::max(frz, r.pos + r.ref.size() - 1);
-            prev_ins = is_ins;
-            continue;
-        }
-        out += c.ref.substr(cur, r.pos - 1 - cur);
-        out += g > 0 ? r.alts[g - 1] : r.ref;
-        cur = r.pos - 1 + r.ref.size();
-        frz = r.pos + r.ref.size() - 1;
-        prev_ins = is_ins;
-    }
-    return out + c.ref.substr(cur);
-}
-
 std::string g_bcftools;
-size_t g_bcftools_unexplained = 0;   // divergences the bcftools model does not reproduce
-std::string g_unexplained_example;
-size_t g_bcftools_divergences = 0;   // overlap-touched samples where bcftools differs
-size_t g_bcftools_compared = 0;
+size_t g_bcftools_compared = 0;      // sample genomes compared with bcftools consensus
+size_t g_bcftools_divergences = 0;   // ... that differ (each one flagged by vcf2eds, or a failure)
 std::string g_divergence_example;
+size_t g_flagged_samples = 0;        // samples vcf2eds's overlap check flagged, over all cases
+std::string g_unused_example;
 
 std::string mut_allele(Rng& r, const std::string& not_this, int lo, int hi) {
     for (int t = 0; t < 50; ++t) {
@@ -1237,116 +1192,176 @@ bool run_bcftools(const fs::path& dir, const std::vector<int>& samples,
     return true;
 }
 
+// One vcf2eds run (whole-span or --split-groups) checked against the model:
+// identical across --block-size, sources partition the samples, canonical
+// form, every sample's genome equals the documented overlap rule, through the
+// EDS and the direct VCF -> l-EDS output. Returns the spellings and the
+// samples the overlap check flagged.
+Result check_vcf_mode(const VcfCase& c, const fs::path& dir, bool split,
+                      std::vector<std::string>& genomes, std::set<int>& flagged) {
+    const int S = c.S;
+    const std::string mode = split ? "vcf2eds-split" : "vcf2eds";
+    std::string base_eds, base_seds;
+    std::vector<Sym> syms;
+    std::vector<std::vector<std::set<int>>> src;
+    for (int pass = 0; pass < 2; ++pass) {
+        size_t block = pass == 0 ? 0 : c.block;
+        std::string ext = c.fmt >= 2 ? ".edz" : ".seds";
+        std::string stem = (split ? "split" : "out") + std::to_string(pass);
+        fs::path eo = dir / (stem + ".eds");
+        fs::path so = dir / (stem + ext);
+        VCFStats st;
+        try {
+            Silence quiet;
+            std::istringstream vin(vcf_text(c));
+            std::ifstream fin(dir / "ref.fa");
+            std::ofstream e(eo), s(so, std::ios::binary);
+            parse_vcf_to_eds_streaming(vin, fin, e, s, &st, block, vcf_fmt(c.fmt), split);
+        } catch (const std::exception& e) {
+            return fail(mode + "/exception", e.what());
+        }
+        std::set<int> fl;
+        for (size_t i : st.overlap_divergent_samples) fl.insert(static_cast<int>(i));
+        if (pass == 0) {
+            flagged = fl;
+            if ((st.overlap_divergent_copies == 0) != fl.empty() ||
+                st.overlap_divergence_examples.size() !=
+                    std::min<size_t>(st.overlap_divergent_copies, 5))
+                return fail(mode + "/overlap-stats", "divergence counters disagree with each other");
+            base_eds = slurp(eo); base_seds = slurp(so);
+            Loaded L;
+            try {
+                if (Result r = load_with_sources(eo, so, L, mode)) return r;
+            } catch (const std::exception& e) {
+                return fail(mode + "/load-exception", e.what());
+            }
+            if (Result r = check_sources_shape(L, S, true, mode)) return r;
+            if (Result r = check_leds_shape(L.syms, 0, mode)) return r;  // canonical form only
+            // Text every sample spells is common text, not a one-sided symbol
+            // (TODO 0c; for split mode, a segment every copy spells the same).
+            for (size_t i = 0; i < L.syms.size(); ++i)
+                for (size_t a = 0; a < L.syms[i].size(); ++a)
+                    if (L.syms[i].size() > 1 && L.src[i][a].size() == static_cast<size_t>(S))
+                        return fail(mode + "/universal-alternative",
+                                    "symbol " + std::to_string(i) + " is degenerate but every "
+                                    "sample spells \"" + L.syms[i][a] + "\"");
+            syms = L.syms; src = L.src;
+        } else if (block != 0) {
+            if (slurp(eo) != base_eds)
+                return fail(mode + "-block/eds-bytes", "EDS differs between block 0 and block " +
+                                                            std::to_string(block));
+            if (slurp(so) != base_seds)
+                return fail(mode + "-block/seds-bytes", "sources differ between block 0 and block " +
+                                                             std::to_string(block));
+            if (fl != flagged)
+                return fail(mode + "-block/overlap-flags", "overlap check flags different samples "
+                                                            "at block " + std::to_string(block));
+        }
+    }
+    genomes.assign(S, "");
+    for (int s = 0; s < S; ++s) {
+        auto got = spell(syms, src, s + 1);
+        std::string want = model_genome(c, s);
+        if (!got || got->size() != 1 || *got->begin() != want)
+            return fail(mode + "/model",
+                        "S" + std::to_string(s + 1) + " should be \"" + want + "\" but spells " +
+                            (got ? describe_spellings(*got) : std::string("(too many)")));
+        genomes[s] = want;
+    }
+    // direct VCF -> l-EDS
+    const std::string ltag = split ? "vcf2leds-split" : "vcf2leds";
+    Loaded L;
+    try {
+        Silence quiet;
+        {
+            std::istringstream vin(vcf_text(c));
+            std::ifstream fin(dir / "ref.fa");
+            std::ofstream e(dir / "out.leds"), so(dir / "out.lseds");
+            VCFStats st;
+            parse_vcf_to_leds_streaming_direct(vin, fin, e, so, c.l, &st, c.block, nullptr,
+                                               nullptr, split);
+        }
+        if (Result r = load_with_sources(dir / "out.leds", dir / "out.lseds", L, ltag)) return r;
+    } catch (const std::exception& e) {
+        return fail(ltag + "/exception", e.what());
+    }
+    if (Result r = check_sources_shape(L, S, true, ltag)) return r;
+    if (Result r = check_leds_shape(L.syms, c.l, ltag)) return r;
+    for (int s = 0; s < S; ++s) {
+        auto got = spell(L.syms, L.src, s + 1);
+        if (!got || got->size() != 1 || *got->begin() != genomes[s])
+            return fail(ltag + "/model",
+                        "S" + std::to_string(s + 1) + " should be \"" + genomes[s] + "\" but spells " +
+                            (got ? describe_spellings(*got) : std::string("(too many)")));
+    }
+    return std::nullopt;
+}
+
 // `with_bcftools` is off while minimising unless the failure is a bcftools one.
 Result check_vcf(const VcfCase& c, bool with_bcftools) {
     fs::path dir = scratch_dir();
     spit(dir / "ref.fa", fasta_text(c));
     spit(dir / "in.vcf", vcf_text(c));
     const int S = c.S;
-    std::string base_eds, base_seds;
-    std::vector<Sym> syms;
-    std::vector<std::vector<std::set<int>>> src;
-    // stage 1: VCF -> EDS at block 0 (whole) and at c.block; must be identical
-    for (int pass = 0; pass < 2; ++pass) {
-        size_t block = pass == 0 ? 0 : c.block;
-        std::string ext = c.fmt >= 2 ? ".edz" : ".seds";
-        fs::path eo = dir / ("out" + std::to_string(pass) + ".eds");
-        fs::path so = dir / ("out" + std::to_string(pass) + ext);
+    std::vector<std::string> whole, split;
+    std::set<int> flagged, flagged_split;
+    if (Result r = check_vcf_mode(c, dir, false, whole, flagged)) return r;
+    if (Result r = check_vcf_mode(c, dir, true, split, flagged_split)) return r;
+    if (flagged_split != flagged)
+        return fail("vcf2eds-split/overlap-flags",
+                    "--split-groups flags samples {" + join_ints(flagged_split) +
+                        "}, whole-span {" + join_ints(flagged) + "}");
+    // --strict-overlaps refuses exactly when something was flagged.
+    {
+        bool threw = false;
         try {
             Silence quiet;
             std::istringstream vin(vcf_text(c));
             std::ifstream fin(dir / "ref.fa");
-            std::ofstream e(eo), s(so, std::ios::binary);
-            VCFStats st;
-            parse_vcf_to_eds_streaming(vin, fin, e, s, &st, block, vcf_fmt(c.fmt));
+            std::ostringstream e, s;
+            parse_vcf_to_eds_streaming(vin, fin, e, s, nullptr, 0, Sources::Format::SEDS, false,
+                                       /*strict_overlaps=*/true);
+        } catch (const OverlapDivergenceError&) {
+            threw = true;
         } catch (const std::exception& e) {
-            return fail("vcf2eds/exception", e.what());
+            return fail("vcf2eds-strict/exception", e.what());
         }
-        if (pass == 0) {
-            base_eds = slurp(eo); base_seds = slurp(so);
-            Loaded L;
-            try {
-                if (Result r = load_with_sources(eo, so, L, "vcf2eds")) return r;
-            } catch (const std::exception& e) {
-                return fail("vcf2eds/load-exception", e.what());
-            }
-            if (Result r = check_sources_shape(L, S, true, "vcf2eds")) return r;
-            if (Result r = check_leds_shape(L.syms, 0, "vcf2eds")) return r;  // canonical form only
-            syms = L.syms; src = L.src;
-        } else if (block != 0) {
-            if (slurp(eo) != base_eds)
-                return fail("vcf2eds-block/eds-bytes", "EDS differs between block 0 and block " +
-                                                            std::to_string(block));
-            if (slurp(so) != base_seds)
-                return fail("vcf2eds-block/seds-bytes", "sources differ between block 0 and block " +
-                                                             std::to_string(block));
-        }
-    }
-    for (int s = 0; s < S; ++s) {
-        auto got = spell(syms, src, s + 1);
-        std::string want = model_genome(c, s);
-        if (!got || got->size() != 1 || *got->begin() != want)
-            return fail("vcf2eds/model",
-                        "S" + std::to_string(s + 1) + " should be \"" + want + "\" but spells " +
-                            (got ? describe_spellings(*got) : std::string("(too many)")));
-    }
-    // direct VCF -> l-EDS
-    {
-        Loaded L;
-        try {
-            Silence quiet;
-            {
-                std::istringstream vin(vcf_text(c));
-                std::ifstream fin(dir / "ref.fa");
-                std::ofstream e(dir / "out.leds"), so(dir / "out.lseds");
-                VCFStats st;
-                parse_vcf_to_leds_streaming_direct(vin, fin, e, so, c.l, &st, c.block);
-            }
-            if (Result r = load_with_sources(dir / "out.leds", dir / "out.lseds", L, "vcf2leds")) return r;
-        } catch (const std::exception& e) {
-            return fail("vcf2leds/exception", e.what());
-        }
-        if (Result r = check_sources_shape(L, S, true, "vcf2leds")) return r;
-        if (Result r = check_leds_shape(L.syms, c.l, "vcf2leds")) return r;
-        for (int s = 0; s < S; ++s) {
-            auto got = spell(L.syms, L.src, s + 1);
-            std::string want = model_genome(c, s);
-            if (!got || got->size() != 1 || *got->begin() != want)
-                return fail("vcf2leds/model",
-                            "S" + std::to_string(s + 1) + " should be \"" + want + "\" but spells " +
-                                (got ? describe_spellings(*got) : std::string("(too many)")));
-        }
+        if (threw != !flagged.empty())
+            return fail("vcf2eds-strict/refusal", std::string("--strict-overlaps ") +
+                                                      (threw ? "refused" : "accepted") +
+                                                      " a VCF the check " +
+                                                      (flagged.empty() ? "passed" : "flagged"));
     }
     if (!with_bcftools || g_bcftools.empty()) return std::nullopt;
     // Every sample of a small panel; four spread across a large one (each
-    // sample is one bcftools process).
-    std::vector<int> picked;
-    if (S <= 6) for (int s = 0; s < S; ++s) picked.push_back(s);
-    else picked = {0, S / 3, (2 * S) / 3, S - 1};
+    // sample is one bcftools process), always including the flagged ones.
+    std::set<int> pick_set;
+    if (S <= 6) for (int s = 0; s < S; ++s) pick_set.insert(s);
+    else pick_set = {0, S / 3, (2 * S) / 3, S - 1};
+    for (int s : flagged) if (pick_set.size() < 8) pick_set.insert(s);
+    std::vector<int> picked(pick_set.begin(), pick_set.end());
     std::vector<std::string> cons_list;
     if (!run_bcftools(dir, picked, cons_list))
         return fail("bcftools/failed", "bcftools could not process the case");
-    std::map<int, std::string> cons;
-    for (size_t i = 0; i < picked.size(); ++i) cons[picked[i]] = cons_list[i];
-    for (int s : picked) {
-        std::string mine = *spell(syms, src, s + 1)->begin();
+    for (size_t i = 0; i < picked.size(); ++i) {
+        const int s = picked[i];
+        const std::string& cons = cons_list[i];
         ++g_bcftools_compared;
-        if (mine == cons[s]) continue;
-        if (touched_by_overlap(c, s)) {
-            auto bm = bcftools_model_genome(c, s);
-            if (!bm || *bm != cons[s]) {
-                if (g_bcftools_unexplained++ == 0)
-                    g_unexplained_example = "S" + std::to_string(s + 1) + ": vcf2eds \"" + mine +
-                                            "\", bcftools \"" + cons[s] + "\", bcftools model \"" +
-                                            (bm ? *bm : std::string("?")) + "\"\n" + vcf_text(c);
-            }
-            if (g_bcftools_divergences++ == 0)
-                g_divergence_example = "S" + std::to_string(s + 1) + ": vcf2eds \"" + mine +
-                                       "\", bcftools \"" + cons[s] + "\"\n" + vcf_text(c);
-            continue;
-        }
-        return fail("bcftools/genome", "S" + std::to_string(s + 1) + ": vcf2eds spells \"" + mine +
-                                           "\", bcftools consensus gives \"" + cons[s] + "\"");
+        const bool differs = whole[s] != cons;
+        const bool is_flagged = flagged.count(s) > 0;
+        if (is_flagged) ++g_flagged_samples;
+        if (differs && g_bcftools_divergences++ == 0)
+            g_divergence_example = "S" + std::to_string(s + 1) + ": vcf2eds \"" + whole[s] +
+                                   "\", bcftools \"" + cons + "\"\n" + vcf_text(c);
+        // Silent means equal to bcftools; flagged means different. Exactly.
+        if (differs && !is_flagged)
+            return fail("bcftools/genome", "S" + std::to_string(s + 1) + ": vcf2eds spells \"" +
+                                               whole[s] + "\", bcftools consensus gives \"" + cons +
+                                               "\", and the overlap check was silent");
+        if (!differs && is_flagged)
+            return fail("bcftools/false-alarm", "S" + std::to_string(s + 1) +
+                                                    " was flagged but vcf2eds and bcftools both "
+                                                    "spell \"" + cons + "\"");
     }
     return std::nullopt;
 }
@@ -1433,8 +1448,8 @@ Result guarded(const std::function<Result()>& f) {
         std::string msg = (r ? "F" : "O") + std::string("\x1f") + (r ? r->kind : "") + "\x1f" +
                           (r ? r->detail : "") + "\x1f" + std::to_string(g_bcftools_compared) +
                           "\x1f" + std::to_string(g_bcftools_divergences) + "\x1f" +
-                          g_divergence_example + "\x1f" + std::to_string(g_bcftools_unexplained) +
-                          "\x1f" + g_unexplained_example;
+                          g_divergence_example + "\x1f" + std::to_string(g_flagged_samples) +
+                          "\x1f" + g_unused_example;
         size_t off = 0;
         while (off < msg.size()) {
             ssize_t w = write(fds[1], msg.data() + off, msg.size() - off);
@@ -1465,8 +1480,8 @@ Result guarded(const std::function<Result()>& f) {
     g_bcftools_compared = std::stoull(parts[3]);
     g_bcftools_divergences = std::stoull(parts[4]);
     g_divergence_example = parts[5];
-    g_bcftools_unexplained = std::stoull(parts[6]);
-    g_unexplained_example = parts[7];
+    g_flagged_samples = std::stoull(parts[6]);
+    g_unused_example = parts[7];
     if (parts[0] == "O") return std::nullopt;
     return Failure{parts[1], parts[2]};
 }
@@ -1571,11 +1586,11 @@ void run_one(const std::string& prop, uint64_t seed) {
             return guarded([&] { return check_vcf(q, needs_bt); });
         };
         size_t saved_div = g_bcftools_divergences, saved_cmp = g_bcftools_compared,
-               saved_unx = g_bcftools_unexplained;
+               saved_flg = g_flagged_samples;
         VcfCase m = minimise<VcfCase>(c, res->kind, chk, shrink_vcf, needs_bt ? 600 : 4000);
         Result mr = chk(m);
         g_bcftools_divergences = saved_div; g_bcftools_compared = saved_cmp;
-        g_bcftools_unexplained = saved_unx;
+        g_flagged_samples = saved_flg;
         report<VcfCase>(prop, seed, *res, c, m, vcf_repro, mr ? *mr : *res);
     } else if (prop == "roundtrip") {
         Panel pn = gen_panel(r, chance(r, 0.5), chance(r, 0.5), 12, 4);
@@ -1638,8 +1653,6 @@ int main() {
                      "(set TRANSFORM_FUZZ_BCFTOOLS). vcf2eds is still checked against the model.\n";
     else
         std::cout << "bcftools: " << g_bcftools << "\n";
-    std::cout << "NOTE: vcf2eds --split-groups is not in this base (branch vcf-group-split); "
-                 "that variant is not exercised.\n";
 
     auto t0 = std::chrono::steady_clock::now();
     if (const char* one = std::getenv("TRANSFORM_FUZZ_CASE")) {
@@ -1676,18 +1689,10 @@ int main() {
         std::cout << "  " << k << ": " << s.cases << " cases, " << s.failures << " failures\n";
     if (!g_bcftools.empty())
         std::cout << "  bcftools: " << g_bcftools_compared << " sample genomes compared; "
-                  << g_bcftools_divergences
-                  << " differ where the sample has calls at overlapping records "
-                     "(documented divergence, not a failure)\n";
-    if (!g_bcftools.empty())
-        std::cout << "  bcftools: " << g_bcftools_divergences - g_bcftools_unexplained
-                  << " of those reproduced by the bcftools overlap model, "
-                  << g_bcftools_unexplained << " not\n";
+                  << g_bcftools_divergences << " differ, every one flagged by vcf2eds's overlap "
+                     "check, and none it flagged agree (" << g_flagged_samples << " flagged)\n";
     if (g_bcftools_divergences && std::getenv("TRANSFORM_FUZZ_VERBOSE"))
         std::cout << "  first divergence:\n" << g_divergence_example;
-    if (g_bcftools_unexplained && std::getenv("TRANSFORM_FUZZ_VERBOSE"))
-        std::cout << "  first divergence the bcftools model does not reproduce:\n"
-                  << g_unexplained_example;
 
     fs::remove_all(g_tmp_root);
     if (g_total_failures) std::cout << "\nFAILED: " << g_total_failures << " failing case(s)\n";
