@@ -7,6 +7,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <unistd.h>
 
 using namespace edsparser;
 
@@ -579,6 +580,69 @@ void test_compact_output_keeps_empty_regular_symbol() {
     pass();
 }
 
+// Regression (found by test_transform_fuzz): when no merge was needed the
+// linear transform copied the input sources file byte for byte, whatever its
+// format, into an output documented as dense text SEDS — an EDZ input gave an
+// ".seds" full of EDZ binary that failed to load ("Unexpected character in
+// sEDS file: E"). And block mode re-printed each slice's entries from
+// read_source(), expanding {1-3} to {1,2,3}, so its sources differed from the
+// whole-file run's. Both now go through copy_range_to_stream().
+void test_untouched_sources_are_written_as_text() {
+    test("Untouched sources: SEDS text from any input format, identical in block mode");
+
+    auto dir = std::filesystem::temp_directory_path() /
+               ("test_merge_srcfmt_" + std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / "in.eds") << "{AAAA}{C,G,T}{AAAA}{C,G}{AAAA}"; }
+    { std::ofstream(dir / "in.seds") << "{0}{1}{2-3}{4}{0}{1-3}{4}{0}"; }
+    auto text = Sources::load(dir / "in.seds");
+    text->set_num_paths(4);
+    text->save_as(dir / "in.edz", Sources::Format::EDZ);
+
+    // l=3: already an l-EDS, zero iterations
+    for (const char* name : {"in.seds", "in.edz"}) {
+        std::filesystem::path in_src = dir / name;
+        {
+            std::ofstream out(dir / "out.leds"), sout(dir / "out.seds");
+            eds_to_leds_linear(dir / "in.eds", out, 3, &in_src, &sout, 1, true);
+        }
+        auto got = Sources::load(dir / "out.seds", Sources::Format::SEDS);
+        assert(got->cardinality() == 8 && got->num_paths() == 4);
+        for (size_t i = 0; i < 8; ++i)
+            assert(got->read_source(i) == text->read_source(i));
+    }
+
+    std::filesystem::remove_all(dir);
+    pass();
+}
+
+void test_block_mode_keeps_source_encoding() {
+    test("Block mode spells untouched source entries as the whole-file run does");
+
+    auto dir = std::filesystem::temp_directory_path() /
+               ("test_merge_blocksrc_" + std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    // l=3: {C,G,T}{A}{C,G} merges; each {AAAA} is a barrier block mode can cut at
+    { std::ofstream(dir / "in.eds") << "{AAAA}{C,G,T}{A}{C,G}{AAAA}{T,G}{AAAA}{C,T}{AAAA}"; }
+    { std::ofstream(dir / "in.seds") << "{0}{1}{2-3}{4}{0}{1-3}{4}{0}{1-3}{4}{0}{1,2}{3,4}{0}"; }
+    std::filesystem::path in_src = dir / "in.seds";
+    std::string whole, block;
+    for (uint64_t bytes : {uint64_t{0}, uint64_t{1}}) {
+        {
+            std::ofstream out(dir / "o.leds"), sout(dir / "o.seds", std::ios::binary);
+            eds_to_leds_blocked(dir / "in.eds", out, 3, &in_src, &sout, bytes, 1, true);
+        }
+        std::ifstream r(dir / "o.seds", std::ios::binary);
+        std::ostringstream ss; ss << r.rdbuf();
+        (bytes ? block : whole) = ss.str();
+    }
+    assert(whole.find("{1-3}{4}") != std::string::npos);  // untouched {T,G}: input spelling kept
+    assert(block == whole);
+
+    std::filesystem::remove_all(dir);
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -766,6 +830,8 @@ int main() {
     test_split_regular_symbols_are_one_context();
     test_leading_split_run_is_measured_whole();
     test_compact_output_keeps_empty_regular_symbol();
+    test_untouched_sources_are_written_as_text();
+    test_block_mode_keeps_source_encoding();
 
     // Edge cases
     test_single_symbol_input();

@@ -1231,11 +1231,25 @@ static void leds_linear_transform(
     output << '\n';
 
     if (phasing_output && has_sources) {
-        std::ifstream final_seds(current_seds_file);
-        if (!final_seds) {
-            throw std::runtime_error("Failed to open final sources file: " + current_seds_file.string());
+        if (iteration == 0) {
+            // Nothing merged, so current_seds_file is still the caller's input,
+            // in whatever format it came: copying its bytes wrote EDZ binary
+            // (or a sparse bitvector, or a trailerless legacy file) into an
+            // output documented as dense text SEDS, which then failed to load.
+            // Write it the way the merge writer writes untouched entries —
+            // copy_range_to_stream() re-serialises any format to SEDS text and
+            // passes text entries through byte for byte — plus the trailer.
+            auto src = eds.get_sources_object();
+            src->copy_range_to_stream(0, src->cardinality(), *phasing_output);
+            Sources::write_seds_dense_finalize(*phasing_output, src->cardinality(),
+                                               src->num_paths());
+        } else {
+            std::ifstream final_seds(current_seds_file);
+            if (!final_seds) {
+                throw std::runtime_error("Failed to open final sources file: " + current_seds_file.string());
+            }
+            *phasing_output << final_seds.rdbuf();
         }
-        *phasing_output << final_seds.rdbuf();
     }
 }
 
@@ -1693,26 +1707,18 @@ namespace {
             throw std::runtime_error("Short read slicing EDS block from " + src.string());
     }
 
-    // Write source entries [begin, end) as a dense text SEDS file. Uses
-    // read_source(), which is format-agnostic, so every input source format
-    // (SEDS/SEDS_SPARSE/EDZ/EDZ_SPARSE/EDZ_COMPRESSED) can feed block mode.
+    // Write source entries [begin, end) as a dense text SEDS file, through
+    // copy_range_to_stream() — the same call the whole-file merge uses for
+    // every entry it leaves untouched. It accepts every input source format
+    // (SEDS/SEDS_SPARSE/EDZ/EDZ_SPARSE/EDZ_COMPRESSED) and passes text entries
+    // through byte for byte, so an untouched entry is spelled identically in
+    // block and whole-file output. (Re-printing read_source() here expanded
+    // ranges such as {1-3} to {1,2,3}, and block output stopped matching.)
     void write_source_slice(const Sources& src, size_t begin, size_t end,
                             const std::filesystem::path& dst) {
-        std::ofstream out(dst);
+        std::ofstream out(dst, std::ios::binary);
         if (!out) throw std::runtime_error("Cannot create block sources file: " + dst.string());
-        std::string buf;
-        buf.reserve(64);
-        for (size_t i = begin; i < end; ++i) {
-            const PathSet ps = src.read_source(i);
-            buf.clear();
-            buf += '{';
-            for (size_t j = 0; j < ps.size(); ++j) {
-                if (j > 0) buf += ',';
-                buf += std::to_string(ps[j]);
-            }
-            buf += '}';
-            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-        }
+        src.copy_range_to_stream(begin, end - begin, out);
         Sources::write_seds_dense_finalize(out, end - begin, src.num_paths());
     }
 
