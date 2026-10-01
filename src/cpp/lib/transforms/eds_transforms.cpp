@@ -108,9 +108,16 @@ namespace {
 
         Length at(size_t p) {
             if (meta_.is_degenerate[p]) return 0;
-            if (p >= run_end_) {           // p starts a run we have not measured yet
-                Length run = 0;
+            if (p >= run_end_) {           // p lies in a run we have not measured yet
+                // p need not be the run's first symbol: needs_merge() never asks
+                // about position 0 (a boundary), so a run starting there is first
+                // queried at 1. Measuring from p then dropped symbol 0 and judged
+                // e.g. {AC}{GT}{A,C} at l=3 as a 2-character context, merging the
+                // leading run into the first degenerate symbol. Measure the whole
+                // run; each run is still walked at most twice.
                 size_t q = p;
+                while (q > 0 && !meta_.is_degenerate[q - 1]) --q;
+                Length run = 0;
                 while (q < n_ && !meta_.is_degenerate[q]) {
                     run += meta_.string_lengths[meta_.cum_set_sizes[q]];
                     ++q;
@@ -265,6 +272,19 @@ namespace {
             for (int id : s) b |= (1ULL << (id - 1));
             return b;
         };
+        // The PathSet path (more than 63 paths) has the same complement trap
+        // the bitset path had before 20d8ff1: intersect_sources() returns
+        // compl(E1) ∩ compl(E2) as {0} + (E1 ∪ E2), a non-empty vector even
+        // when E1 ∪ E2 names every path and the intersection is empty. Such a
+        // combination is carried by no path and must be dropped like any other
+        // empty intersection. Exceptions are sorted and unique.
+        auto excludes_every_path = [np](const PathSet& s) -> bool {
+            if (s.empty() || s[0] != 0 || np == 0) return false;
+            size_t excluded = 0;
+            for (size_t i = 1; i < s.size(); ++i)
+                if (s[i] >= 1 && static_cast<size_t>(s[i]) <= np) ++excluded;
+            return excluded >= np;
+        };
         auto bits_to_set = [universe](uint64_t b) -> PathSet {
             if (b == universe) return {0};
             PathSet s;
@@ -414,7 +434,7 @@ namespace {
                                 new_bits.push_back(isect);
                             } else {
                                 PathSet isect = Sources::intersect_sources(cur_src_sets[m], srcj[j]);
-                                if (isect.empty()) continue;
+                                if (isect.empty() || excludes_every_path(isect)) continue;
                                 new_src.push_back(std::move(isect));
                             }
                         }
@@ -1210,7 +1230,10 @@ static void leds_linear_transform(
 
     for (size_t i = 0; i < eds.length(); ++i) {
         const StringSet sym = eds.read_symbol(i);
-        bool use_brackets = !compact || sym.size() > 1;
+        // An empty regular symbol has no bare spelling: written without
+        // brackets it vanishes, and the output EDS has one string fewer than
+        // its sources. Keep "{}" for it in compact mode.
+        bool use_brackets = !compact || sym.size() != 1 || sym[0].empty();
         if (use_brackets) output << '{';
         for (size_t j = 0; j < sym.size(); ++j) {
             if (j > 0) output << ',';
@@ -1221,11 +1244,25 @@ static void leds_linear_transform(
     output << '\n';
 
     if (phasing_output && has_sources) {
-        std::ifstream final_seds(current_seds_file);
-        if (!final_seds) {
-            throw std::runtime_error("Failed to open final sources file: " + current_seds_file.string());
+        if (iteration == 0) {
+            // Nothing merged, so current_seds_file is still the caller's input,
+            // in whatever format it came: copying its bytes wrote EDZ binary
+            // (or a sparse bitvector, or a trailerless legacy file) into an
+            // output documented as dense text SEDS, which then failed to load.
+            // Write it the way the merge writer writes untouched entries —
+            // copy_range_to_stream() re-serialises any format to SEDS text and
+            // passes text entries through byte for byte — plus the trailer.
+            auto src = eds.get_sources_object();
+            src->copy_range_to_stream(0, src->cardinality(), *phasing_output);
+            Sources::write_seds_dense_finalize(*phasing_output, src->cardinality(),
+                                               src->num_paths());
+        } else {
+            std::ifstream final_seds(current_seds_file);
+            if (!final_seds) {
+                throw std::runtime_error("Failed to open final sources file: " + current_seds_file.string());
+            }
+            *phasing_output << final_seds.rdbuf();
         }
-        *phasing_output << final_seds.rdbuf();
     }
 }
 
@@ -1522,7 +1559,10 @@ void eds_to_leds_cartesian(
     // honoured even when the input was already l-EDS compliant (zero iterations run).
     for (size_t i = 0; i < eds.length(); ++i) {
         const StringSet sym = eds.read_symbol(i);
-        bool use_brackets = !compact || sym.size() > 1;
+        // An empty regular symbol has no bare spelling: written without
+        // brackets it vanishes, and the output EDS has one string fewer than
+        // its sources. Keep "{}" for it in compact mode.
+        bool use_brackets = !compact || sym.size() != 1 || sym[0].empty();
         if (use_brackets) output << '{';
         for (size_t j = 0; j < sym.size(); ++j) {
             if (j > 0) output << ',';
@@ -1680,26 +1720,18 @@ namespace {
             throw std::runtime_error("Short read slicing EDS block from " + src.string());
     }
 
-    // Write source entries [begin, end) as a dense text SEDS file. Uses
-    // read_source(), which is format-agnostic, so every input source format
-    // (SEDS/SEDS_SPARSE/EDZ/EDZ_SPARSE/EDZ_COMPRESSED) can feed block mode.
+    // Write source entries [begin, end) as a dense text SEDS file, through
+    // copy_range_to_stream() — the same call the whole-file merge uses for
+    // every entry it leaves untouched. It accepts every input source format
+    // (SEDS/SEDS_SPARSE/EDZ/EDZ_SPARSE/EDZ_COMPRESSED) and passes text entries
+    // through byte for byte, so an untouched entry is spelled identically in
+    // block and whole-file output. (Re-printing read_source() here expanded
+    // ranges such as {1-3} to {1,2,3}, and block output stopped matching.)
     void write_source_slice(const Sources& src, size_t begin, size_t end,
                             const std::filesystem::path& dst) {
-        std::ofstream out(dst);
+        std::ofstream out(dst, std::ios::binary);
         if (!out) throw std::runtime_error("Cannot create block sources file: " + dst.string());
-        std::string buf;
-        buf.reserve(64);
-        for (size_t i = begin; i < end; ++i) {
-            const PathSet ps = src.read_source(i);
-            buf.clear();
-            buf += '{';
-            for (size_t j = 0; j < ps.size(); ++j) {
-                if (j > 0) buf += ',';
-                buf += std::to_string(ps[j]);
-            }
-            buf += '}';
-            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-        }
+        src.copy_range_to_stream(begin, end - begin, out);
         Sources::write_seds_dense_finalize(out, end - begin, src.num_paths());
     }
 

@@ -52,8 +52,12 @@ static void write_ranges(std::ostream& out, const std::set<int>& ids, bool prefi
 
 static void write_seds_entry(std::ostream& out, const std::set<int>& paths, size_t total_paths) {
     out << '{';
-    if (paths.empty()) {
-        // Should not happen; fall back to universal rather than an empty set
+    if (paths.empty() || paths.count(0)) {
+        // {0} is the universal marker, not path 0: write it as is. Passing it
+        // through the complement branch below treated the marker as a member,
+        // and with a single sample (1 > 1/2) wrote every common symbol as
+        // {0,1} — "all paths except path 1", i.e. carried by nobody.
+        // An empty set should not happen; fall back to universal for it too.
         out << '0';
     } else if (paths.size() > total_paths / 2) {
         // Complement form: {0, exceptions...}

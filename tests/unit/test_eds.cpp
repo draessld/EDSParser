@@ -596,6 +596,19 @@ void test_compact_format_output() {
     std::cout << "PASSED\n";
 }
 
+void test_compact_output_empty_regular_symbol() {
+    std::cout << "Test 23b: Compact output keeps an empty regular symbol... ";
+    // Without brackets an empty regular symbol has no spelling at all and
+    // disappears on reparse (fewer strings than the sources describe).
+    edsparser::EDS eds = create_temp_eds("{}{A,C}{}{GT}");
+    std::stringstream output;
+    eds.save(output, edsparser::EDS::OutputFormat::COMPACT);
+    assert(output.str() == "{}{A,C}{}GT\n");
+    edsparser::EDS back = edsparser::EDS::from_string(output.str());
+    assert(back.length() == 4 && back.cardinality() == 5);
+    std::cout << "PASSED\n";
+}
+
 void test_roundtrip_compact() {
     std::cout << "Test 23: Roundtrip compact format (parse → save → parse)... ";
 
@@ -1745,6 +1758,7 @@ int main() {
         test_compact_format_parsing();
         test_compact_format_output();
         test_roundtrip_compact();
+        test_compact_output_empty_regular_symbol();
         test_save_and_reload_eds_with_sources();
         test_generate_patterns();
         test_generate_patterns_metadata_only();

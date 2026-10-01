@@ -120,6 +120,17 @@ std::pair<MSAMetadata, sdsl::bit_vector> parse_msa_and_build_variant_bv(std::ist
         }
     }
 
+    if (counter == 0 || meta.ref_seq.empty()) {
+        throw std::invalid_argument("MSA contains no aligned sequence");
+    }
+    // B is allocated when the second header is seen. A one-sequence alignment
+    // never sees one, so B stayed empty and the sentinel write below indexed an
+    // empty bit_vector (segfault). With a single sequence every column is
+    // common by definition.
+    if (counter == 1) {
+        B = sdsl::bit_vector(meta.ref_seq.size() + 1, 1);
+    }
+
     // Set sentinel at end (flip last bit)
     B[meta.ref_seq.size()] = B[meta.ref_seq.size() - 1] ^ 1;
 

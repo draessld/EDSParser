@@ -367,6 +367,24 @@ void test_msa_through_counting_streambuf() {
     std::cout << "  ✓ PASSED\n\n";
 }
 
+// Regression (found by test_transform_fuzz): a one-sequence alignment
+// segfaulted. The column bit vector was only allocated when a second header
+// was read, so the sentinel write indexed an empty sdsl::bit_vector. One
+// sequence is a valid (if trivial) MSA: a single common symbol, gaps removed,
+// carried by the one path.
+void test_msa_single_sequence() {
+    std::cout << "Test 9: single-sequence MSA (segfault regression)\n";
+    for (bool leds : {false, true}) {
+        std::istringstream msa_stream(">only\nAC-GT\n");
+        std::ostringstream eds_out, seds_out;
+        if (leds) parse_msa_to_leds_streaming(msa_stream, eds_out, seds_out, 3);
+        else parse_msa_to_eds_streaming(msa_stream, eds_out, seds_out);
+        assert(compare_ignore_whitespace(eds_out.str(), "{ACGT}"));
+        assert(compare_ignore_whitespace(seds_out.str(), "{0}"));
+    }
+    std::cout << "  ✓ PASSED\n\n";
+}
+
 int main() {
     std::cout << "=== MSA Transformation Tests ===\n\n";
 
@@ -379,6 +397,7 @@ int main() {
         test_msa_gap_at_end();
         test_msa_multiple_context_lengths();
         test_msa_through_counting_streambuf();
+        test_msa_single_sequence();
 
         std::cout << "=== All tests PASSED ===\n";
         return 0;

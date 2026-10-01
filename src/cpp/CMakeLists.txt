@@ -205,6 +205,14 @@ add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
 edsparser_test_target(test_integration)
 add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Test: seeded differential fuzzing of every transform against brute-force path
+# expansion (eds2leds linear/cartesian/block, msa2eds, vcf2eds vs bcftools
+# consensus, parser round trips). ~20 s; TRANSFORM_FUZZ_SOAK=<s> for a longer run.
+add_executable(test_transform_fuzz ${TEST_DIR}/test_transform_fuzz.cpp)
+edsparser_test_target(test_transform_fuzz)
+add_test(NAME test_transform_fuzz COMMAND test_transform_fuzz)
+set_tests_properties(test_transform_fuzz PROPERTIES TIMEOUT 300)
+
 # Memory tests. Their input is generated, not committed
 # (tests/stress/generate_quick_data.sh / generate_data.sh), and without it they
 # exit 77, which SKIP_RETURN_CODE makes ctest report as *skipped*. Before

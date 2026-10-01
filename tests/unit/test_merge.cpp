@@ -7,6 +7,8 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <algorithm>
+#include <unistd.h>
 
 using namespace edsparser;
 
@@ -528,6 +530,143 @@ void test_split_regular_symbols_are_one_context() {
     pass();
 }
 
+// Regression (found by test_transform_fuzz): the context-run cursor measured a
+// run from the first position it was asked about. needs_merge() never asks
+// about position 0 (a boundary), so a run starting at 0 was measured from 1 and
+// came out one symbol short. {AC}{GT} is a 4-character leading context, enough
+// for l=3, but was judged as "GT" (2) and merged into {A,C}. Whole-file and
+// --block-size runs then disagreed, since block mode measures the run whole.
+void test_leading_split_run_is_measured_whole() {
+    test("A leading run of regular symbols is measured from its first symbol");
+
+    EDS t = transform_to_leds("{AC}{GT}{A,C}{TTT}{G,T}{A}", 3);
+    assert(t.length() == 5);
+    assert(t.read_symbol(0).size() == 1 && t.read_symbol(0)[0] == "ACGT");
+    assert(t.read_symbol(1).size() == 2);    // {A,C} untouched
+
+    // Same with an empty leading fragment: {A}{} is one 1-character run.
+    EDS e = transform_to_leds("{A}{}{,C}{G}", 1);
+    assert(e.length() == 3);
+    assert(e.read_symbol(0).size() == 1 && e.read_symbol(0)[0] == "A");
+    assert(e.read_symbol(1).size() == 2);
+
+    pass();
+}
+
+// Regression (found by test_transform_fuzz): compact output wrote an empty
+// regular symbol as nothing at all. {} survives the merge wherever it is a
+// boundary context, and without brackets it vanished on reparse, so the l-EDS
+// had one string fewer than its sources and EDS::load(leds, seds) refused the
+// pair (cardinality mismatch); block mode also dropped the wrong symbol when
+// shedding a duplicated empty barrier. It is written "{}" now.
+void test_compact_output_keeps_empty_regular_symbol() {
+    test("Compact output keeps an empty regular symbol as {}");
+
+    for (bool compact : {true, false}) {
+        std::istringstream eds_in("{}{A,C}{GGG}");
+        std::istringstream seds_in("{0}{1}{2}{0}");
+        std::ostringstream out, sout;
+        eds_to_leds_linear(eds_in, out, 2, &seds_in, &sout, 1, compact);
+        assert(out.str() == (compact ? "{}{A,C}GGG\n" : "{}{A,C}{GGG}\n"));
+
+        std::istringstream cin_("{}{A,C}{GGG}");
+        std::ostringstream cout_;
+        eds_to_leds_cartesian(cin_, cout_, 2, 1, compact);
+        assert(cout_.str() == out.str());
+    }
+    // ... and the pair loads: 4 strings, 4 sources
+    EDS t = transform_to_leds_with_sources("{}{A,C}{GGG}", "{0}{1}{2}{0}", 2);
+    assert(t.length() == 3 && t.cardinality() == 4);
+
+    pass();
+}
+
+// Regression (found by test_transform_fuzz): when no merge was needed the
+// linear transform copied the input sources file byte for byte, whatever its
+// format, into an output documented as dense text SEDS — an EDZ input gave an
+// ".seds" full of EDZ binary that failed to load ("Unexpected character in
+// sEDS file: E"). And block mode re-printed each slice's entries from
+// read_source(), expanding {1-3} to {1,2,3}, so its sources differed from the
+// whole-file run's. Both now go through copy_range_to_stream().
+void test_untouched_sources_are_written_as_text() {
+    test("Untouched sources: SEDS text from any input format, identical in block mode");
+
+    auto dir = std::filesystem::temp_directory_path() /
+               ("test_merge_srcfmt_" + std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / "in.eds") << "{AAAA}{C,G,T}{AAAA}{C,G}{AAAA}"; }
+    { std::ofstream(dir / "in.seds") << "{0}{1}{2-3}{4}{0}{1-3}{4}{0}"; }
+    auto text = Sources::load(dir / "in.seds");
+    text->set_num_paths(4);
+    text->save_as(dir / "in.edz", Sources::Format::EDZ);
+
+    // l=3: already an l-EDS, zero iterations
+    for (const char* name : {"in.seds", "in.edz"}) {
+        std::filesystem::path in_src = dir / name;
+        {
+            std::ofstream out(dir / "out.leds"), sout(dir / "out.seds");
+            eds_to_leds_linear(dir / "in.eds", out, 3, &in_src, &sout, 1, true);
+        }
+        auto got = Sources::load(dir / "out.seds", Sources::Format::SEDS);
+        assert(got->cardinality() == 8 && got->num_paths() == 4);
+        for (size_t i = 0; i < 8; ++i)
+            assert(got->read_source(i) == text->read_source(i));
+    }
+
+    std::filesystem::remove_all(dir);
+    pass();
+}
+
+void test_block_mode_keeps_source_encoding() {
+    test("Block mode spells untouched source entries as the whole-file run does");
+
+    auto dir = std::filesystem::temp_directory_path() /
+               ("test_merge_blocksrc_" + std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    // l=3: {C,G,T}{A}{C,G} merges; each {AAAA} is a barrier block mode can cut at
+    { std::ofstream(dir / "in.eds") << "{AAAA}{C,G,T}{A}{C,G}{AAAA}{T,G}{AAAA}{C,T}{AAAA}"; }
+    { std::ofstream(dir / "in.seds") << "{0}{1}{2-3}{4}{0}{1-3}{4}{0}{1-3}{4}{0}{1,2}{3,4}{0}"; }
+    std::filesystem::path in_src = dir / "in.seds";
+    std::string whole, block;
+    for (uint64_t bytes : {uint64_t{0}, uint64_t{1}}) {
+        {
+            std::ofstream out(dir / "o.leds"), sout(dir / "o.seds", std::ios::binary);
+            eds_to_leds_blocked(dir / "in.eds", out, 3, &in_src, &sout, bytes, 1, true);
+        }
+        std::ifstream r(dir / "o.seds", std::ios::binary);
+        std::ostringstream ss; ss << r.rdbuf();
+        (bytes ? block : whole) = ss.str();
+    }
+    assert(whole.find("{1-3}{4}") != std::string::npos);  // untouched {T,G}: input spelling kept
+    assert(block == whole);
+
+    std::filesystem::remove_all(dir);
+    pass();
+}
+
+// Regression (found by test_transform_fuzz): above 63 paths the merge folds
+// PathSets instead of bitsets, and intersect_sources() returns compl(E1) ∩
+// compl(E2) as the complement of E1 ∪ E2 — a non-empty vector even when E1 ∪ E2
+// is every path. Such a combination is carried by nobody but was kept, so the
+// l-EDS gained strings no genome spells (the 20d8ff1 complement bug, on the
+// side of the 63-path threshold that fix did not reach).
+void test_complement_intersection_above_63_paths() {
+    test("Complement ∩ complement covering every path is empty (64 paths)");
+
+    // 64 paths. {A,C}: A = paths 1-32, C = 33-64; {G,T}: G = 33-64, T = 1-32,
+    // all written as complements. Only AT and CG are carried by anyone.
+    std::ostringstream seds;
+    seds << "{0}{0,33-64}{0,1-32}{0,1-32}{0,33-64}{0}";
+    Sources::write_seds_dense_finalize(seds, 6, 64);
+    EDS t = transform_to_leds_with_sources("{AAAA}{A,C}{G,T}{AAAA}", seds.str(), 2);
+    assert(t.length() == 3);
+    auto merged = t.read_symbol(1);
+    std::sort(merged.begin(), merged.end());
+    assert((merged == std::vector<std::string>{"AT", "CG"}));
+
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -713,6 +852,11 @@ int main() {
     test_statistics_after_transform();
     test_metadata_consistency();
     test_split_regular_symbols_are_one_context();
+    test_leading_split_run_is_measured_whole();
+    test_compact_output_keeps_empty_regular_symbol();
+    test_untouched_sources_are_written_as_text();
+    test_block_mode_keeps_source_encoding();
+    test_complement_intersection_above_63_paths();
 
     // Edge cases
     test_single_symbol_input();
