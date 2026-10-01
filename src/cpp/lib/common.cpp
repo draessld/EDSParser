@@ -1,3 +1,5 @@
+// Implementation of the shared utilities declared in common.hpp: the wall-clock
+// timer and the peak-RSS reading behind every tool's [Performance] line.
 #include "common.hpp"
 #include <chrono>
 #include <fstream>
@@ -32,15 +34,9 @@ double Timer::elapsed_seconds() const {
     return std::chrono::duration<double>(end - impl_->start_time).count();
 }
 
-double Timer::elapsed_milliseconds() const {
-    return elapsed_seconds() * 1000.0;
-}
-
-double Timer::elapsed_microseconds() const {
-    return elapsed_seconds() * 1000000.0;
-}
-
-// Memory tracking implementation
+// Peak RSS comes from /proc rather than from in-process accounting: it must
+// include allocations made by every library in the address space, and it must
+// survive a peak that has already been freed by the time we report it.
 double get_peak_memory_mb() {
 #ifdef __linux__
     // Read from /proc/self/status

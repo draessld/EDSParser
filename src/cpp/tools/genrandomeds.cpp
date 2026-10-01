@@ -1,3 +1,10 @@
+// genrandomeds — generate a synthetic EDS with controlled variability, plus its
+// source file, for testing and benchmarking.
+//
+// Paths are assigned round-robin, one alternative per path per degenerate
+// symbol, mirroring phased data: without that a linear merge over the generated
+// file explodes combinatorially and measures nothing. Output is streamed
+// symbol by symbol, so generating a 50 GB file costs the same RAM as a 5 MB one.
 #include "formats/eds.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>

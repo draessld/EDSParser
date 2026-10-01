@@ -1,3 +1,11 @@
+// EDS implementation: parsing, serialisation, on-demand symbol reads and
+// pattern generation.
+//
+// Two construction paths share one representation. The stream and string
+// constructors fill sets_ and never touch the disk again; EDS::load() leaves
+// sets_ empty and keeps stream_ open, serving each symbol from its indexed byte
+// span. Every method below must work under both, which is why reads go through
+// read_symbol() / symbol_view() rather than touching sets_ directly.
 #include "eds.hpp"
 #include <sstream>
 #include <stdexcept>
@@ -52,10 +60,9 @@ void EDS::parse(std::istream& is, bool with_strings) {
     metadata_.total_change_size = 0;
     metadata_.num_empty_strings = 0;
 
-    // Lazy position-lookup arrays: cleared here, built on first use by
+    // Lazy position-lookup array: cleared here, built on first use by
     // ensure_position_index() (see EDS::Metadata).
     metadata_.cum_common_positions.clear();
-    metadata_.cum_degenerate_counts.clear();
 
     auto process_token = [&](const std::string& token, bool is_bracketed) {
         if (token.empty() && !is_bracketed) return; // Ignore empty non-bracketed tokens
@@ -121,9 +128,9 @@ void EDS::parse(std::istream& is, bool with_strings) {
             metadata_.num_common_chars += metadata_.string_lengths[m_]; // first (and only) string
         }
 
-        // cum_common_positions / cum_degenerate_counts are NOT built here — they
-        // are lazy (see EDS::Metadata). ensure_position_index() materialises them
-        // from these same running counts on the first position lookup.
+        // cum_common_positions is NOT built here — it is lazy (see EDS::Metadata).
+        // ensure_position_index() materialises it from these same running counts
+        // on the first position lookup.
 
         m_ += symbol_size;
         n_++;
@@ -1000,23 +1007,9 @@ StringSet EDS::read_symbol(Position pos) const {
     return read_symbol_from_stream(pos);
 }
 
-// Const-reference accessor for in-memory (FULL) mode — avoids the read_symbol()
-// copy.  File-backed EDS has no in-RAM set to reference, so this throws there.
-const StringSet& EDS::read_symbol_ref(Position pos) const {
-    if (pos >= n_) {
-        throw std::out_of_range("Position " + std::to_string(pos) + " out of range");
-    }
-    if (sets_.empty()) {
-        throw std::runtime_error(
-            "read_symbol_ref() requires an in-memory EDS; use read_symbol() for "
-            "file-backed (METADATA_ONLY) EDS");
-    }
-    return sets_[pos];
-}
-
-// Copy-avoiding symbol accessor usable in both modes.  FULL mode returns a
-// reference straight into sets_; METADATA_ONLY reads into the caller-provided
-// scratch buffer and references that (one move, no extra copy).
+// Return symbol `pos` without copying where possible: in-memory EDS references
+// sets_ directly, file-backed EDS reads into the caller's scratch buffer and
+// references that (one move, no extra copy).
 const StringSet& EDS::symbol_view(Position pos, StringSet& scratch) const {
     if (!sets_.empty()) return sets_[pos];
     scratch = read_symbol_from_stream(pos);
@@ -1073,189 +1066,29 @@ void EDS::copy_symbol_range_to_stream(Position start, size_t count, std::ostream
 }
 
 // ================================================================================
-// POSITION CHECKING & VALIDATION
+// COMMON-POSITION LOOKUP
 // ================================================================================
 
-// Check if pattern occurs at position with given degenerate string choices
-bool EDS::check_position(Position common_pos,
-                        const std::vector<int>& degenerate_strings,
-                        const String& pattern) const {
-    // Handle empty EDS
-    if (is_empty_ || n_ == 0) {
-        return false;
-    }
-
-    // Handle empty pattern
-    if (pattern.empty()) {
-        return true;  // Empty pattern always matches
-    }
-
-    // Find starting symbol using binary search
-    Position offset_in_symbol = 0;
-    size_t start_symbol = 0;
-
-    try {
-        start_symbol = find_symbol_at_common_position(common_pos, offset_in_symbol);
-    } catch (const std::out_of_range&) {
-        // Position is beyond EDS range
-        return false;
-    }
-
-    // Warn if too many degenerate strings provided
-    // Count expected number of degenerate symbols we'll traverse
-    size_t expected_deg_count = 0;
-    Length chars_counted = 0;
-    for (size_t i = start_symbol; i < n_ && chars_counted < pattern.length(); i++) {
-        if (metadata_.is_degenerate[i]) {
-            expected_deg_count++;
-        }
-        // Estimate how many chars this symbol contributes
-        size_t global_string_idx = metadata_.cum_set_sizes[i];
-        Length sym_len = metadata_.string_lengths[global_string_idx];
-        if (i == start_symbol) {
-            sym_len = (sym_len > offset_in_symbol) ? (sym_len - offset_in_symbol) : 0;
-        }
-        chars_counted += sym_len;
-    }
-
-    if (degenerate_strings.size() > expected_deg_count) {
-        std::cerr << "Warning: More degenerate strings provided ("
-                  << degenerate_strings.size()
-                  << ") than needed (" << expected_deg_count
-                  << "). Extra strings will be ignored.\n";
-    }
-
-    // Source validation: check if path intersection is non-empty
-    if (sources_) {
-        PathSet path_intersection;
-        try {
-            path_intersection = calculate_path_intersection(
-                start_symbol, offset_in_symbol,
-                degenerate_strings, pattern.length()
-            );
-        } catch (const std::exception&) {
-            // If path intersection calculation fails, propagate error
-            throw;
-        }
-
-        // Empty intersection means no valid biological path exists
-        if (path_intersection.empty()) {
-            return false;
-        }
-    }
-
-    // Reconstruct string from file
-    String reconstructed;
-
-    try {
-        reconstructed = reconstruct_from_file(
-            start_symbol, offset_in_symbol,
-            degenerate_strings, pattern.length()
-        );
-    } catch (const std::exception&) {
-        // If reconstruction fails (e.g., validation errors),
-        // let the exception propagate
-        throw;
-    }
-
-    // If we couldn't reconstruct enough characters, pattern doesn't match
-    if (reconstructed.length() < pattern.length()) {
-        return false;
-    }
-
-    // Compare reconstructed string with pattern
-    return reconstructed == pattern;
-}
-
-// Materialise the lazy position-lookup prefix sums.  Both arrays are pure
-// functions of symbol_sizes / string_lengths / is_degenerate, so parsing skips
-// them (12 bytes per symbol) and only callers that actually look up positions
-// pay for them — the l-EDS merge never does.
+// Materialise the lazy common-position prefix sums.  cum_common_positions is a
+// pure function of string_lengths / is_degenerate, so parsing skips it (8 bytes
+// per symbol) and only callers that actually look up positions pay for it — the
+// l-EDS merge never does.
 void EDS::ensure_position_index() const {
     if (metadata_.cum_common_positions.size() == n_ + 1) return;  // already built
 
     metadata_.cum_common_positions.assign(1, 0);
-    metadata_.cum_degenerate_counts.assign(1, 0);
     metadata_.cum_common_positions.reserve(n_ + 1);
-    metadata_.cum_degenerate_counts.reserve(n_ + 1);
 
     Position cumulative_common = 0;
-    int cumulative_degenerate = 0;
     for (size_t i = 0; i < n_; ++i) {
-        if (metadata_.is_degenerate[i]) {
-            cumulative_degenerate += static_cast<int>(metadata_.symbol_sizes[i]);
-        } else {
+        if (!metadata_.is_degenerate[i]) {
             cumulative_common += metadata_.string_lengths[metadata_.cum_set_sizes[i]];
         }
         metadata_.cum_common_positions.push_back(cumulative_common);
-        metadata_.cum_degenerate_counts.push_back(cumulative_degenerate);
     }
 }
 
-// Position checking helper: decode absolute degenerate string number
-std::pair<size_t, size_t> EDS::decode_degenerate_string_number(int abs_string_num) const {
-    ensure_position_index();
-    if (abs_string_num < 0) {
-        throw std::invalid_argument(
-            "Degenerate string number must be non-negative, got: " +
-            std::to_string(abs_string_num)
-        );
-    }
-
-    // An id past the last degenerate string lands the binary search below on the
-    // final symbol, which may well be non-degenerate — and was then reported as
-    // "Internal error: ... maps to non-degenerate symbol", blaming the library
-    // for what is a caller-supplied out-of-range id. Reject it here, which also
-    // makes that branch genuinely unreachable from caller input, as intended.
-    const int total_degenerate = metadata_.cum_degenerate_counts.empty()
-        ? 0 : metadata_.cum_degenerate_counts.back();
-    if (abs_string_num >= total_degenerate) {
-        throw std::out_of_range(
-            "Degenerate string number " + std::to_string(abs_string_num) +
-            " out of range: EDS has " + std::to_string(total_degenerate) +
-            " degenerate strings"
-        );
-    }
-
-    // Binary search to find which symbol this string belongs to
-    auto it = std::upper_bound(
-        metadata_.cum_degenerate_counts.begin(),
-        metadata_.cum_degenerate_counts.end(),
-        abs_string_num
-    );
-
-    if (it == metadata_.cum_degenerate_counts.begin()) {
-        throw std::out_of_range(
-            "Invalid degenerate string number: " + std::to_string(abs_string_num)
-        );
-    }
-
-    size_t symbol_idx = std::distance(metadata_.cum_degenerate_counts.begin(), it) - 1;
-
-    // Check if this symbol is actually degenerate
-    if (!metadata_.is_degenerate[symbol_idx]) {
-        throw std::runtime_error(
-            "Internal error: degenerate string number " +
-            std::to_string(abs_string_num) +
-            " maps to non-degenerate symbol " + std::to_string(symbol_idx)
-        );
-    }
-
-    size_t local_idx = abs_string_num - metadata_.cum_degenerate_counts[symbol_idx];
-
-    // Validate local index is within range
-    if (local_idx >= metadata_.symbol_sizes[symbol_idx]) {
-        throw std::out_of_range(
-            "Local index " + std::to_string(local_idx) +
-            " out of range for symbol " + std::to_string(symbol_idx) +
-            " (size: " + std::to_string(metadata_.symbol_sizes[symbol_idx]) + ")"
-        );
-    }
-
-    return {symbol_idx, local_idx};
-}
-
-// Position checking helper: find symbol containing common position
+// Find the symbol containing a given common position (used by generate_patterns)
 size_t EDS::find_symbol_at_common_position(Position common_pos, Position& offset_out) const {
     ensure_position_index();
 
@@ -1263,9 +1096,7 @@ size_t EDS::find_symbol_at_common_position(Position common_pos, Position& offset
     // common-character count sends upper_bound to end() and makes symbol_idx ==
     // n below — one past the end of is_degenerate, cum_set_sizes and every other
     // per-symbol array. That read produced a garbage string index and a segfault
-    // roughly two runs in three, and it is reachable straight from the public
-    // check_position(), which means to handle an out-of-range position by
-    // catching out_of_range from here — it never got the chance to throw.
+    // roughly two runs in three, so the range is rejected here instead.
     const Position total_common = metadata_.cum_common_positions.empty()
         ? 0 : metadata_.cum_common_positions.back();
     if (common_pos >= total_common) {
@@ -1315,284 +1146,6 @@ size_t EDS::find_symbol_at_common_position(Position common_pos, Position& offset
     }
 
     return symbol_idx;
-}
-
-// Position checking helper: reconstruct string from memory (FULL mode)
-String EDS::reconstruct_from_memory(size_t start_symbol,
-                                   Position offset_in_symbol,
-                                   const std::vector<int>& degenerate_strings,
-                                   Length pattern_length) const {
-    String result;
-    result.reserve(pattern_length);
-
-    size_t deg_idx = 0;
-    bool first_symbol = true;
-
-    for (size_t symbol_idx = start_symbol;
-         symbol_idx < n_ && result.length() < pattern_length;
-         symbol_idx++) {
-
-        String str;
-
-        if (metadata_.is_degenerate[symbol_idx]) {
-            // Degenerate symbol: use specified string
-            if (deg_idx >= degenerate_strings.size()) {
-                throw std::invalid_argument(
-                    "Not enough degenerate strings provided (need at least " +
-                    std::to_string(deg_idx + 1) + ", got " +
-                    std::to_string(degenerate_strings.size()) + ")"
-                );
-            }
-
-            int abs_string_num = degenerate_strings[deg_idx];
-            auto [expected_symbol, local_idx] = decode_degenerate_string_number(abs_string_num);
-
-            // Verify this degenerate string belongs to current symbol
-            if (expected_symbol != symbol_idx) {
-                throw std::invalid_argument(
-                    "Degenerate string " + std::to_string(abs_string_num) +
-                    " belongs to symbol " + std::to_string(expected_symbol) +
-                    ", but expected for symbol " + std::to_string(symbol_idx)
-                );
-            }
-
-            str = sets_[symbol_idx][local_idx];
-            deg_idx++;
-
-        } else {
-            // Common symbol: use the only string
-            str = sets_[symbol_idx][0];
-
-            // Apply offset if this is the first symbol
-            if (first_symbol && offset_in_symbol > 0) {
-                if (offset_in_symbol >= str.length()) {
-                    throw std::out_of_range(
-                        "Offset " + std::to_string(offset_in_symbol) +
-                        " exceeds symbol length " + std::to_string(str.length())
-                    );
-                }
-                str = str.substr(offset_in_symbol);
-                first_symbol = false;
-            }
-        }
-
-        // Take only what we need
-        Length chars_to_take = std::min(
-            static_cast<Length>(str.length()),
-            static_cast<Length>(pattern_length - result.length())
-        );
-
-        result += str.substr(0, chars_to_take);
-    }
-
-    return result;
-}
-
-// Position checking helper: reconstruct string from file (METADATA_ONLY mode)
-String EDS::reconstruct_from_file(size_t start_symbol,
-                                 Position offset_in_symbol,
-                                 const std::vector<int>& degenerate_strings,
-                                 Length pattern_length) const {
-    String result;
-    result.reserve(pattern_length);
-
-    size_t deg_idx = 0;
-    bool first_symbol = true;
-
-    for (size_t symbol_idx = start_symbol;
-         symbol_idx < n_ && result.length() < pattern_length;
-         symbol_idx++) {
-
-        // Read symbol from file using existing method
-        StringSet symbol_strings = read_symbol(symbol_idx);
-
-        String str;
-
-        if (metadata_.is_degenerate[symbol_idx]) {
-            // Degenerate symbol: use specified string
-            if (deg_idx >= degenerate_strings.size()) {
-                throw std::invalid_argument(
-                    "Not enough degenerate strings provided (need at least " +
-                    std::to_string(deg_idx + 1) + ", got " +
-                    std::to_string(degenerate_strings.size()) + ")"
-                );
-            }
-
-            int abs_string_num = degenerate_strings[deg_idx];
-            auto [expected_symbol, local_idx] = decode_degenerate_string_number(abs_string_num);
-
-            // Verify this degenerate string belongs to current symbol
-            if (expected_symbol != symbol_idx) {
-                throw std::invalid_argument(
-                    "Degenerate string " + std::to_string(abs_string_num) +
-                    " belongs to symbol " + std::to_string(expected_symbol) +
-                    ", but expected for symbol " + std::to_string(symbol_idx)
-                );
-            }
-
-            if (local_idx >= symbol_strings.size()) {
-                throw std::runtime_error(
-                    "Local index " + std::to_string(local_idx) +
-                    " out of range for symbol (size: " +
-                    std::to_string(symbol_strings.size()) + ")"
-                );
-            }
-
-            str = symbol_strings[local_idx];
-            deg_idx++;
-
-        } else {
-            // Common symbol: use the only string
-            if (symbol_strings.empty()) {
-                throw std::runtime_error(
-                    "Common symbol " + std::to_string(symbol_idx) + " is empty"
-                );
-            }
-
-            str = symbol_strings[0];
-
-            // Apply offset if this is the first symbol
-            if (first_symbol && offset_in_symbol > 0) {
-                if (offset_in_symbol >= str.length()) {
-                    throw std::out_of_range(
-                        "Offset " + std::to_string(offset_in_symbol) +
-                        " exceeds symbol length " + std::to_string(str.length())
-                    );
-                }
-                str = str.substr(offset_in_symbol);
-                first_symbol = false;
-            }
-        }
-
-        // Take only what we need
-        Length chars_to_take = std::min(
-            static_cast<Length>(str.length()),
-            static_cast<Length>(pattern_length - result.length())
-        );
-
-        result += str.substr(0, chars_to_take);
-    }
-
-    return result;
-}
-
-// Position checking helper: calculate path intersection for source validation
-PathSet EDS::calculate_path_intersection(size_t start_symbol,
-                                         Position offset_in_symbol,
-                                         const std::vector<int>& degenerate_strings,
-                                         Length pattern_length) const {
-    // If no sources loaded, return universal set {0}
-    if (!sources_) {
-        return {0};
-    }
-
-    // Start with universal set (all paths)
-    PathSet intersection;
-    bool first = true;
-
-    size_t deg_idx = 0;
-    Length chars_counted = 0;
-
-    for (size_t symbol_idx = start_symbol;
-         symbol_idx < n_ && chars_counted < pattern_length;
-         symbol_idx++) {
-
-        // Determine which string is used from this symbol
-        size_t global_string_idx;
-
-        if (metadata_.is_degenerate[symbol_idx]) {
-            // Degenerate symbol: use specified string
-            if (deg_idx >= degenerate_strings.size()) {
-                throw std::invalid_argument(
-                    "Not enough degenerate strings for path intersection calculation"
-                );
-            }
-
-            int abs_string_num = degenerate_strings[deg_idx];
-            auto [expected_symbol, local_idx] = decode_degenerate_string_number(abs_string_num);
-
-            if (expected_symbol != symbol_idx) {
-                throw std::invalid_argument(
-                    "Degenerate string mismatch in path intersection calculation"
-                );
-            }
-
-            // Convert to global string ID
-            global_string_idx = metadata_.cum_set_sizes[symbol_idx] + local_idx;
-            deg_idx++;
-
-        } else {
-            // Common symbol: use the only string
-            global_string_idx = metadata_.cum_set_sizes[symbol_idx];
-
-            // Apply offset for first symbol
-            if (symbol_idx == start_symbol && offset_in_symbol > 0) {
-                Length sym_len = metadata_.string_lengths[global_string_idx];
-                if (offset_in_symbol >= sym_len) {
-                    // Offset exceeds symbol length - invalid
-                    return {};
-                }
-                sym_len -= offset_in_symbol;
-                chars_counted += std::min(sym_len, static_cast<Length>(pattern_length - chars_counted));
-            } else {
-                Length sym_len = metadata_.string_lengths[global_string_idx];
-                chars_counted += std::min(sym_len, static_cast<Length>(pattern_length - chars_counted));
-            }
-        }
-
-        // Get source set for this string
-        if (global_string_idx >= sources_->cardinality()) {
-            throw std::runtime_error(
-                "String ID " + std::to_string(global_string_idx) +
-                " out of range for sources (size: " + std::to_string(sources_->cardinality()) + ")"
-            );
-        }
-
-        // read_source_ref avoids copying the PathSet on a cache hit.  This is a
-        // single-threaded path (check_position is never called from the parallel
-        // merge region), and the reference is consumed before the next
-        // read_source_ref() call, so cache eviction cannot dangle it.
-        const PathSet& current_sources = sources_->read_source_ref(global_string_idx);
-
-        // Compute intersection
-        if (first) {
-            intersection = current_sources;
-            first = false;
-        } else {
-            // Intersection with special handling for universal marker {0}
-            bool current_has_universal = !current_sources.empty() && current_sources.front() == 0;
-            bool accum_has_universal   = !intersection.empty()     && intersection.front()     == 0;
-
-            if (current_has_universal && accum_has_universal) {
-                intersection = {0};
-            } else if (current_has_universal) {
-                // intersection unchanged
-            } else if (accum_has_universal) {
-                intersection = current_sources;
-            } else {
-                PathSet new_intersection;
-                std::set_intersection(
-                    intersection.begin(), intersection.end(),
-                    current_sources.begin(), current_sources.end(),
-                    std::back_inserter(new_intersection)
-                );
-                intersection = std::move(new_intersection);
-            }
-        }
-
-        // Early termination if intersection becomes empty
-        if (intersection.empty()) {
-            return {};
-        }
-
-        // Update chars_counted for degenerate symbols
-        if (metadata_.is_degenerate[symbol_idx]) {
-            Length sym_len = metadata_.string_lengths[global_string_idx];
-            chars_counted += std::min(sym_len, static_cast<Length>(pattern_length - chars_counted));
-        }
-    }
-
-    return intersection;
 }
 
 } // namespace edsparser

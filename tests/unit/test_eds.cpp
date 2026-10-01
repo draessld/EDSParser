@@ -920,11 +920,24 @@ void test_generate_patterns_deduplicates() {
 }
 
 void test_generate_patterns_are_valid() {
-    std::cout << "Test 26: Generated patterns are valid (check with check_position)... ";
+    std::cout << "Test 26: Generated patterns are valid (substrings of the language)... ";
 
     // Create EDS with known structure
     std::string eds_str = "{ACGT}{A,CA}{GG}{T,TG}";
     edsparser::EDS eds = create_temp_eds(eds_str);
+
+    // Enumerate the whole (tiny) cartesian language: 1 x 2 x 1 x 2 = 4 strings.
+    // Without sources, generate_patterns() samples exactly this language, so
+    // every pattern it produces must be a substring of one of them. This used to
+    // be checked via check_position(), which had no caller outside its own tests
+    // and was removed; enumerating a 4-string language is a stricter check
+    // anyway, since it needs no coordinate convention to be agreed on.
+    std::vector<std::string> language;
+    for (const std::string& a : {std::string("A"), std::string("CA")}) {
+        for (const std::string& b : {std::string("T"), std::string("TG")}) {
+            language.push_back("ACGT" + a + "GG" + b);
+        }
+    }
 
     // Generate patterns. This EDS is small, so deduplication may yield fewer than
     // the 10 requested; what the test is about is that every pattern it *does*
@@ -933,59 +946,20 @@ void test_generate_patterns_are_valid() {
     auto gen_stats = eds.generate_patterns(output, 10, 6);
     assert(gen_stats.generated > 0);
 
-    // For each generated pattern, verify it can be found in the EDS
     std::string pattern;
     int validated = 0;
     while (std::getline(output, pattern)) {
         if (pattern.empty()) continue;
 
         bool found = false;
-
-        // Try all possible common positions
-        // Total common chars: ACGT(4) + GG(2) = 6
-        for (edsparser::Position common_pos = 0; common_pos < 6 && !found; common_pos++) {
-            // Try without degenerate strings first (regular symbols only)
-            try {
-                if (eds.check_position(common_pos, {}, pattern)) {
-                    found = true;
-                    break;
-                }
-            } catch (const std::invalid_argument&) {
-                // Pattern needs degenerate choices, continue to try with them
-            }
-
-            // Try with one degenerate choice (from symbol 1: {A,CA})
-            for (int deg1 = 0; deg1 < 2 && !found; deg1++) {
-                try {
-                    if (eds.check_position(common_pos, {deg1}, pattern)) {
-                        found = true;
-                        break;
-                    }
-                } catch (const std::invalid_argument&) {
-                    // Might need more degenerate choices
-                } catch (const std::out_of_range&) {
-                    // Invalid degenerate string number, skip
-                    continue;
-                }
-
-                // Try with two degenerate choices (symbol 1 and symbol 3: {T,TG})
-                for (int deg2 = 2; deg2 < 4 && !found; deg2++) {
-                    try {
-                        if (eds.check_position(common_pos, {deg1, deg2}, pattern)) {
-                            found = true;
-                            break;
-                        }
-                    } catch (const std::invalid_argument&) {
-                        // Wrong combination
-                    } catch (const std::out_of_range&) {
-                        // Invalid degenerate string number, skip
-                        continue;
-                    }
-                }
+        for (const std::string& full : language) {
+            if (full.find(pattern) != std::string::npos) {
+                found = true;
+                break;
             }
         }
 
-        assert(found); // Every generated pattern must be findable
+        assert(found); // Every generated pattern must occur in the language
         validated++;
     }
 
@@ -1146,365 +1120,6 @@ void test_extract_metadata_only() {
     assert(eds.extract(0, 2, {0, 1}) == full.extract(0, 2, {0, 1}));
 
     std::filesystem::remove(temp_file);
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_basic() {
-    std::cout << "Test 33: check_position basic... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // The coordinate convention, pinned here because nothing else states it and
-    // check_position has no caller outside eds.cpp:
-    //
-    //   common_pos indexes COMMON characters only. For {ACGT}{A,ACA}{CGT}{T,TG}
-    //   that is ACGT = 0..3 and CGT = 4..6; alternatives inside a degenerate
-    //   symbol occupy no common position.
-    //
-    //   degenerate_strings are GLOBAL degenerate-string ids in symbol order —
-    //   symbol 1 contributes 0:"A" and 1:"ACA", symbol 3 contributes 2:"T" and
-    //   3:"TG" — and each must belong to a symbol the match actually traverses.
-    //
-    // The previous expectations here (e.g. (4,{0},"ACG"), (6,{1},"ACG")) counted
-    // positions in the *expanded* string instead, as if the chosen alternative
-    // occupied positions of its own. No single convention satisfied all of them:
-    // those two needed the expanded reading while (5,{2},"GTT") needed this one,
-    // so the test contradicted itself and could never pass as written.
-
-    // Entirely inside the first common run.
-    assert(eds.check_position(0, {}, "ACG") == true);
-    assert(eds.check_position(0, {}, "ACGT") == true);
-    assert(eds.check_position(1, {}, "CGT") == true);
-    assert(eds.check_position(3, {}, "T") == true);
-
-    // The second common run, reached at common position 4.
-    assert(eds.check_position(4, {}, "CGT") == true);
-
-    // Running off the end of {CGT} into the degenerate symbol 3, choosing "T"
-    // (global id 2) or "TG" (global id 3).
-    assert(eds.check_position(4, {2}, "CGTT") == true);
-    assert(eds.check_position(4, {3}, "CGTTG") == true);
-    assert(eds.check_position(5, {2}, "GTT") == true);
-    assert(eds.check_position(5, {3}, "GTT") == true);
-
-    // An id for a symbol the match never reaches is rejected outright rather
-    // than quietly ignored: here the match traverses symbol 3, but id 0 is an
-    // alternative of symbol 1.
-    bool threw = false;
-    try {
-        eds.check_position(4, {0, 2}, "ACGTT");
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    assert(threw);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_negative() {
-    std::cout << "Test 34: check_position negative cases... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // Wrong pattern
-    assert(eds.check_position(0, {}, "XYZ") == false);
-
-    // Pattern doesn't match. It has to stay inside the common run: "ACGTX" is
-    // five characters from position 0, so it runs into degenerate symbol 1 and
-    // supplying no id for that symbol is an input error, not a non-match (see
-    // test_check_position_errors).
-    assert(eds.check_position(0, {}, "ACGX") == false);
-
-    // Position beyond range
-    assert(eds.check_position(100, {}, "ACG") == false);
-
-    // A degenerate id supplied where the match traverses no degenerate symbol
-    // is warned about and ignored; the pattern still has to match, and "ACG"
-    // does not match {CGT} at common position 4.
-    assert(eds.check_position(4, {1}, "ACG") == false);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_errors() {
-    std::cout << "Test 35: check_position error handling... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // Every case below uses a pattern long enough to actually run into a
-    // degenerate symbol. Ids are only validated against the symbols the match
-    // traverses, so a short pattern like "ACG" from common position 4 stays
-    // inside {CGT}, and any id passed with it is warned about and ignored
-    // rather than rejected — which is what these cases used to do, and why
-    // they expected throws that could not happen.
-
-    // Invalid degenerate string number
-    bool threw = false;
-    try {
-        eds.check_position(4, {999}, "CGTT");   // traverses symbol 3
-    } catch (const std::out_of_range&) {
-        threw = true;
-    }
-    assert(threw);
-
-    // Not enough degenerate strings
-    threw = false;
-    try {
-        eds.check_position(4, {}, "ACGTT");  // runs into symbol 3 with no id
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    assert(threw);
-
-    // Wrong symbol for degenerate string
-    threw = false;
-    try {
-        // Id 2 is an alternative of symbol 3; this match traverses symbol 1.
-        eds.check_position(0, {2}, "ACGTA");
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    assert(threw);
-
-    // Negative degenerate string number
-    threw = false;
-    try {
-        eds.check_position(4, {-1}, "CGTT");
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    assert(threw);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_metadata_only() {
-    std::cout << "Test 36: check_position in METADATA_ONLY mode... ";
-
-    // Create temp file
-    std::filesystem::path temp_file =
-        std::filesystem::temp_directory_path() / "test_check_pos.eds";
-    std::ofstream ofs(temp_file);
-    ofs << "{ACGT}{A,ACA}{CGT}{T,TG}";
-    ofs.close();
-
-    // Load in METADATA_ONLY mode
-    auto eds = edsparser::EDS::load(temp_file);
-
-    // Should work the same as FULL mode. Positions follow the common-character
-    // convention documented in test_check_position_basic.
-    std::istringstream ss("{ACGT}{A,ACA}{CGT}{T,TG}");
-    edsparser::EDS full(ss);
-
-    const std::vector<std::pair<std::pair<int, std::vector<int>>, std::string>> cases = {
-        {{0, {}},  "ACG"},
-        {{4, {}},  "CGT"},
-        {{4, {2}}, "CGTT"},
-        {{5, {2}}, "GTT"},
-        {{0, {}},  "XYZ"},
-    };
-    for (const auto& [where, pattern] : cases) {
-        const auto& [pos, degen] = where;
-        assert(eds.check_position(pos, degen, pattern) ==
-               full.check_position(pos, degen, pattern));
-    }
-
-    assert(eds.check_position(0, {}, "ACG") == true);
-    assert(eds.check_position(4, {2}, "CGTT") == true);
-    assert(eds.check_position(5, {2}, "GTT") == true);
-    assert(eds.check_position(0, {}, "XYZ") == false);
-
-    std::filesystem::remove(temp_file);
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_empty_pattern() {
-    std::cout << "Test 37: check_position with empty pattern... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}");
-
-    // Empty pattern should always match
-    assert(eds.check_position(0, {}, "") == true);
-    assert(eds.check_position(3, {}, "") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_empty_eds() {
-    std::cout << "Test 38: check_position with empty EDS... ";
-
-    edsparser::EDS eds = create_temp_eds("");
-
-    // Empty EDS should return false
-    assert(eds.check_position(0, {}, "ACG") == false);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_offset() {
-    std::cout << "Test 39: check_position with offset in symbol... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // Start at position 1 ('C' in ACGT)
-    assert(eds.check_position(1, {}, "CG") == true);
-    assert(eds.check_position(1, {}, "CGT") == true);
-
-    // Start at position 2 ('G' in ACGT)
-    assert(eds.check_position(2, {}, "GT") == true);
-
-    // Start at position 3 ('T' in ACGT)
-    assert(eds.check_position(3, {}, "T") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_pattern_spans_multiple() {
-    std::cout << "Test 40: check_position pattern spanning multiple symbols... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // Full pattern spanning all symbols
-    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);
-    assert(eds.check_position(0, {0, 3}, "ACGTACGTTG") == true);
-    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_with_sources_valid() {
-    std::cout << "Test 41: check_position with sources (valid paths)... ";
-
-    // EDS:  {ACGT}{A,ACA}{CGT}{T,TG}
-    // sEDS: {0}{1,3}{2}{0}{1}{2,3}
-    //       str0  str1  str2 str3 str4  str5
-    std::string eds_str = "{ACGT}{A,ACA}{CGT}{T,TG}";
-    std::string seds_str = "{0}{1,3}{2}{0}{1}{2,3}";
-
-    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
-
-    // Positions are common-character positions (see test_check_position_basic),
-    // so a match that traverses both degenerate symbols has to start at 0 and
-    // spell out the common runs it passes through. The old expectations here
-    // started at 4 and named only the varying part, which is the expanded-string
-    // convention the implementation does not use.
-
-    // ACGT + "A"(id 0) + CGT + "T"(id 2)
-    // "A" has sources {1,3}, "T" has sources {1}; {1,3} ∩ {1} = {1} ✓
-    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);
-
-    // ACGT + "A"(id 0) + CGT + "TG"(id 3)
-    // {1,3} ∩ {2,3} = {3} ✓
-    assert(eds.check_position(0, {0, 3}, "ACGTACGTTG") == true);
-
-    // ACGT + "ACA"(id 1) + CGT + "T"(id 2)
-    // "ACA" has sources {2}, "T" has sources {1}; {2} ∩ {1} = {} — no path
-    // carries this combination, so the match is rejected.
-    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == false);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_with_sources_universal() {
-    std::cout << "Test 42: check_position with sources (universal marker)... ";
-
-    // EDS with universal markers
-    std::string eds_str = "{ACGT}{A,ACA}{CGT}";
-    std::string seds_str = "{0}{1}{2}{0}";
-
-    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
-
-    // Universal {0} should not restrict intersection
-    // Pattern "ACGTACGT" using string 0 "A"
-    // Sources: {0} ∩ {1} ∩ {0} = {1}
-    assert(eds.check_position(0, {0}, "ACGTACGT") == true);
-
-    // Pattern "ACGTACACGT" using string 1 "ACA"
-    // Sources: {0} ∩ {2} ∩ {0} = {2}
-    assert(eds.check_position(0, {1}, "ACGTACACGT") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_without_sources() {
-    std::cout << "Test 43: check_position without sources loaded... ";
-
-    edsparser::EDS eds = create_temp_eds("{ACGT}{A,ACA}{CGT}{T,TG}");
-
-    // Without sources every combination is admissible, including the one that
-    // test_check_position_with_sources_valid rejects as carried by no path.
-    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);
-    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == true);
-
-    // Pattern still needs to match the strings
-    assert(eds.check_position(0, {0, 2}, "WRONG") == false);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_sources_all_paths() {
-    std::cout << "Test 42: check_position sources with all universal... ";
-
-    // All strings have universal paths
-    std::string eds_str = "{ACGT}{A,ACA}";
-    std::string seds_str = "{0}{0}{0}";
-
-    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
-
-    // Universal {0} never restricts, so both alternatives match. The match has
-    // to start at a common position — there is no way to begin one inside a
-    // degenerate symbol — so it spells the leading ACGT too.
-    assert(eds.check_position(0, {0}, "ACGTA") == true);
-    assert(eds.check_position(0, {1}, "ACGTACA") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_sources_disjoint() {
-    std::cout << "Test 43: check_position sources disjoint paths... ";
-
-    // Create EDS where some combinations have disjoint paths
-    std::string eds_str = "{AC}{A,C}{GT}";
-    std::string seds_str = "{0}{1}{2}{0}";
-
-    edsparser::EDS eds = create_temp_eds_with_sources(eds_str, seds_str);
-
-    // Valid: {0} ∩ {1} ∩ {0} = {1}
-    assert(eds.check_position(0, {0}, "ACAGT") == true);
-
-    // Valid: {0} ∩ {2} ∩ {0} = {2}
-    assert(eds.check_position(0, {1}, "ACCGT") == true);
-
-    std::cout << "PASSED\n";
-}
-
-void test_check_position_sources_metadata_only() {
-    std::cout << "Test 44: check_position with sources in METADATA_ONLY mode... ";
-
-    // Create temp files
-    std::filesystem::path temp_eds =
-        std::filesystem::temp_directory_path() / "test_check_pos_sources.eds";
-    std::filesystem::path temp_seds =
-        std::filesystem::temp_directory_path() / "test_check_pos_sources.seds";
-
-    std::ofstream ofs_eds(temp_eds);
-    ofs_eds << "{ACGT}{A,ACA}{CGT}{T,TG}";
-    ofs_eds.close();
-
-    std::ofstream ofs_seds(temp_seds);
-    ofs_seds << "{0}{1,3}{2}{0}{1}{2,3}";
-    ofs_seds.close();
-
-    // Load in METADATA_ONLY mode
-    auto eds = edsparser::EDS::load(temp_eds, temp_seds);
-
-    // Same as the in-memory case, positions in common-character coordinates.
-    assert(eds.check_position(0, {0, 2}, "ACGTACGTT") == true);    // {1,3} ∩ {1}
-    assert(eds.check_position(0, {1, 2}, "ACGTACACGTT") == false); // {2} ∩ {1} = {}
-
-    std::filesystem::remove(temp_eds);
-    std::filesystem::remove(temp_seds);
-
     std::cout << "PASSED\n";
 }
 
@@ -1772,20 +1387,6 @@ int main() {
         test_extract_invalid_change_index();
         test_extract_wrong_changes_size();
         test_extract_metadata_only();
-        test_check_position_basic();
-        test_check_position_negative();
-        test_check_position_errors();
-        test_check_position_metadata_only();
-        test_check_position_empty_pattern();
-        test_check_position_empty_eds();
-        test_check_position_offset();
-        test_check_position_pattern_spans_multiple();
-        test_check_position_with_sources_valid();
-        test_check_position_with_sources_universal();
-        test_check_position_without_sources();
-        test_check_position_sources_all_paths();
-        test_check_position_sources_disjoint();
-        test_check_position_sources_metadata_only();
 
         std::cout << "\n✓ All tests passed!\n";
         return 0;

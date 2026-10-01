@@ -1,3 +1,7 @@
+// Sampling memory monitor used by the manual memory tests and by ad-hoc
+// diagnostics — not by the library itself, which must stay allocation-quiet.
+// A background thread samples peak RSS on an interval; the analysis side turns
+// those samples into a growth figure and a linear-regression leak verdict.
 #ifndef EDSPARSER_MEMORY_MONITOR_HPP
 #define EDSPARSER_MEMORY_MONITOR_HPP
 
@@ -42,7 +46,6 @@ public:
     // Analysis
     std::vector<MemorySample> get_samples() const;
     double get_peak_memory_mb() const;
-    double get_average_memory_mb() const;
     double get_memory_growth_mb() const;  // Growth from first to last sample
     bool detect_memory_leak(double threshold_mb_per_sec = 1.0) const;  // Linear regression
 
@@ -56,14 +59,6 @@ private:
     std::vector<MemorySample> samples_;
     std::chrono::high_resolution_clock::time_point start_time_;
 };
-
-/**
- * Memory assertion helpers for tests
- */
-void assert_memory_below(double max_mb, const std::string& context);
-void assert_no_memory_growth(const MemoryMonitor& monitor,
-                             double max_growth_mb,
-                             const std::string& context);
 
 } // namespace edsparser
 

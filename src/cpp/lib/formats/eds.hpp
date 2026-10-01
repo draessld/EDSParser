@@ -1,5 +1,12 @@
-#ifndef EDSPARSER_EDS_HPP
-#define EDSPARSER_EDS_HPP
+// Elastic-degenerate string: the central data structure of this library.
+//
+// An EDS is a sequence of symbols, each a set of alternative strings. The class
+// keeps a per-symbol index (byte offsets, sizes, lengths) in RAM and, for
+// file-backed instances, reads the strings themselves from disk on demand. That
+// split is what lets the l-EDS merge run over inputs far larger than RAM, and
+// it is why the index arrays are kept as small as they are.
+#ifndef EDSPARSER_FORMATS_EDS_HPP
+#define EDSPARSER_FORMATS_EDS_HPP
 
 #include "../common.hpp"
 #include "sources.hpp"
@@ -111,16 +118,14 @@ public:
         size_t total_change_size;         // Total chars in degenerate symbols
         size_t num_empty_strings;         // Count of empty string alternatives
 
-        // Position checking support — LAZY: both arrays are empty until the first
-        // call to a position-lookup method (decode_degenerate_string_number(),
-        // find_symbol_at_common_position(), check_position()), which materialises
-        // them via ensure_position_index(). They cost 12 bytes per symbol and are
-        // pure prefix sums of symbol_sizes / string_lengths / is_degenerate, so
-        // the l-EDS merge — which never looks up positions but does hold both an
-        // input and an output metadata at once — no longer pays for them.
-        // Read them through ensure_position_index(), never directly.
+        // Common-position lookup support — LAZY: empty until the first call to
+        // find_symbol_at_common_position(), which materialises it via
+        // ensure_position_index(). It costs 8 bytes per symbol and is a pure
+        // prefix sum of string_lengths / is_degenerate, so the l-EDS merge —
+        // which never looks up positions but does hold both an input and an
+        // output metadata at once — does not pay for it.
+        // Read it through ensure_position_index(), never directly.
         mutable std::vector<Position> cum_common_positions;   // Cumulative common chars before each symbol (n+1 entries)
-        mutable std::vector<int> cum_degenerate_counts;       // Cumulative degenerate strings before each symbol (n+1 entries)
     };
 
     const Metadata& get_metadata() const { return metadata_; }  // Get full metadata
@@ -186,18 +191,8 @@ public:
     // Extract substring from EDS
     String extract(Position pos, Length len, const std::vector<int>& changes) const;
 
-    // Position checking: verify if pattern occurs at position with given degenerate string choices
-    bool check_position(Position common_pos,
-                       const std::vector<int>& degenerate_strings,
-                       const String& pattern) const;
-
     // Streaming access (works in both modes)
     StringSet read_symbol(Position pos) const;  // Read symbol from file or memory
-    // In-memory (FULL) mode only: return a const reference to the stored symbol,
-    // avoiding the by-value copy of read_symbol().  Throws if the EDS is
-    // file-backed (METADATA_ONLY), where the symbol must be freshly read from
-    // disk — use read_symbol() there.
-    const StringSet& read_symbol_ref(Position pos) const;
     // Bulk-copy the raw on-disk bytes of symbols [start, start+count) to `out`.
     // METADATA_ONLY only. Precondition: those symbols are stored in full-bracket
     // format as one contiguous byte run (no inter-symbol padding), so the copy
@@ -205,9 +200,6 @@ public:
     // pass-through to raw-copy unmodified symbols; the caller verifies the
     // precondition per symbol before batching.
     void copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const;
-    Length get_symbol_size(Position pos) const { return metadata_.symbol_sizes[pos]; }
-    uint64_t get_base_position(Position pos) const { return metadata_.base_positions[pos]; }
-    Length get_string_length(size_t string_id) const { return metadata_.string_lengths[string_id]; }
 
     // Source access (delegated to Sources object)
     bool has_sources() const { return sources_ != nullptr; }
@@ -253,28 +245,17 @@ private:
     // The reference is valid until `scratch` is reused or the next call.
     const StringSet& symbol_view(Position pos, StringSet& scratch) const;
 
-    // Build metadata_.cum_common_positions / cum_degenerate_counts if they have
-    // not been materialised yet (see the note on those fields). O(n), one pass
-    // over the already-resident per-symbol arrays; a no-op once built.
+    // Build metadata_.cum_common_positions if it has not been materialised yet
+    // (see the note on that field). O(n), one pass over the already-resident
+    // per-symbol arrays; a no-op once built.
     void ensure_position_index() const;
 
-    // Position checking helpers
-    std::pair<size_t, size_t> decode_degenerate_string_number(int abs_string_num) const;
+    // Map a common-character position to the symbol holding it, reporting the
+    // offset inside that symbol. Throws out_of_range past the last common
+    // character. Used by generate_patterns() to pick a start symbol.
     size_t find_symbol_at_common_position(Position common_pos, Position& offset_out) const;
-    String reconstruct_from_memory(size_t start_symbol,
-                                   Position offset_in_symbol,
-                                   const std::vector<int>& degenerate_strings,
-                                   Length pattern_length) const;
-    String reconstruct_from_file(size_t start_symbol,
-                                 Position offset_in_symbol,
-                                 const std::vector<int>& degenerate_strings,
-                                 Length pattern_length) const;
-    PathSet calculate_path_intersection(size_t start_symbol,
-                                              Position offset_in_symbol,
-                                              const std::vector<int>& degenerate_strings,
-                                              Length pattern_length) const;
 };
 
 } // namespace edsparser
 
-#endif // EDSPARSER_EDS_HPP
+#endif // EDSPARSER_FORMATS_EDS_HPP

@@ -200,10 +200,11 @@ edsparser-stats -i data.eds --verbose
 
 **Output:**
 - Number of symbols, characters, and strings
-- Context length statistics (min, max, average)
+- Context length statistics per segment (min, max, average) and the *internal*
+  minimum — the figure the l-EDS constraint is about (the overall minimum includes
+  the first and last segment, which the constraint exempts)
 - File size and memory estimates (METADATA_ONLY vs FULL mode)
 - Source tracking information (number of paths/genomes)
-- l-EDS compliance verification
 
 ### edsparser-source-transform - Source Format Conversion
 

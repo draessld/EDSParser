@@ -1,5 +1,12 @@
-#ifndef SOURCES_HPP
-#define SOURCES_HPP
+// Provenance for EDS strings: which paths (genomes, samples) carry each one.
+//
+// Sources are stored beside the EDS, not inside it, because they are routinely
+// far larger than the EDS itself — a 13 GB .seds next to an 84 MB .eds is real
+// — and because a merge that does not need them should not pay for them. The
+// class indexes entry offsets on load and streams each set on demand behind an
+// LRU cache, in any of the text (SEDS) or binary (EDZ) encodings.
+#ifndef EDSPARSER_FORMATS_SOURCES_HPP
+#define EDSPARSER_FORMATS_SOURCES_HPP
 
 #include <vector>
 #include <string>
@@ -165,7 +172,6 @@ public:
 
     // Query
     size_t cardinality() const { return cardinality_; }
-    Format get_format() const { return format_; }
     size_t num_paths() const { return num_paths_; }
     bool   is_sparse()  const { return is_sparse_; }
     size_t m_degenerate() const { return m_degenerate_; }
@@ -175,7 +181,6 @@ public:
 
     // Cache management
     void set_cache_capacity(size_t capacity);
-    void clear_cache();
 
     // Format detection
     static Format detect_format(const std::filesystem::path& path);
@@ -270,4 +275,4 @@ private:
     void add_to_cache(size_t string_id, PathSet paths) const;
 };
 
-#endif // SOURCES_HPP
+#endif // EDSPARSER_FORMATS_SOURCES_HPP

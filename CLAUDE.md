@@ -78,10 +78,9 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 - Key operations:
   - Loading/parsing from streams or files
   - Metadata access via `get_metadata()` (`Metadata` struct: `cum_common_positions`, `cum_degenerate_counts`, `is_degenerate`, `string_lengths`, etc.)
-  - Position checking (verify if pattern occurs at position)
   - Merging adjacent symbols (CARTESIAN without sources, LINEAR with sources)
   - Pattern generation for benchmarking
-- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`
+- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`; and on 2026-10-01, with no caller here or in biofmi (`src/`, `tests/`): `check_position()` and its helpers, `read_symbol_ref()`, `get_symbol_size()` / `get_base_position()` / `get_string_length()`, `Metadata::cum_degenerate_counts`, `Sources::get_format()` / `clear_cache()`, `Timer::elapsed_{milli,micro}seconds()`, the `EXT_*` / `EMPTY_STRING_MARKER` constants, `MemoryMonitor::get_average_memory_mb()` and `assert_memory_below()` / `assert_no_memory_growth()`, `parse_vcf_to_leds_streaming()` (string return; use `_direct`), and the pipe streaming headers (below)
   - Use `get_metadata()` for all statistics/structural fields
   - Use `get_metadata().is_degenerate` instead of `get_is_degenerate()`
   - Use `get_sources_object()->set_cache_capacity()` for cache control
@@ -219,11 +218,7 @@ Key methods:
 
 **Cardinality validation**: `EDS::load(eds_path, seds_path)` validates that `Sources::cardinality()` matches `EDS::m_` at load time; throws `std::invalid_argument` on mismatch. This catches stale or mismatched `.seds` files early.
 
-**Pipe Streaming** ([src/cpp/lib/pipe_buffer.hpp](src/cpp/lib/pipe_buffer.hpp), [src/cpp/lib/pipe_stream.hpp](src/cpp/lib/pipe_stream.hpp)): Thread-safe circular buffer implementing `std::streambuf` to connect producer/consumer threads without intermediate temp files:
-- `PipeOutputStream` / `PipeInputStream` — stream wrappers for producer and consumer threads
-- `make_pipe()` — factory to create connected stream pairs
-- Default buffer: 64MB; uses mutex + condition variables for synchronization
-- Used in the VCF→EDS→l-EDS direct pipeline to eliminate temp files
+**Pipe streaming was deleted on 2026-10-01** (`pipe_buffer.hpp`, `pipe_stream.hpp`, ~394 lines): a thread-safe circular `std::streambuf` plus stream wrappers, documented here as connecting the VCF→EDS→l-EDS stages without a temp file. Nothing ever included it — `parse_vcf_to_leds_streaming_direct()` has always used temp files (a bounded pipe would deadlock it: stage 2 reads the whole EDS before the SEDS), which is what the surrounding docs describe. Do not resurrect it speculatively.
 
 **Complexity Estimation** ([src/cpp/lib/transforms/eds_complexity.cpp](src/cpp/lib/transforms/eds_complexity.cpp)): `estimate_leds_complexity()` analyzes EDS structure before transformation:
 - Detects: adjacent degenerate pairs, short context blocks, dense degenerate clusters
@@ -234,8 +229,7 @@ Key methods:
 **Memory Monitoring** ([src/cpp/lib/memory_monitor.hpp](src/cpp/lib/memory_monitor.hpp), [src/cpp/lib/memory_monitor.cpp](src/cpp/lib/memory_monitor.cpp)): `MemoryMonitor` class for diagnostics and test validation:
 - Periodic sampling thread; methods: `start()`, `stop()`, `add_label()`, `get_peak_memory_mb()`, `detect_memory_leak()`
 - Linear regression-based leak detection (threshold: 1.0 MB/sec default)
-- Helpers: `assert_memory_below()`, `assert_no_memory_growth()` for test assertions
-- Used by `test_memory_smoke` and `test_memory_stress`
+- Used by `test_memory_smoke` and `test_memory_stress`, which assert on the accessors directly (the `assert_memory_below()` / `assert_no_memory_growth()` helpers were removed 2026-10-01, uncalled)
 
 **Block-Based VCF Processing with Streaming Output**: For handling very large VCF files (e.g., 65GB+), the VCF parser uses genomic windowing with incremental file writing:
 - Divides reference genome into blocks (default: 10M bases)
@@ -535,12 +529,15 @@ a green e2e run is not evidence that library internals are correct:
 - **`find_symbol_at_common_position()` read out of bounds** for any common
   position at or past the total common-character count: `upper_bound` returns
   `end()`, `symbol_idx` becomes `n`, and every per-symbol array is indexed one
-  past the end. Segfaulted ~2 runs in 3. Reachable from the public
-  `check_position()`, which is written to catch `out_of_range` from it — the
-  read happened first. (Valgrind catches it; ASan does not, because the first
+  past the end. Segfaulted ~2 runs in 3. Reachable from the then-public
+  `check_position()` (removed 2026-10-01), which was written to catch
+  `out_of_range` from it — the read happened first. `generate_patterns()` is the
+  remaining caller. (Valgrind catches it; ASan does not, because the first
   over-read lands inside a `std::vector<bool>` word.)
 - **An out-of-range degenerate string id** was reported as `"Internal error: ...
-  maps to non-degenerate symbol"`. Now `out_of_range`, naming the universe size.
+  maps to non-degenerate symbol"`. Fixed to `out_of_range` naming the universe
+  size; the method that raised it (`decode_degenerate_string_number()`) went with
+  `check_position()` on 2026-10-01.
 - **A stray `}` was absorbed as a sequence character** — `"ACGT}"` parsed as one
   5-character symbol — so a truncated file parsed "successfully" with braces
   inside its strings. Unmatched `{` was already rejected; this is the symmetric
@@ -552,14 +549,19 @@ a green e2e run is not evidence that library internals are correct:
 
 Two things worth knowing about the tests themselves:
 
-- **`check_position()` has no caller anywhere in the repo**, so its tests are its
-  entire specification — and they used to contradict themselves about the
-  coordinate convention. It is now pinned in `test_check_position_basic`:
-  `common_pos` indexes **common characters only**; `degenerate_strings` are
-  **global** degenerate-string ids that must belong to a symbol the match
-  actually traverses (otherwise `invalid_argument`), while ids for symbols
-  outside the traversed range are warned about and ignored. A match cannot begin
-  inside a degenerate symbol.
+- **`check_position()` was deleted on 2026-10-01**, along with its exclusive
+  helpers (`decode_degenerate_string_number()`, `reconstruct_from_memory()` —
+  which had no caller even from it — `reconstruct_from_file()`,
+  `calculate_path_intersection()`) and the `cum_degenerate_counts` metadata array
+  they alone needed. Nothing in this repo called it, and biofmi — the presumed
+  consumer, which vendors this library under `external/edsparser/` — does not
+  either (re-grepped over its `src/` and `tests/`). Its tests had been its entire
+  specification, and they had contradicted themselves about the coordinate
+  convention. The `generate_patterns()` test that used it as a locate oracle now
+  enumerates the language of its fixture EDS and checks substring containment
+  instead — stricter, and it needs no coordinate convention. If a position-check
+  API is ever wanted again, write it against a stated convention rather than
+  restoring this one.
 - **Half of `test_merge` merged nothing.** `{G,C}{T}`, `{T}{A,C,G}`, `{,A}{T}`,
   `{ACGT}{G,C}{T}` and `{A}{B,C}{D}` all place their short common symbol at a
   boundary, where `needs_merge()`'s `i > 0 && i < n - 1` exempts it, so they

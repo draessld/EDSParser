@@ -1,3 +1,10 @@
+// eds2leds — transform an EDS into an l-EDS.
+//
+// Merging strategy follows the input: sources supplied (-s/-z) means LINEAR,
+// none means CARTESIAN. Before doing any work the tool prints a complexity
+// verdict and, if --max-memory is given, refuses with exit code 3 when the
+// predicted peak exceeds the budget — a distinct code so orchestrators can mark
+// an input too intensive and move on.
 #include "transforms/eds_transforms.hpp"
 #include "formats/eds.hpp"
 #include "formats/sources.hpp"

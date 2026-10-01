@@ -1,3 +1,8 @@
+// vcf2eds — transform a VCF plus its reference FASTA into an EDS or l-EDS,
+// with one source path per sample.
+//
+// With -l the work is two staged transforms (VCF to EDS, then EDS to l-EDS)
+// through a temp file; --keep-eds also writes that intermediate out.
 #include "transforms/vcf_transforms.hpp"
 #include "formats/sources.hpp"
 #include "common.hpp"

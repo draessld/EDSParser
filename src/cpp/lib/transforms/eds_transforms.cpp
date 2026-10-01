@@ -1,3 +1,11 @@
+// The l-EDS merge.
+//
+// Structured as three phases per iteration, each a strictly left-to-right walk:
+// select_merge_groups() finds maximal chains of positions that must merge,
+// compute_merge_metadata() folds each chain into output string lengths and
+// source sets without touching string data, and MergeStreamWriter reads the
+// symbols back and streams the result out. Iterations chain through temp files
+// so peak memory tracks the index and one batch, never the file.
 #include "eds_transforms.hpp"
 #include "formats/sources.hpp"
 #include <memory>
@@ -645,9 +653,9 @@ namespace {
 //
 //   is_degenerate[]      true if sym_size > 1.
 //
-//   cum_common_positions[], cum_degenerate_counts[]:
-//                        NOT built here — they are lazy (EDS::Metadata) and only
-//                        position lookups need them, which the merge never does.
+//   cum_common_positions[]:
+//                        NOT built here — it is lazy (EDS::Metadata) and only
+//                        position lookups need it, which the merge never does.
 //
 //   min/max/avg_context_length, num_degenerate_symbols, etc.:
 //                        aggregate statistics for --verbose output and compliance
@@ -708,11 +716,10 @@ namespace {
             result_.metadata.num_common_chars = 0;
             result_.metadata.total_change_size = 0;
             result_.metadata.num_empty_strings = 0;
-            // cum_common_positions / cum_degenerate_counts are deliberately left
-            // empty: they are lazy (see EDS::Metadata) and the merge never looks
-            // up positions, so building them here would cost 12 bytes per output
-            // symbol for nothing. EDS::ensure_position_index() fills them if a
-            // later caller needs them.
+            // cum_common_positions is deliberately left empty: it is lazy (see
+            // EDS::Metadata) and the merge never looks up positions, so building
+            // it here would cost 8 bytes per output symbol for nothing.
+            // EDS::ensure_position_index() fills it if a later caller needs it.
         }
 
         // Consume one position-ordered batch of merge metadata.  Emits every

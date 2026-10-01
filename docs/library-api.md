@@ -1,6 +1,6 @@
 # C++ Library API Reference
 
-EDSParser exposes a C++17 library (`libedsparser_lib.a`) installed under
+EDSParser exposes a C++20 library (`libedsparser_lib.a`) installed under
 `~/.local/`. Integrate it with CMake:
 
 ```cmake
@@ -33,18 +33,6 @@ using Position  = uint64_t;   // 0-based symbol or character index
 using Length    = uint32_t;   // String or context length
 ```
 
-### File Extension Constants
-
-```cpp
-constexpr const char* EXT_MSA  = ".msa";
-constexpr const char* EXT_VCF  = ".vcf";
-constexpr const char* EXT_EDS  = ".eds";
-constexpr const char* EXT_SEDS = ".seds";
-constexpr const char* EXT_LEDS = ".leds";
-constexpr const char* EXT_EDZ  = ".edz";
-constexpr const char* EXT_EDP  = ".edp";
-```
-
 ### Timer
 
 ```cpp
@@ -53,9 +41,7 @@ public:
     Timer();
     void start();
     void stop();
-    double elapsed_seconds() const;
-    double elapsed_milliseconds() const;
-    double elapsed_microseconds() const;
+    double elapsed_seconds() const;   // readable while running
 };
 ```
 
@@ -148,9 +134,8 @@ struct EDS::Metadata {
     size_t total_change_size;                     // chars in degenerate symbols
     size_t num_empty_strings;
 
-    // Position-check support — LAZY, see below
+    // Common-position lookup support — LAZY, see below
     mutable std::vector<Position> cum_common_positions;   // length n+1
-    mutable std::vector<int>      cum_degenerate_counts;  // length n+1
 };
 ```
 
@@ -159,11 +144,12 @@ Two details that matter for memory, both from 2026-07-30:
 - `base_positions` is `uint64_t`, **not** `std::streampos`. A `streampos` carries an
   `mbstate_t` and occupies 16 bytes, which doubled the largest per-symbol array for no
   benefit — EDS files are byte streams, never multibyte-stateful.
-- `cum_common_positions` and `cum_degenerate_counts` are **empty until first use**. They are
-  pure prefix sums costing 12 bytes per symbol, materialised by `ensure_position_index()` on
-  the first position lookup. Read them through that method, never directly: the l-EDS merge
-  holds an input *and* an output metadata at once and never looks up positions, so it must
-  not pay for them.
+- `cum_common_positions` is **empty until first use**. It is a pure prefix sum costing 8
+  bytes per symbol, materialised by `ensure_position_index()` on the first common-position
+  lookup (only `generate_patterns()` does one). Read it through that method, never directly:
+  the l-EDS merge holds an input *and* an output metadata at once and never looks up
+  positions, so it must not pay for it. A companion `cum_degenerate_counts` existed until
+  `check_position()` was removed (2026-10-01) — that method was its only consumer.
 
 ### Streaming Access
 
@@ -173,21 +159,16 @@ These methods work in **both** FULL and METADATA_ONLY modes:
 // Read all strings of symbol at position pos (by value — safe everywhere)
 StringSet read_symbol(Position pos) const;
 
-// Reference into the in-memory sets, avoiding the copy. Throws when the EDS
-// streams from disk — use read_symbol() there.
-const StringSet& read_symbol_ref(Position pos) const;
-
 // Byte-copy a run of symbols verbatim to a stream (the raw-copy fast path)
 void copy_symbol_range_to_stream(Position start, size_t count, std::ostream& out) const;
-
-// Per-string metadata accessors (O(1), no disk I/O)
-Length get_symbol_size(Position pos)       const;
-Length get_string_length(size_t string_id) const;
 ```
 
 `get_is_degenerate()` and `get_sets()` were **removed**. Use
 `get_metadata().is_degenerate` for the former; for the latter, `read_symbol(pos)` works in
-both construction modes and is what the whole pipeline uses.
+both construction modes and is what the whole pipeline uses. `read_symbol_ref()` and the
+per-symbol accessors `get_symbol_size()` / `get_base_position()` / `get_string_length()`
+went the same way on 2026-10-01, unused by any tool, test or downstream consumer; read
+sizes and lengths off `get_metadata()` directly.
 
 ### Source Access
 
@@ -231,18 +212,6 @@ void generate_patterns(std::ostream& os, size_t count, Length pattern_length) co
 
 Writes `count` random patterns of `pattern_length` characters to `os`, one
 per line. Patterns follow actual EDS paths.
-
-### Position Checking
-
-```cpp
-bool check_position(
-    Position        common_pos,
-    const std::vector<int>& degenerate_strings,
-    const String&   pattern) const;
-```
-
-Returns `true` if `pattern` occurs at `common_pos` using the given
-degenerate string choices. Used by downstream locate oracles in tests.
 
 ---
 
@@ -306,7 +275,6 @@ are empty (no valid haplotype traverses the merged symbol).
 ```cpp
 size_t cardinality() const;              // m — total strings indexed
 void set_cache_capacity(size_t capacity); // default: 10 000 entries
-void clear_cache();
 ```
 
 Cache size guidelines:
@@ -408,6 +376,12 @@ struct VCFStats {
     size_t variant_groups     = 0;  // after overlap merging
     size_t overlap_conflicts  = 0;  // ALT calls ignored: same allele copy already carries
                                     // an ALT at an overlapping record (first in file order wins)
+    // Copies whose genome `bcftools consensus -s` would spell differently
+    // (see cli-tools.md § vcf2eds, Overlapping Records); the conversion is unchanged
+    size_t overlap_divergent_copies = 0, overlap_divergent_groups = 0,
+           overlap_divergent_records = 0;
+    std::vector<size_t>      overlap_divergent_samples;    // 0-based, sorted
+    std::vector<std::string> overlap_divergence_examples;  // first five
 
     size_t total_skipped() const { return skipped_malformed + skipped_unsupported_sv; }
 };
@@ -422,11 +396,16 @@ void parse_vcf_to_eds_streaming(
     std::ostream& eds_output,
     std::ostream& seds_output,
     VCFStats*     stats      = nullptr,
-    size_t        block_size = 10'000'000);
+    size_t        block_size = 10'000'000,
+    Sources::Format seds_format = Sources::Format::SEDS,
+    bool          split_groups = false,      // vcf2eds --split-groups
+    bool          strict_overlaps = false);  // vcf2eds --strict-overlaps
 ```
 
 Writes EDS and SEDS incrementally per genomic block. Prefer this for large
-files.
+files. With `strict_overlaps`, throws `OverlapDivergenceError` (a
+`std::runtime_error`; `what()` is `format_overlap_divergence(stats)`) after the
+EDS is written if any genome differs from `bcftools consensus`.
 
 ### VCF → EDS (String Return — Convenience)
 
@@ -457,19 +436,6 @@ void parse_vcf_to_leds_streaming_direct(
 Two-stage pipeline: VCF→EDS (temp file) → l-EDS (output). Temp files are
 cleaned up automatically on completion or exception.
 
-### VCF → l-EDS (String Return)
-
-```cpp
-std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
-    std::istream& vcf_stream,
-    std::istream& fasta_stream,
-    size_t        context_length,
-    VCFStats*     stats      = nullptr,
-    size_t        block_size = 10'000'000);
-```
-
-⚠️ Accumulates full output in RAM. Use only for small inputs or unit tests.
-
 ---
 
 ## MemoryMonitor (`memory_monitor.hpp`)
@@ -487,18 +453,11 @@ public:
 
     std::vector<MemorySample> get_samples() const;
     double get_peak_memory_mb() const;
-    double get_average_memory_mb() const;
-    double get_memory_growth_mb() const;
+    double get_memory_growth_mb() const;   // first sample to last
 
     // Linear regression on samples; threshold = MB/sec growth rate
     bool detect_memory_leak(double threshold_mb_per_sec = 1.0) const;
 };
-
-// Test assertions
-void assert_memory_below(double max_mb, const std::string& context);
-void assert_no_memory_growth(const MemoryMonitor& monitor,
-                             double max_growth_mb,
-                             const std::string& context);
 ```
 
 ---

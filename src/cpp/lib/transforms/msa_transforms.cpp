@@ -1,3 +1,10 @@
+// MSA to EDS implementation: three passes over the alignment file.
+//
+// Pass 1 records the reference and each sequence's file offset, and marks which
+// columns vary. Pass 2 turns those marks into symbol boundaries (merging them
+// up to l in l-EDS mode). Pass 3 emits one symbol at a time, seeking into each
+// sequence for just the columns it needs. Only the reference and two bit
+// vectors are resident, so memory tracks alignment length, not file size.
 #include "msa_transforms.hpp"
 #include "../common.hpp"
 #include "../formats/sources.hpp"

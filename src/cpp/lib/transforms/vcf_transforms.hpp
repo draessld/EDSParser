@@ -1,3 +1,8 @@
+// VCF plus reference FASTA to EDS or l-EDS, with one source path per sample.
+//
+// Handles SNPs, indels, and the symbolic alleles <DEL>, <INS>, <INV> and <CNn>.
+// Variants are processed in genomic blocks so peak memory tracks the block, not
+// the VCF; the reference is read by random access and never held whole.
 #ifndef EDSPARSER_TRANSFORMS_VCF_TRANSFORMS_HPP
 #define EDSPARSER_TRANSFORMS_VCF_TRANSFORMS_HPP
 
@@ -195,28 +200,6 @@ void parse_vcf_to_leds_streaming_direct(
     const std::filesystem::path* keep_seds_path = nullptr,
     bool split_groups = false,
     bool strict_overlaps = false);
-
-/**
- * Parse VCF + FASTA reference directly to l-EDS with source tracking (string return).
- *
- * WARNING: For large files, this accumulates entire output in memory.
- * Prefer parse_vcf_to_leds_streaming_direct() for production use.
- *
- * Uses existing parse_vcf_to_eds_streaming() + eds_to_leds_linear() pipeline.
- *
- * @param vcf_stream Input stream containing VCF file
- * @param fasta_stream Input stream containing reference FASTA
- * @param context_length Minimum context length for l-EDS
- * @param stats Optional pointer to VCFStats structure to receive statistics
- * @param block_size Genomic window size in bases (0 = load all, default 10M)
- * @return Pair of (l-EDS string, sEDS source string)
- */
-std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
-    std::istream& vcf_stream,
-    std::istream& fasta_stream,
-    size_t context_length,
-    VCFStats* stats = nullptr,
-    size_t block_size = 10000000);
 
 } // namespace edsparser
 

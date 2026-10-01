@@ -273,13 +273,17 @@ void test_metadata_preservation() {
     EDS eds = load_eds_from_streams(eds_ss, seds_ss);
     const auto& meta = eds.get_metadata();
 
-    assert(meta.min_context_length > 0);
-    assert(meta.max_context_length > 0);
-    assert(meta.avg_context_length > 0);
-    assert(meta.num_degenerate_symbols >= 0);
-    assert(meta.num_common_chars > 0);
-    assert(meta.total_change_size >= 0);
-    assert(meta.num_empty_strings >= 0);
+    // Exact values for {ACGT}{A,T}{GGG}: contexts are ACGT (4) and GGG (3), the
+    // one degenerate symbol holds 2 single-character alternatives. These were
+    // ">= 0" on unsigned fields, which every value satisfies — the test named
+    // the fields without pinning any of them.
+    assert(meta.min_context_length == 3);
+    assert(meta.max_context_length == 4);
+    assert(meta.avg_context_length == 3.5);
+    assert(meta.num_degenerate_symbols == 1);
+    assert(meta.num_common_chars == 7);
+    assert(meta.total_change_size == 2);
+    assert(meta.num_empty_strings == 0);
 
     auto src = compute_src_stats(eds);
     assert(src.num_paths > 0);

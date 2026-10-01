@@ -1,3 +1,6 @@
+// Implementation of MemoryMonitor. The sampling thread owns nothing but the
+// sample vector, guarded by samples_mutex_, so start()/stop() are safe to call
+// around work that itself spawns threads.
 #include "memory_monitor.hpp"
 #include "common.hpp"
 #include <algorithm>
@@ -87,20 +90,6 @@ double MemoryMonitor::get_peak_memory_mb() const {
     return max_it->memory_mb;
 }
 
-double MemoryMonitor::get_average_memory_mb() const {
-    std::lock_guard<std::mutex> lock(samples_mutex_);
-    if (samples_.empty()) {
-        return 0.0;
-    }
-
-    double sum = std::accumulate(samples_.begin(), samples_.end(), 0.0,
-        [](double acc, const MemorySample& s) {
-            return acc + s.memory_mb;
-        });
-
-    return sum / samples_.size();
-}
-
 double MemoryMonitor::get_memory_growth_mb() const {
     std::lock_guard<std::mutex> lock(samples_mutex_);
     if (samples_.size() < 2) {
@@ -131,28 +120,6 @@ bool MemoryMonitor::detect_memory_leak(double threshold_mb_per_sec) const {
 
     double slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
     return slope > threshold_mb_per_sec;
-}
-
-void assert_memory_below(double max_mb, const std::string& context) {
-    double current = get_peak_memory_mb();
-    if (current > max_mb) {
-        std::ostringstream oss;
-        oss << "Memory assertion failed in " << context << ": "
-            << current << " MB > " << max_mb << " MB";
-        throw std::runtime_error(oss.str());
-    }
-}
-
-void assert_no_memory_growth(const MemoryMonitor& monitor,
-                             double max_growth_mb,
-                             const std::string& context) {
-    double growth = monitor.get_memory_growth_mb();
-    if (growth > max_growth_mb) {
-        std::ostringstream oss;
-        oss << "Memory growth assertion failed in " << context << ": "
-            << growth << " MB > " << max_growth_mb << " MB";
-        throw std::runtime_error(oss.str());
-    }
 }
 
 } // namespace edsparser

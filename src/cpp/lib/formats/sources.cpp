@@ -1,3 +1,10 @@
+// Sources implementation: index building, per-format decode, the LRU cache and
+// the set operations the l-EDS merge runs over path sets.
+//
+// Thread safety: stream_ and the cache are shared mutable state guarded by
+// io_mutex_. read_source() returns by value and is safe from OpenMP threads;
+// read_source_ref() hands out a pointer into the cache and is single-threaded
+// only, since another thread's read can evict the entry underneath it.
 #include "sources.hpp"
 #include <sstream>
 #include <stdexcept>
@@ -529,17 +536,11 @@ static T read_le(std::istream& is) {
     return value;
 }
 
-// Append the ULEB128 encoding of value to out.
-static void varint_encode(uint64_t value, std::vector<uint8_t>& out) {
-    do {
-        uint8_t byte = value & 0x7F;
-        value >>= 7;
-        if (value != 0) byte |= 0x80;
-        out.push_back(byte);
-    } while (value != 0);
-}
-
 // Decode one ULEB128 value from data[0..data_size), advancing offset past it.
+//
+// Read-only: EDZ has written bitsets since the format was reworked, so nothing
+// encodes varints any more. The decoder stays because files written by earlier
+// builds still load through read_from_edz()'s legacy branch.
 static uint64_t varint_decode(const uint8_t* data, size_t data_size, size_t& offset) {
     uint64_t result = 0;
     int shift = 0;
@@ -1885,9 +1886,4 @@ void Sources::set_cache_capacity(size_t capacity) {
         cache_map_.erase(evict_id);
         cache_.pop_back();
     }
-}
-
-void Sources::clear_cache() {
-    cache_.clear();
-    cache_map_.clear();
 }

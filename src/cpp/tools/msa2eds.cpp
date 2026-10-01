@@ -1,3 +1,5 @@
+// msa2eds — transform a multiple sequence alignment into an EDS or l-EDS,
+// writing one source path per input sequence.
 #include "transforms/msa_transforms.hpp"
 #include "common.hpp"
 #include "progress_bar.hpp"

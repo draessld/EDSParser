@@ -1,3 +1,10 @@
+// EDS to l-EDS: merge adjacent symbols until every internal common segment
+// reaches the requested context length l.
+//
+// Two strategies, chosen by whether sources are supplied: CARTESIAN takes every
+// combination, LINEAR keeps only those some path actually carries. Also here:
+// the pre-flight memory estimate tools use for admission control, and the
+// blocked driver that bounds peak RAM by cutting the input at barriers.
 #ifndef EDSPARSER_TRANSFORMS_EDS_TRANSFORMS_HPP
 #define EDSPARSER_TRANSFORMS_EDS_TRANSFORMS_HPP
 

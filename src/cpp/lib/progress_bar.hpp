@@ -1,3 +1,13 @@
+// Progress reporting for tools that read one large input stream.
+//
+// CountingStreambuf wraps the input's streambuf and counts the bytes actually
+// delivered to the reader; ProgressBar renders that count against the known
+// file size from its own thread. Both are used by msa2eds and vcf2eds, whose
+// inputs are large enough that a silent multi-minute read looks like a hang.
+//
+// The counting buffer forwards seeks, because the MSA transform seeks within
+// its input — a filtering streambuf that quietly dropped seekoff/seekpos would
+// corrupt the transform rather than merely mis-report progress.
 #ifndef EDSPARSER_PROGRESS_BAR_HPP
 #define EDSPARSER_PROGRESS_BAR_HPP
 

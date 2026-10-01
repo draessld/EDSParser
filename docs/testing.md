@@ -16,8 +16,8 @@ EDSParser has four layers of testing:
 > **All seven unit tests build and pass (repaired 2026-08-20).** They had drifted
 > far enough that `test_eds` no longer compiled and four others aborted on their
 > first assertion; repairing them turned up four real defects, including an
-> out-of-bounds read reachable from `check_position()` that segfaulted about two
-> runs in three. See CLAUDE.md for what was wrong and what it found.
+> out-of-bounds read in `find_symbol_at_common_position()` that segfaulted about
+> two runs in three. See CLAUDE.md for what was wrong and what it found.
 
 ### Running
 
@@ -42,7 +42,7 @@ TRANSFORM_FUZZ_SOAK=600 ./test_transform_fuzz # long run on fresh seeds
 
 | Executable | Source | Coverage |
 |------------|--------|---------|
-| `test_eds` | `tests/unit/test_eds.cpp` | EDS parsing (full + compact format), symbol access, position checking, `check_position()`, `extract()`, cardinality validation |
+| `test_eds` | `tests/unit/test_eds.cpp` | EDS parsing (full + compact format), symbol access, pattern generation, `extract()`, cardinality validation |
 | `test_sources` | `tests/unit/test_sources.cpp` | Sources load/save, `read_source()`, `read_source_ref()`, LRU cache eviction, `intersect_sources()`, `merge_adjacent_sources()`, thread safety |
 | `test_merge` | `tests/unit/test_merge.cpp` | Symbol merge: CARTESIAN and LINEAR strategies, empty alternatives, source intersection, merge metadata |
 | `test_msa` | `tests/unit/test_msa.cpp` | MSA parsing, streaming output, source tracking, gap handling, single-sequence edge case |
@@ -244,16 +244,17 @@ mon.add_label("before transform");
 mon.add_label("after transform");
 mon.stop();
 
-// Peak memory assertion
-assert_memory_below(500.0, "l-EDS transform");
+double peak   = mon.get_peak_memory_mb();
+double growth = mon.get_memory_growth_mb();          // first sample to last
+bool   leaked = mon.detect_memory_leak(2.0);         // 2 MB/sec threshold
 
-// No-growth assertion (< 10 MB total growth allowed)
-assert_no_memory_growth(mon, 10.0, "l-EDS transform");
-
-// Detailed analysis
-double peak = mon.get_peak_memory_mb();
-bool leaked = mon.detect_memory_leak(2.0);  // 2 MB/sec threshold
+assert(peak < 500.0);
+assert(growth < 10.0);
+assert(!leaked);
 ```
+
+(`assert_memory_below()` and `assert_no_memory_growth()` were removed on
+2026-10-01 — no test ever called them; assert on the accessors directly.)
 
 ---
 

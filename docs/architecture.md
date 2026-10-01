@@ -196,26 +196,6 @@ Note this batching bounds the *merge metadata*, not the per-symbol index: withou
 
 ---
 
-## Pipe Streaming (VCF → l-EDS Direct)
-
-For the `vcf2eds -l` pipeline, two stages would normally require a
-temp file (VCF→EDS then EDS→l-EDS). The `PipeStreamBuffer` class
-implements a 64 MB thread-safe circular buffer as a `std::streambuf`:
-
-```
-Producer thread:          Consumer thread:
-  parse_vcf_to_eds()  ──▶  PipeStreamBuffer  ──▶  eds_to_leds_linear()
-```
-
-`make_pipe()` returns a connected `PipeOutputStream` + `PipeInputStream`
-pair. The producer writes EDS bytes; the consumer reads them without any
-intermediate temp file.
-
-This is used in the `vcf2eds -l` pipeline to avoid writing a potentially
-large intermediate EDS to disk.
-
----
-
 ## MSA Transformation: Three-Pass Algorithm
 
 ```
@@ -285,4 +265,3 @@ The function returns a `recommendation` string with actionable advice
 | `Sources::read_source_ref()` | **Not safe** across threads (reference may dangle) |
 | `Sources::copy_range_to_stream()` | **Thread-safe** (acquires `io_mutex_`) |
 | `MemoryMonitor` | Thread-safe (internal `samples_mutex_`) |
-| `PipeStreamBuffer` | Thread-safe (mutex + condition variables) |

@@ -1,3 +1,14 @@
+// VCF to EDS implementation.
+//
+// The VCF stream is read forwards only, so variants are bucketed into blocks as
+// they arrive and a carryover queue holds those belonging to the next block.
+// Each block is grouped, converted and flushed before the next is read.
+//
+// REF is validated against the FASTA as each group's reference span is read:
+// the transform emits the reference from the FASTA and only ever used the VCF's
+// REF for its length, so without this check a VCF from the wrong assembly
+// produces a well-formed EDS built from the wrong spans, at a reported 100%
+// success rate.
 #include "vcf_transforms.hpp"
 #include "eds_transforms.hpp"
 #include "../formats/eds.hpp"
@@ -2017,32 +2028,6 @@ void parse_vcf_to_leds_streaming_direct(
     // to "Unmatched '{' in EDS stream" failures.
     eds_to_leds_linear(temp_eds, leds_output, context_length,
                        &temp_seds, &seds_output);
-}
-
-/**
- * Parse VCF + FASTA to l-EDS with source tracking (string return wrapper).
- *
- * WARNING: For large files, this accumulates entire output in memory.
- * Prefer parse_vcf_to_leds_streaming_direct() for production use.
- *
- * Uses two-pass approach: VCF→EDS→l-EDS
- */
-std::pair<std::string, std::string> parse_vcf_to_leds_streaming(
-    std::istream& vcf_stream,
-    std::istream& fasta_stream,
-    size_t context_length,
-    VCFStats* stats,
-    size_t block_size)
-{
-    // Use stringstreams (accumulates in memory - not recommended for large files)
-    std::ostringstream leds_output;
-    std::ostringstream seds_output;
-
-    // Call the streaming version
-    parse_vcf_to_leds_streaming_direct(vcf_stream, fasta_stream, leds_output, seds_output,
-                                       context_length, stats, block_size);
-
-    return {leds_output.str(), seds_output.str()};
 }
 
 } // namespace edsparser

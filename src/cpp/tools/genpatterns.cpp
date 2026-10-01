@@ -1,3 +1,9 @@
+// edsparser-genpatterns — draw random patterns from an EDS for benchmarking.
+//
+// With sources, each pattern walks a single path, so it is a substring of a
+// genome the panel actually contains. Without them, alternatives are chosen
+// independently per symbol, which samples the cartesian language — patterns a
+// LINEAR-merged l-EDS deliberately does not contain.
 #include "formats/eds.hpp"
 #include "formats/sources.hpp"
 #include "common.hpp"

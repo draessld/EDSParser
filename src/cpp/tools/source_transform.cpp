@@ -1,3 +1,8 @@
+// edsparser-source-transform — re-encode a source file between the SEDS and EDZ
+// formats without re-running the transform that produced it.
+//
+// Thin wrapper over Sources::save_as(): every entry is read through the
+// format-agnostic read_source() and written back in the target encoding.
 #include "formats/sources.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>

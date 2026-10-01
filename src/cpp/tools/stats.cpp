@@ -1,3 +1,10 @@
+// edsparser-stats — report the structure, context lengths, sources and memory
+// profile of an EDS file, as a table, JSON or a single CSV row.
+//
+// Context lengths are per segment (maximal run of regular symbols). The overall
+// minimum includes the boundary segments, which the l-EDS constraint exempts, so
+// the figure to compare against l is the internal minimum
+// (min_internal_context_length), reported beside it.
 #include "formats/eds.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>

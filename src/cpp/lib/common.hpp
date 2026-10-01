@@ -1,3 +1,6 @@
+// Types, EDS syntax constants and small utilities shared by every translation
+// unit in the library. Anything here is depended on by all of formats/ and
+// transforms/, so it must stay free of dependencies on either.
 #ifndef EDSPARSER_COMMON_HPP
 #define EDSPARSER_COMMON_HPP
 
@@ -36,21 +39,14 @@ using StringSet = std::vector<String>;
 using Position = uint64_t;
 using Length = uint32_t;
 
-// EDS format constants
+// EDS syntax. A symbol is `{alt1,alt2,...}`; a non-degenerate symbol may drop
+// its braces in compact format. CHANGE_SEPARATOR delimits alternatives in the
+// flat "changes" sequence a downstream index builds from an EDS, and is chosen
+// outside the DNA alphabet so a query can never match across it.
 constexpr char SET_OPEN = '{';
 constexpr char SET_CLOSE = '}';
 constexpr char SET_SEPARATOR = ',';
 constexpr char CHANGE_SEPARATOR = '#';
-constexpr char EMPTY_STRING_MARKER = '\0';
-
-// File extensions
-constexpr const char* EXT_MSA = ".msa"; // Multiple Sequence Alignment
-constexpr const char* EXT_VCF = ".vcf"; // Variant Call Format
-constexpr const char* EXT_EDS = ".eds"; // Elastic-Degenerate String
-constexpr const char* EXT_EDZ = ".edz"; // Sources of Elastic-Degenerate String - binary
-constexpr const char* EXT_SEDS = ".seds"; // Sources of Elastic-Degenerate String - simple
-constexpr const char* EXT_LEDS = ".leds";   // Context-length limited EDS
-constexpr const char* EXT_EDP = ".edp"; // EDS Patterns
 
 // Error codes
 enum class ErrorCode {
@@ -64,7 +60,8 @@ enum class ErrorCode {
 };
 
 /**
- * High-resolution timer for performance measurements
+ * Wall-clock timer for the runtime figure every tool prints on exit.
+ * elapsed_seconds() may be read while running; it then measures up to now.
  */
 class Timer {
 public:
@@ -74,8 +71,6 @@ public:
     void start();
     void stop();
     double elapsed_seconds() const;
-    double elapsed_milliseconds() const;
-    double elapsed_microseconds() const;
 
 private:
     struct Impl;
