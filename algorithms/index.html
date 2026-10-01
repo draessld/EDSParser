@@ -1473,15 +1473,29 @@ reference FASTA supports random-access seeking.</p>
 3. Return the result.</p>
 <p>Uses <code>reserve()</code> on the output string to avoid repeated reallocations.</p>
 <h3 id="overlap-merging">Overlap Merging<a class="headerlink" href="#overlap-merging" title="Permanent link">&para;</a></h3>
-<p>When two variants overlap (both affect base position P), they are merged
-into a single degenerate symbol:</p>
+<p>Records whose reference spans overlap — several records at one position
+included — are merged into a single degenerate symbol spanning all of them:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Variant A: pos=100, REF=ACG, ALT=A
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Variant B: pos=101, REF=CG,  ALT=TT
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>After overlap merge:
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>  Combined REF span = [100, 103)
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>  Alternatives: {A__}, {ATT} (padding with reference bases)
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>  Alternatives: {ACG, A, ATT}   (reference, A applied, B applied)
 </code></pre></div>
+<p>Each allele copy of each sample is then placed on exactly one alternative
+(<code>merge_variant_group()</code>): the reference span with <strong>every</strong> ALT that copy
+carries in the group applied. A copy carrying no ALT is on the reference. A
+copy carrying ALTs at disjoint records gets their combination as one string —
+only combinations some copy actually carries are emitted, never the cartesian
+product. A copy carrying ALTs at records that overlap each other, which no
+single chromosome can, keeps the first in file order and ignores the rest, as
+<code>bcftools consensus</code> does; <code>VCFStats::overlap_conflicts</code> counts them. An
+alternative no copy carries is dropped.</p>
+<p>This is what keeps a haploid panel's source sets a partition of its genomes,
+which LINEAR search in biofmi requires. Until 2026-09-12 alleles were assigned
+one record at a time, so a copy that was REF at <em>any</em> record of a group was put
+on the reference alternative too, and on <code>tb_p100_snv50</code> the reference held the
+whole panel at 309 of 19,801 symbols.</p>
 <p><code>generate_eds_from_variants()</code> returns the group count to avoid calling
 <code>group_overlapping_variants()</code> twice.</p>
 <h3 id="structural-variant-handling">Structural Variant Handling<a class="headerlink" href="#structural-variant-handling" title="Permanent link">&para;</a></h3>

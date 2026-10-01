@@ -1714,10 +1714,12 @@ in TODO 3d; <code>--source-format edz-compressed</code> addresses it for <code>e
 </table>
 <p>Rule of thumb: 16 GB RAM → <code>--block-size 2000000</code>; 64 GB → default; 256 GB → <code>100000000</code>.</p>
 <h3 id="what-dominates-eds-size">What dominates EDS size<a class="headerlink" href="#what-dominates-eds-size" title="Permanent link">&para;</a></h3>
-<p><code>group_overlapping_variants()</code> merges variants whose spans overlap, and
-<code>merge_variant_group()</code> then applies <strong>one variant at a time</strong> to the whole group span, so
-a long deletion absorbs every variant inside it and emits one full-span string per allele.
-On assembly-derived data this, not the SNVs, sets the file size <code>[measured]</code>:</p>
+<p><code>group_overlapping_variants()</code> merges variants whose spans overlap into one symbol spanning
+the whole group, so a long deletion absorbs every variant inside it and every string that
+symbol emits is full-span. On assembly-derived data this, not the SNVs, sets the file size
+<code>[measured]</code>. The table predates 2026-09-12: strings were then emitted one per (record,
+allele), and are now emitted one per distinct haplotype an allele copy carries (see
+<a href="../algorithms/#overlap-merging">algorithms § Overlap Merging</a>). It has not been re-measured.</p>
 <table>
 <thead>
 <tr>
