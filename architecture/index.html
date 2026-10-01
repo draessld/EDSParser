@@ -756,17 +756,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#pipe-streaming-vcf-l-eds-direct" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pipe Streaming (VCF → l-EDS Direct)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#msa-transformation-three-pass-algorithm" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1087,17 +1076,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#pipe-streaming-vcf-l-eds-direct" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pipe Streaming (VCF → l-EDS Direct)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#msa-transformation-three-pass-algorithm" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1318,34 +1296,21 @@ byte-identical output, ~23% lower peak RSS on cartesian runs with many moderate 
 <p>Note this batching bounds the <em>merge metadata</em>, not the per-symbol index: without
 <code>--block-size</code>, peak RSS is still linear in input symbols (~74 bytes each).</p>
 <hr />
-<h2 id="pipe-streaming-vcf-l-eds-direct">Pipe Streaming (VCF → l-EDS Direct)<a class="headerlink" href="#pipe-streaming-vcf-l-eds-direct" title="Permanent link">&para;</a></h2>
-<p>For the <code>vcf2eds -l</code> pipeline, two stages would normally require a
-temp file (VCF→EDS then EDS→l-EDS). The <code>PipeStreamBuffer</code> class
-implements a 64 MB thread-safe circular buffer as a <code>std::streambuf</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Producer thread:          Consumer thread:
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  parse_vcf_to_eds()  ──▶  PipeStreamBuffer  ──▶  eds_to_leds_linear()
-</code></pre></div>
-<p><code>make_pipe()</code> returns a connected <code>PipeOutputStream</code> + <code>PipeInputStream</code>
-pair. The producer writes EDS bytes; the consumer reads them without any
-intermediate temp file.</p>
-<p>This is used in the <code>vcf2eds -l</code> pipeline to avoid writing a potentially
-large intermediate EDS to disk.</p>
-<hr />
 <h2 id="msa-transformation-three-pass-algorithm">MSA Transformation: Three-Pass Algorithm<a class="headerlink" href="#msa-transformation-three-pass-algorithm" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Pass 1: parse MSA
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  - Read reference sequence into RAM (O(alignment_length))
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  - Record file positions of each sequence start
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  - Build variant bit vector: variant_col[col] = true if any seq differs
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>Pass 2: compute symbol boundaries
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>  - Without -l: every transition between variant and non-variant is a boundary
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>  - With -l: merge adjacent symbols until internal common segments ≥ l
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>Pass 3: generate output (streaming)
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>  - For each symbol boundary:
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    - Seek to each sequence's file position for the columns in this symbol
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    - Collect alternatives, deduplicate, write {alt1,alt2,...} or plain string
-<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>    - Immediately flush to output stream (no accumulation)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Pass 1: parse MSA
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  - Read reference sequence into RAM (O(alignment_length))
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  - Record file positions of each sequence start
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  - Build variant bit vector: variant_col[col] = true if any seq differs
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>Pass 2: compute symbol boundaries
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  - Without -l: every transition between variant and non-variant is a boundary
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>  - With -l: merge adjacent symbols until internal common segments ≥ l
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>Pass 3: generate output (streaming)
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>  - For each symbol boundary:
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    - Seek to each sequence's file position for the columns in this symbol
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    - Collect alternatives, deduplicate, write {alt1,alt2,...} or plain string
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    - Immediately flush to output stream (no accumulation)
 </code></pre></div>
 <p>Memory footprint: O(reference + bit vectors), independent of the number of
 sequences or the output size.</p>
@@ -1430,10 +1395,6 @@ classifies the transformation into three risk tiers:</p>
 <tr>
 <td><code>MemoryMonitor</code></td>
 <td>Thread-safe (internal <code>samples_mutex_</code>)</td>
-</tr>
-<tr>
-<td><code>PipeStreamBuffer</code></td>
-<td>Thread-safe (mutex + condition variables)</td>
 </tr>
 </tbody>
 </table>

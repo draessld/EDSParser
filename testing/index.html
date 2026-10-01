@@ -1176,7 +1176,7 @@
 <td><strong>Memory</strong></td>
 <td>Streaming memory bounds and leak detection</td>
 <td style="text-align: center;">1–30 min</td>
-<td style="text-align: center;">❌ Manual</td>
+<td style="text-align: center;">smoke: ✅ (Skipped without data); stress: Disabled unless <code>-DEDSPARSER_CTEST_MEMORY_STRESS=ON</code></td>
 </tr>
 </tbody>
 </table>
@@ -1186,8 +1186,8 @@
 <p><strong>All seven unit tests build and pass (repaired 2026-08-20).</strong> They had drifted
 far enough that <code>test_eds</code> no longer compiled and four others aborted on their
 first assertion; repairing them turned up four real defects, including an
-out-of-bounds read reachable from <code>check_position()</code> that segfaulted about two
-runs in three. See CLAUDE.md for what was wrong and what it found.</p>
+out-of-bounds read in <code>find_symbol_at_common_position()</code> that segfaulted about
+two runs in three. See CLAUDE.md for what was wrong and what it found.</p>
 </blockquote>
 <h3 id="running">Running<a class="headerlink" href="#running" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># ctest runs from build/src/cpp, where CTestTestfile.cmake lives</span>
@@ -1202,6 +1202,8 @@ runs in three. See CLAUDE.md for what was wrong and what it found.</p>
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>./test_msa
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>./test_vcf
 <a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>./test_stats
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>./test_transform_fuzz<span class="w">                         </span><span class="c1"># ~20 s, seeded</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="nv">TRANSFORM_FUZZ_SOAK</span><span class="o">=</span><span class="m">600</span><span class="w"> </span>./test_transform_fuzz<span class="w"> </span><span class="c1"># long run on fresh seeds</span>
 </code></pre></div>
 <h3 id="test-files">Test Files<a class="headerlink" href="#test-files" title="Permanent link">&para;</a></h3>
 <table>
@@ -1216,12 +1218,12 @@ runs in three. See CLAUDE.md for what was wrong and what it found.</p>
 <tr>
 <td><code>test_eds</code></td>
 <td><code>tests/unit/test_eds.cpp</code></td>
-<td>EDS parsing (full + compact format), symbol access, position checking, <code>check_position()</code>, <code>extract()</code>, cardinality validation</td>
+<td>EDS parsing (full + compact format), symbol access, pattern generation, <code>extract()</code>, cardinality validation</td>
 </tr>
 <tr>
 <td><code>test_sources</code></td>
 <td><code>tests/unit/test_sources.cpp</code></td>
-<td>Sources load/save, <code>read_source()</code>, <code>read_source_ref()</code>, LRU cache eviction, <code>intersect_sources()</code>, <code>merge_adjacent_sources()</code>, thread safety</td>
+<td>Sources load/save, <code>read_source()</code>, <code>read_source_ref()</code>, LRU cache eviction, <code>intersect_sources()</code> (also over the EDZ bitset backend), thread safety</td>
 </tr>
 <tr>
 <td><code>test_merge</code></td>
@@ -1247,6 +1249,11 @@ runs in three. See CLAUDE.md for what was wrong and what it found.</p>
 <td><code>test_integration</code></td>
 <td><code>tests/unit/test_integration.cpp</code></td>
 <td>Complete tool workflows using <code>std::stringstream</code> (no disk I/O)</td>
+</tr>
+<tr>
+<td><code>test_transform_fuzz</code></td>
+<td><code>tests/unit/test_transform_fuzz.cpp</code></td>
+<td>Seeded differential fuzzing: <code>eds2leds</code> linear/cartesian/block, <code>msa2eds</code>, <code>vcf2eds</code> (vs <code>bcftools consensus</code>), parser round trips, all against brute-force path expansion; failures print seed + minimised reproducer. Properties and knobs in CLAUDE.md § Differential fuzzing</td>
 </tr>
 </tbody>
 </table>
@@ -1359,14 +1366,20 @@ files and compare output to expected files stored under
 </tbody>
 </table>
 <blockquote>
-<p><strong>The suites run whichever tool <code>PATH</code> finds first</strong>, falling back to
-<code>build/tools/</code> only when the name is not on <code>PATH</code> (<code>find_tool()</code> in
-<code>tests/e2e/helpers.sh</code>). A stale <code>~/.local/bin</code> copy will therefore fail tests
-for flags it predates. Run <code>make install</code>, or prefix the run with
-<code>PATH="$PWD/build/tools:$PATH"</code>, before concluding a failure is real.</p>
+<p><strong>The suites test the build tree, and refuse a binary that is not it</strong>
+(<code>resolve_tool()</code> in <code>tests/e2e/helpers.sh</code>, 2026-10-01). Tools come from
+<code>build/tools/</code> (<code>EDSPARSER_TOOLS_DIR</code> overrides) and never fall back to <code>PATH</code>;
+<code>EDSPARSER_TOOLS_FROM_PATH=1</code> tests installed binaries deliberately. Each tool's
+path and <code>--version</code> are printed, and the suite exits 1 if its <code>COMMIT</code> is not
+<code>git rev-parse HEAD</code>, its <code>DIRTY</code> flag disagrees with the work tree, or (both
+dirty) a modified tracked file is newer than it. Rebuild, or opt out loudly
+with <code>EDSPARSER_ALLOW_STALE_TOOLS=1</code>. A missing tool is a failure;
+<code>EDSPARSER_ALLOW_MISSING_TOOLS=1</code> turns a missing <em>optional</em> tool into skips.</p>
 </blockquote>
-<p>Each suite prints individual test results and a per-suite pass/fail count.
-<code>run_all.sh</code> prints an overall summary.</p>
+<p>Each suite prints individual results as PASS / FAIL / SKIP and a per-suite
+<code>passed, failed, skipped</code> count; a test skips by returning 77 (<code>skip "reason";
+return</code>), and a skip is never counted as a pass. <code>run_all.sh</code> totals all three
+across suites and names the skip count when it is non-zero.</p>
 <h3 id="test-data">Test Data<a class="headerlink" href="#test-data" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1424,6 +1437,13 @@ and those tests are gone, so any failure now is a real regression (or a stale
 tool on <code>PATH</code> — see the note above).</p>
 <hr />
 <h2 id="4-memory-tests">4. Memory Tests<a class="headerlink" href="#4-memory-tests" title="Permanent link">&para;</a></h2>
+<p>Their input is generated (<code>tests/stress/generate_quick_data.sh</code>,
+<code>generate_data.sh</code>), not committed. With no input present they exit <strong>77</strong> and
+ctest, through <code>SKIP_RETURN_CODE</code>, reports them as <em>Skipped</em> — before
+2026-10-01 <code>test_memory_smoke</code> exited 0 having tested nothing. A run where only
+some sizes exist exits 0 and prints how many were skipped.
+<code>test_memory_stress</code> is registered with ctest but Disabled unless configured
+with <code>-DEDSPARSER_CTEST_MEMORY_STRESS=ON</code>.</p>
 <h3 id="test_memory_smoke-quick-12-min">test_memory_smoke (Quick, ~1–2 min)<a class="headerlink" href="#test_memory_smoke-quick-12-min" title="Permanent link">&para;</a></h3>
 <p>Validates that all streaming operations stay within 2 GB peak and do not
 exhibit memory growth, using 10–50 MB input files.</p>
@@ -1457,16 +1477,16 @@ samples to detect leaks.</p>
 <a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">mon</span><span class="p">.</span><span class="n">add_label</span><span class="p">(</span><span class="s">"after transform"</span><span class="p">);</span>
 <a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">mon</span><span class="p">.</span><span class="n">stop</span><span class="p">();</span>
 <a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="c1">// Peak memory assertion</span>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="n">assert_memory_below</span><span class="p">(</span><span class="mf">500.0</span><span class="p">,</span><span class="w"> </span><span class="s">"l-EDS transform"</span><span class="p">);</span>
-<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
-<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="c1">// No-growth assertion (&lt; 10 MB total growth allowed)</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="n">assert_no_memory_growth</span><span class="p">(</span><span class="n">mon</span><span class="p">,</span><span class="w"> </span><span class="mf">10.0</span><span class="p">,</span><span class="w"> </span><span class="s">"l-EDS transform"</span><span class="p">);</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="c1">// Detailed analysis</span>
-<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="kt">double</span><span class="w"> </span><span class="n">peak</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_peak_memory_mb</span><span class="p">();</span>
-<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="kt">bool</span><span class="w"> </span><span class="n">leaked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">detect_memory_leak</span><span class="p">(</span><span class="mf">2.0</span><span class="p">);</span><span class="w">  </span><span class="c1">// 2 MB/sec threshold</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="kt">double</span><span class="w"> </span><span class="n">peak</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_peak_memory_mb</span><span class="p">();</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="kt">double</span><span class="w"> </span><span class="n">growth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">get_memory_growth_mb</span><span class="p">();</span><span class="w">          </span><span class="c1">// first sample to last</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="kt">bool</span><span class="w">   </span><span class="n">leaked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mon</span><span class="p">.</span><span class="n">detect_memory_leak</span><span class="p">(</span><span class="mf">2.0</span><span class="p">);</span><span class="w">         </span><span class="c1">// 2 MB/sec threshold</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="n">assert</span><span class="p">(</span><span class="n">peak</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">500.0</span><span class="p">);</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="n">assert</span><span class="p">(</span><span class="n">growth</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">10.0</span><span class="p">);</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">leaked</span><span class="p">);</span>
 </code></pre></div>
+<p>(<code>assert_memory_below()</code> and <code>assert_no_memory_growth()</code> were removed on
+2026-10-01 — no test ever called them; assert on the accessors directly.)</p>
 <hr />
 <h2 id="5-benchmarks">5. Benchmarks<a class="headerlink" href="#5-benchmarks" title="Permanent link">&para;</a></h2>
 <p>Quick reference:</p>
@@ -1585,6 +1605,18 @@ samples to detect leaks.</p>
 <tr>
 <td>genrandomeds reproducibility (<code>--seed</code>)</td>
 <td>e2e <code>test_genrandomeds.sh</code></td>
+</tr>
+<tr>
+<td>Path-by-path genome preservation through every transform</td>
+<td><code>test_transform_fuzz</code></td>
+</tr>
+<tr>
+<td><code>--block-size</code> byte identity, all source formats</td>
+<td><code>test_transform_fuzz</code>, e2e <code>test_eds2leds.sh</code></td>
+</tr>
+<tr>
+<td>vcf2eds genomes vs <code>bcftools consensus</code></td>
+<td><code>test_transform_fuzz</code></td>
 </tr>
 <tr>
 <td>Memory stability (streaming)</td>

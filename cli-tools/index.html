@@ -658,6 +658,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#overlapping-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overlapping Records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#memory-tuning-via-block-size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1381,6 +1392,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#overlapping-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overlapping Records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#memory-tuning-via-block-size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1998,6 +2020,18 @@
 <td>off</td>
 <td>With <code>-l</code>, also write the intermediate stage-1 EDS/SEDS instead of discarding them (no-op without <code>-l</code>)</td>
 </tr>
+<tr>
+<td><code>--split-groups</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Emit a group of overlapping records as one symbol per atomic segment of its span instead of one symbol of full-span haplotypes (see below)</td>
+</tr>
+<tr>
+<td><code>--strict-overlaps</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Exit with status <strong>4</strong>, removing the outputs, instead of warning when some sample's genome would differ from <code>bcftools consensus -s &lt;sample&gt;</code> (see below)</td>
+</tr>
 </tbody>
 </table>
 <blockquote>
@@ -2056,36 +2090,71 @@ haplotypes. This also drives l-EDS merge cost — see <a href="../performance/">
 </table>
 <p>Unsupported SVs and malformed lines are <strong>skipped with warnings</strong>; a
 summary is printed to stderr on exit.</p>
+<h3 id="overlapping-records">Overlapping Records<a class="headerlink" href="#overlapping-records" title="Permanent link">&para;</a></h3>
+<p>Records whose REF spans overlap form one group. By default a group is one
+degenerate symbol whose alternatives are the distinct full-span haplotypes the
+samples carry; <code>--split-groups</code> cuts the span at every record boundary and emits
+one symbol per segment instead (REF, the ALT starting there, or empty inside a
+carried deletion; a segment every sample spells the same is common text). Same
+genome per sample, same source partition, much smaller EDS when long deletions
+overlap other variants. The l-EDS merge re-joins the segments, so the l-EDS is the
+same either way, and a split EDS must be given to <code>eds2leds</code> <strong>with</strong> its sources.</p>
+<p><strong>Which call wins.</strong> One allele copy cannot carry two overlapping ALTs. vcf2eds
+applies the first ALT the copy carries in file order and ignores later
+overlapping ones (counted as "Overlapping ALT calls ignored"); a REF or missing
+call blocks nothing. <code>bcftools consensus -s &lt;sample&gt;</code> (1.19) resolves the same
+calls differently: any non-missing call, REF included, claims its REF span, a
+later record starting inside it is skipped, and only a pure indel anchored on the
+last claimed base (sharing its first base, not after an insertion) is applied on
+top. For example, a sample with <code>0</code> at <code>24 G&gt;GCG</code> and <code>1</code> at <code>24 GCGT&gt;C</code> gets the
+deletion from vcf2eds and the reference from bcftools.</p>
+<p>vcf2eds keeps its rule, but checks every allele copy with calls in a group of two
+or more records under both rules and reports the copies whose spelling actually
+differs — only those, not every overlap:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  Samples differing from bcftools consensus: 1 (1 copies, 1 groups, 2 records)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Warning: 1 sample(s) would get a different genome from `bcftools consensus -s` ...
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  chr1:24 (2 records) S1: vcf2eds spells "C", bcftools consensus "GCGT"
+</code></pre></div>
+<p>A silent check means every genome equals what <code>bcftools consensus -s</code> writes for
+it (checked by <code>test_transform_fuzz</code> against bcftools itself). Use
+<code>--strict-overlaps</code> in pipelines whose ground truth is bcftools-materialised:
+it exits 4 instead. To make the two agree, normalise the VCF so no two records
+overlap. Not modelled: symbolic ALTs (bcftools rejects most of them), diploid
+genotypes (each copy is compared as if haploid; <code>consensus -s</code> writes IUPAC
+codes for heterozygous calls), unsorted VCFs.</p>
 <h3 id="memory-tuning-via-block-size">Memory Tuning via <code>--block-size</code><a class="headerlink" href="#memory-tuning-via-block-size" title="Permanent link">&para;</a></h3>
 <p>The default 10 Mbp block keeps peak memory to a few gigabytes on typical
 population VCFs. Adjust based on available RAM:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 16 GB server — smaller blocks, lower memory</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">1000000</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 256 GB server — larger blocks, faster I/O</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">100000000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 16 GB server — smaller blocks, lower memory</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">1000000</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># 256 GB server — larger blocks, faster I/O</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>1000g.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>--block-size<span class="w"> </span><span class="m">100000000</span>
 </code></pre></div>
 <p>Setting <code>--block-size 0</code> disables blocking and loads all variants into RAM
 (suitable only for small VCF files).</p>
 <h3 id="examples_1">Examples<a class="headerlink" href="#examples_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Basic: VCF → EDS</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>reference.fasta
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># VCF → l-EDS (l=5) with low memory</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>large.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span><span class="w"> </span>--block-size<span class="w"> </span><span class="m">2000000</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Explicit output paths</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-o<span class="w"> </span>out.eds<span class="w"> </span>-s<span class="w"> </span>out.seds
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># Binary EDZ sources instead of text SEDS</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-z
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Basic: VCF → EDS</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>reference.fasta
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># VCF → l-EDS (l=5) with low memory</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>large.vcf<span class="w"> </span>-r<span class="w"> </span>hg38.fasta<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span><span class="w"> </span>--block-size<span class="w"> </span><span class="m">2000000</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># Explicit output paths</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-o<span class="w"> </span>out.eds<span class="w"> </span>-s<span class="w"> </span>out.seds
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Binary EDZ sources instead of text SEDS</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>-z
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1"># Refuse a VCF whose genomes would not match bcftools consensus</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>vcf2eds<span class="w"> </span>-i<span class="w"> </span>variants.vcf<span class="w"> </span>-r<span class="w"> </span>ref.fasta<span class="w"> </span>--strict-overlaps<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"normalise first"</span>
 </code></pre></div>
 <hr />
 <h2 id="eds2leds">eds2leds<a class="headerlink" href="#eds2leds" title="Permanent link">&para;</a></h2>
 <p>Transform an EDS to l-EDS. Automatically selects merging strategy based on
 whether a source file is provided.</p>
 <h3 id="synopsis_2">Synopsis<a class="headerlink" href="#synopsis_2" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>eds2leds -i &lt;data.eds&gt; -l &lt;N&gt; [OPTIONS]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>eds2leds -i &lt;data.eds&gt; -l &lt;N&gt; [OPTIONS]
 </code></pre></div>
 <h3 id="options_2">Options<a class="headerlink" href="#options_2" title="Permanent link">&para;</a></h3>
 <table>
@@ -2108,7 +2177,7 @@ whether a source file is provided.</p>
 <td><code>-l, --context-length</code></td>
 <td>uint</td>
 <td>required</td>
-<td>Target minimum context length</td>
+<td>Target minimum context length; enforced on <em>internal</em> common segments only (the first and last segment are exempt)</td>
 </tr>
 <tr>
 <td><code>-o, --output</code></td>
@@ -2299,25 +2368,25 @@ suitable when phasing is unknown or all combinations are needed.</p>
 <p>Before running the transformation, <code>eds2leds</code> estimates complexity via
 <code>estimate_leds_complexity()</code>. If the EDS contains many adjacent degenerate
 pairs, a warning is printed:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>[WARNING] High transformation complexity detected.
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  Adjacent degenerate pairs: 1204
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  Recommendation: Consider reducing variability or increasing context length.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>[WARNING] High transformation complexity detected.
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>  Adjacent degenerate pairs: 1204
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  Recommendation: Consider reducing variability or increasing context length.
 </code></pre></div>
 <h3 id="examples_2">Examples<a class="headerlink" href="#examples_2" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># LINEAR merging (with sources, compact output)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># CARTESIAN merging (no sources)</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># Full bracket format, 4 threads</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span><span class="w"> </span>--full<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Explicit output path</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">20</span><span class="w"> </span>-o<span class="w"> </span>custom_output.leds
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="c1"># LINEAR merging with an EDZ source file that lacks a .edz extension</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-z<span class="w"> </span>data.sources<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># LINEAR merging (with sources, compact output)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># CARTESIAN merging (no sources)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Full bracket format, 4 threads</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>-l<span class="w"> </span><span class="m">10</span><span class="w"> </span>--full<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># Explicit output path</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-l<span class="w"> </span><span class="m">20</span><span class="w"> </span>-o<span class="w"> </span>custom_output.leds
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="c1"># LINEAR merging with an EDZ source file that lacks a .edz extension</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>eds2leds<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-z<span class="w"> </span>data.sources<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span>
 </code></pre></div>
 <h3 id="self-overwrite-protection">Self-Overwrite Protection<a class="headerlink" href="#self-overwrite-protection" title="Permanent link">&para;</a></h3>
 <p>If the output <code>.seds</code> path is the same file as the input <code>-s</code> path,
@@ -2325,10 +2394,11 @@ pairs, a warning is printed:</p>
 completion to avoid truncating the input.</p>
 <hr />
 <h2 id="edsparser-stats">edsparser-stats<a class="headerlink" href="#edsparser-stats" title="Permanent link">&para;</a></h2>
-<p>Display statistics about an EDS or l-EDS file, including l-EDS compliance
-checking.</p>
+<p>Display statistics about an EDS or l-EDS file: structure, context lengths
+(including the internal minimum the l-EDS constraint is about), sources, and
+memory estimates.</p>
 <h3 id="synopsis_3">Synopsis<a class="headerlink" href="#synopsis_3" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>edsparser-stats -i &lt;data.eds&gt; [OPTIONS]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>edsparser-stats -i &lt;data.eds&gt; [OPTIONS]
 </code></pre></div>
 <h3 id="options_3">Options<a class="headerlink" href="#options_3" title="Permanent link">&para;</a></h3>
 <table>
@@ -2380,19 +2450,58 @@ checking.</p>
 </tbody>
 </table>
 <h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h3>
-<p><strong>Default (table) format:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>EDS Statistics:
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  Symbols (n):        12543
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  Strings (m):        38291
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>  Total chars (N):    1048576
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>  Degenerate symbols: 2714
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>  Common chars:       891200
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>  Min context:        5
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>  Max context:        127
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>  Avg context:        8.4
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>  Source paths:       4   (when -s provided)
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>  l-EDS compliant:    YES (l=5)
+<p><strong>Default (table) format</strong> (<code>tests/e2e/data/small.eds -s small.seds</code>):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>========================================
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>EDS Statistics
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>========================================
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>File: small.eds
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>Size: 199.0 B
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>Storage Mode: STREAMING (memory-efficient)
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>Structure:
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>  Number of symbols (n):                  21
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>  Total characters (N):                  147
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>  Total strings (m):                      31
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>  Degenerate symbols:                      9
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>  Regular symbols:                        12
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>Context Lengths (segments = maximal runs of regular symbols):
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>  Minimum:                                 2
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>  Maximum:                                45
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>  Average:                             12.60
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>  Internal minimum:                        2
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>  Segments (internal):                10 (8)
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>  Split regular symbols:                   2
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>  Adjacent degenerate symbols:             0
+<a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a>  Largest l without merging:               2
+<a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a>
+<a id="__codelineno-11-25" name="__codelineno-11-25" href="#__codelineno-11-25"></a>Variations:
+<a id="__codelineno-11-26" name="__codelineno-11-26" href="#__codelineno-11-26"></a>  Total change size:                      21
+<a id="__codelineno-11-27" name="__codelineno-11-27" href="#__codelineno-11-27"></a>  Common characters:                     126
+<a id="__codelineno-11-28" name="__codelineno-11-28" href="#__codelineno-11-28"></a>  Empty strings:                           1
+<a id="__codelineno-11-29" name="__codelineno-11-29" href="#__codelineno-11-29"></a>
+<a id="__codelineno-11-30" name="__codelineno-11-30" href="#__codelineno-11-30"></a>Sources (pangenome paths):
+<a id="__codelineno-11-31" name="__codelineno-11-31" href="#__codelineno-11-31"></a>  Strings with source info:               31
+<a id="__codelineno-11-32" name="__codelineno-11-32" href="#__codelineno-11-32"></a>  Total paths (genomes):                   5
+<a id="__codelineno-11-33" name="__codelineno-11-33" href="#__codelineno-11-33"></a>  Max paths per string:                    5
+<a id="__codelineno-11-34" name="__codelineno-11-34" href="#__codelineno-11-34"></a>  Avg paths per string:                 3.97
+<a id="__codelineno-11-35" name="__codelineno-11-35" href="#__codelineno-11-35"></a>
+<a id="__codelineno-11-36" name="__codelineno-11-36" href="#__codelineno-11-36"></a>Memory Usage:
+<a id="__codelineno-11-37" name="__codelineno-11-37" href="#__codelineno-11-37"></a>  Current (STREAMING):               599.0 B
+<a id="__codelineno-11-38" name="__codelineno-11-38" href="#__codelineno-11-38"></a>  Estimated (in-memory load):         1.9 KB
+<a id="__codelineno-11-39" name="__codelineno-11-39" href="#__codelineno-11-39"></a>  Reduction factor:                      3.3x
+<a id="__codelineno-11-40" name="__codelineno-11-40" href="#__codelineno-11-40"></a>
+<a id="__codelineno-11-41" name="__codelineno-11-41" href="#__codelineno-11-41"></a>Recommendations:
+<a id="__codelineno-11-42" name="__codelineno-11-42" href="#__codelineno-11-42"></a>  ⚠️  Internal contexts admit l &lt;= 2 only (&lt; typical l-EDS threshold 5)
+<a id="__codelineno-11-43" name="__codelineno-11-43" href="#__codelineno-11-43"></a>  → Transformation to l-EDS will merge adjacent symbols
+<a id="__codelineno-11-44" name="__codelineno-11-44" href="#__codelineno-11-44"></a>  → Suggested command:
+<a id="__codelineno-11-45" name="__codelineno-11-45" href="#__codelineno-11-45"></a>      eds2leds -i small.eds -l 5
+<a id="__codelineno-11-46" name="__codelineno-11-46" href="#__codelineno-11-46"></a>  ℹ 2 regular symbol(s) directly follow another; counted as one segment
+<a id="__codelineno-11-47" name="__codelineno-11-47" href="#__codelineno-11-47"></a>========================================
 </code></pre></div></p>
+<p>The <code>Sources</code> block appears only when <code>-s</code> / <code>-z</code> is given. There is no
+"l-EDS compliant: YES" line — earlier docs showed one, but the tool never
+printed it; compare <code>Internal minimum</code> with <code>l</code> instead.</p>
 <p><strong>Context lengths are per segment</strong> (2026-10-01): a segment is a maximal run of
 regular symbols, so <code>{CGCG}{A}{TGCC}</code> counts once, as 9. <code>Minimum</code> includes the
 boundary segments before the first and after the last degenerate symbol, which
@@ -2405,34 +2514,39 @@ merging</code>. JSON adds <code>internal_min</code>, <code>segments</code>, <cod
 <code>split_regular_symbols</code>, <code>adjacent_degenerate</code> under <code>context_lengths</code> and
 <code>max_l_without_merge</code> under <code>recommendations</code>; CSV adds the matching columns
 after <code>context_avg</code>.</p>
-<p><strong>JSON format</strong> (<code>--json</code>):
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">"n"</span><span class="p">:</span><span class="w"> </span><span class="mi">12543</span><span class="p">,</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">"m"</span><span class="p">:</span><span class="w"> </span><span class="mi">38291</span><span class="p">,</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">"N"</span><span class="p">:</span><span class="w"> </span><span class="mi">1048576</span><span class="p">,</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">"num_degenerate_symbols"</span><span class="p">:</span><span class="w"> </span><span class="mi">2714</span><span class="p">,</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">"num_common_chars"</span><span class="p">:</span><span class="w"> </span><span class="mi">891200</span><span class="p">,</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">"min_context_length"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span><span class="nt">"max_context_length"</span><span class="p">:</span><span class="w"> </span><span class="mi">127</span><span class="p">,</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">  </span><span class="nt">"avg_context_length"</span><span class="p">:</span><span class="w"> </span><span class="mf">8.4</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="p">}</span>
-</code></pre></div></p>
-<p><strong>CSV format</strong> (<code>--csv</code>): One header row + one data row — suitable for
-aggregating across multiple files with shell loops.</p>
+<p><strong>JSON format</strong> (<code>--json</code>): the same figures as nested objects — <code>file</code>,
+<code>structure</code>, <code>context_lengths</code>, <code>variations</code>, <code>memory</code>, <code>sources</code>,
+<code>recommendations</code>, <code>performance</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">"structure"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">"n_symbols"</span><span class="p">:</span><span class="w"> </span><span class="mi">21</span><span class="p">,</span><span class="w"> </span><span class="nt">"N_characters"</span><span class="p">:</span><span class="w"> </span><span class="mi">147</span><span class="p">,</span><span class="w"> </span><span class="nt">"m_strings"</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">"degenerate_symbols"</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span><span class="w"> </span><span class="nt">"regular_symbols"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span><span class="nt">"context_lengths"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nt">"min"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"max"</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">"avg"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.60</span><span class="p">,</span><span class="w"> </span><span class="nt">"internal_min"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nt">"segments"</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">"internal_segments"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">    </span><span class="nt">"split_regular_symbols"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"adjacent_degenerate"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">  </span><span class="nt">"sources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"loaded"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"num_paths"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>CSV format</strong> (<code>--csv</code>): one header row + one data row, flattening the same
+fields (<code>context_min</code>, <code>context_max</code>, <code>context_avg</code>, <code>context_internal_min</code>, …) —
+suitable for aggregating across multiple files with shell loops.</p>
 <h3 id="examples_3">Examples<a class="headerlink" href="#examples_3" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Table output</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># JSON with sources</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>--json
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># CSV batch collection</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>results/*.leds<span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">  </span>edsparser-stats<span class="w"> </span>-i<span class="w"> </span><span class="s2">"</span><span class="nv">$f</span><span class="s2">"</span><span class="w"> </span>--csv
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="k">done</span><span class="w"> </span>&gt;<span class="w"> </span>all_stats.csv
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="c1"># Verbose: adds memory estimates and compliance details</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>--verbose
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Table output</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># JSON with sources</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.eds<span class="w"> </span>-s<span class="w"> </span>data.seds<span class="w"> </span>--json
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># CSV batch collection</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>results/*.leds<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span>edsparser-stats<span class="w"> </span>-i<span class="w"> </span><span class="s2">"</span><span class="nv">$f</span><span class="s2">"</span><span class="w"> </span>--csv
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="k">done</span><span class="w"> </span>&gt;<span class="w"> </span>all_stats.csv
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="c1"># Verbose: adds per-symbol averages and the degenerate ratio</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>edsparser-stats<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>--verbose
 </code></pre></div>
 <hr />
 <h2 id="edsparser-source-transform">edsparser-source-transform<a class="headerlink" href="#edsparser-source-transform" title="Permanent link">&para;</a></h2>
@@ -2440,7 +2554,7 @@ aggregating across multiple files with shell loops.</p>
 the EDS transform. A thin wrapper around <code>Sources::save_as()</code>: it reads each
 entry through the format-agnostic <code>read_source()</code> and re-encodes it.</p>
 <h3 id="synopsis_4">Synopsis<a class="headerlink" href="#synopsis_4" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>edsparser-source-transform -i &lt;in.seds&gt; -o &lt;out.edz&gt; [OPTIONS]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>edsparser-source-transform -i &lt;in.seds&gt; -o &lt;out.edz&gt; [OPTIONS]
 </code></pre></div>
 <h3 id="options_4">Options<a class="headerlink" href="#options_4" title="Permanent link">&para;</a></h3>
 <table>
@@ -2514,20 +2628,20 @@ entry through the format-agnostic <code>read_source()</code> and re-encodes it.<
   throws rather than writing a corrupt file.</li>
 </ul>
 <h3 id="examples_4">Examples<a class="headerlink" href="#examples_4" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Text SEDS → binary EDZ (format inferred from the .edz extension)</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Back to text</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.edz<span class="w"> </span>-o<span class="w"> </span>sources.seds
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="c1"># Sparse EDZ, verified round-trip</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz<span class="w"> </span>--sparse<span class="w"> </span>--verify
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="c1"># zstd-compressed EDZ (equivalent to --to edz_compressed)</span>
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz<span class="w"> </span>--compress
-<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>
-<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="c1"># Force EDZ interpretation of a misnamed input</span>
-<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.bin<span class="w"> </span>--from<span class="w"> </span>edz<span class="w"> </span>-o<span class="w"> </span>sources.seds
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Text SEDS → binary EDZ (format inferred from the .edz extension)</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Back to text</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.edz<span class="w"> </span>-o<span class="w"> </span>sources.seds
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="c1"># Sparse EDZ, verified round-trip</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz<span class="w"> </span>--sparse<span class="w"> </span>--verify
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="c1"># zstd-compressed EDZ (equivalent to --to edz_compressed)</span>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.seds<span class="w"> </span>-o<span class="w"> </span>sources.edz<span class="w"> </span>--compress
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="c1"># Force EDZ interpretation of a misnamed input</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>edsparser-source-transform<span class="w"> </span>-i<span class="w"> </span>sources.bin<span class="w"> </span>--from<span class="w"> </span>edz<span class="w"> </span>-o<span class="w"> </span>sources.seds
 </code></pre></div>
 <hr />
 <h2 id="edsparser-genpatterns">edsparser-genpatterns<a class="headerlink" href="#edsparser-genpatterns" title="Permanent link">&para;</a></h2>
@@ -2535,7 +2649,7 @@ entry through the format-agnostic <code>read_source()</code> and re-encodes it.<
 <p>Each pattern follows an actual path through the EDS, so it is guaranteed
 to be present in any downstream tool that searches the same file.</p>
 <h3 id="synopsis_5">Synopsis<a class="headerlink" href="#synopsis_5" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>edsparser-genpatterns -i &lt;data.eds&gt; -o &lt;patterns.txt&gt; [OPTIONS]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>edsparser-genpatterns -i &lt;data.eds&gt; -o &lt;patterns.txt&gt; [OPTIONS]
 </code></pre></div>
 <h3 id="options_5">Options<a class="headerlink" href="#options_5" title="Permanent link">&para;</a></h3>
 <table>
@@ -2576,22 +2690,22 @@ to be present in any downstream tool that searches the same file.</p>
 </table>
 <h3 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h3>
 <p>Plain text, one pattern per line, DNA alphabet (ACGT):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>ACGTACGTAC
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>TGCATGCATG
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>ACGTACGTAC
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>TGCATGCATG
 </code></pre></div>
 <h3 id="examples_5">Examples<a class="headerlink" href="#examples_5" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># 100 patterns of length 10</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p100_l10.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">100</span><span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># 1000 patterns of length 30</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p1000_l30.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">1000</span><span class="w"> </span>-l<span class="w"> </span><span class="m">30</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># 100 patterns of length 10</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p100_l10.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">100</span><span class="w"> </span>-l<span class="w"> </span><span class="m">10</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># 1000 patterns of length 30</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>edsparser-genpatterns<span class="w"> </span>-i<span class="w"> </span>data.leds<span class="w"> </span>-o<span class="w"> </span>p1000_l30.txt<span class="w"> </span>-n<span class="w"> </span><span class="m">1000</span><span class="w"> </span>-l<span class="w"> </span><span class="m">30</span>
 </code></pre></div>
 <hr />
 <h2 id="genrandomeds">genrandomeds<a class="headerlink" href="#genrandomeds" title="Permanent link">&para;</a></h2>
 <p>Generate a synthetic EDS file with controlled variability. Produces both
 a <code>.eds</code> and a companion <code>.seds</code> file.</p>
 <h3 id="synopsis_6">Synopsis<a class="headerlink" href="#synopsis_6" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>genrandomeds --ref-size-mb &lt;N&gt; -o &lt;output.eds&gt; [OPTIONS]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>genrandomeds --ref-size-mb &lt;N&gt; -o &lt;output.eds&gt; [OPTIONS]
 </code></pre></div>
 <h3 id="options_6">Options<a class="headerlink" href="#options_6" title="Permanent link">&para;</a></h3>
 <table>
@@ -2703,18 +2817,18 @@ a <code>.eds</code> and a companion <code>.seds</code> file.</p>
 </tbody>
 </table>
 <h3 id="examples_6">Examples<a class="headerlink" href="#examples_6" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Basic 100 MB dataset, 10% variability</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">100</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span>-o<span class="w"> </span>data.eds
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># l-EDS compliant (min context = 5), reproducible</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">50</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--min-context<span class="w"> </span><span class="m">5</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">42</span><span class="w"> </span>-o<span class="w"> </span>data.leds
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
-<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="c1"># High variability, many alternatives</span>
-<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">10</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.20<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="w">  </span>--min-alternatives<span class="w"> </span><span class="m">3</span><span class="w"> </span>--max-alternatives<span class="w"> </span><span class="m">8</span><span class="w"> </span>-o<span class="w"> </span>high_var.eds
-<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>
-<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a><span class="c1"># SNP-heavy dataset (90% SNPs)</span>
-<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">20</span><span class="w"> </span>--snp-ratio<span class="w"> </span><span class="m">0</span>.90<span class="w"> </span>-o<span class="w"> </span>snp_heavy.eds
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Basic 100 MB dataset, 10% variability</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">100</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span>-o<span class="w"> </span>data.eds
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1"># l-EDS compliant (min context = 5), reproducible</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">50</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--min-context<span class="w"> </span><span class="m">5</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">42</span><span class="w"> </span>-o<span class="w"> </span>data.leds
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="c1"># High variability, many alternatives</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">10</span><span class="w"> </span>--variability<span class="w"> </span><span class="m">0</span>.20<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">  </span>--min-alternatives<span class="w"> </span><span class="m">3</span><span class="w"> </span>--max-alternatives<span class="w"> </span><span class="m">8</span><span class="w"> </span>-o<span class="w"> </span>high_var.eds
+<a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>
+<a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="c1"># SNP-heavy dataset (90% SNPs)</span>
+<a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a>genrandomeds<span class="w"> </span>--ref-size-mb<span class="w"> </span><span class="m">20</span><span class="w"> </span>--snp-ratio<span class="w"> </span><span class="m">0</span>.90<span class="w"> </span>-o<span class="w"> </span>snp_heavy.eds
 </code></pre></div>
 <h3 id="output-files_2">Output Files<a class="headerlink" href="#output-files_2" title="Permanent link">&para;</a></h3>
 <table>
@@ -2737,11 +2851,11 @@ a <code>.eds</code> and a companion <code>.seds</code> file.</p>
 </table>
 <h3 id="progress-output">Progress Output<a class="headerlink" href="#progress-output" title="Permanent link">&para;</a></h3>
 <p>Progress is written to stderr as a percentage:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>Generating random EDS (streaming, O(1) memory):
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>  Reference size: 100 MB (100000000 bp)
-<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>  Variability: 10.0%
-<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>  Expected variant sites: 10000000
-<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>  Progress: 47.3%
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>Generating random EDS (streaming, O(1) memory):
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>  Reference size: 100 MB (100000000 bp)
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  Variability: 10.0%
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>  Expected variant sites: 10000000
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>  Progress: 47.3%
 </code></pre></div>
 
 

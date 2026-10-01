@@ -1628,7 +1628,7 @@ comparison work; sequences are never all held in RAM.</p>
 </tbody>
 </table>
 <p>Throughput is dominated by sequential reads and is quoted elsewhere as 50–200 MB/s; that
-figure is <strong>not measured</strong> — no <code>msa2eds</code> benchmark exists yet (TODO 3e).</p>
+figure is <strong>not measured</strong> — no <code>msa2eds</code> benchmark exists yet (<code>experiment_design.md</code> 3e).</p>
 <hr />
 <h2 id="vcf-transformation">VCF Transformation<a class="headerlink" href="#vcf-transformation" title="Permanent link">&para;</a></h2>
 <h3 id="real-run-1000-genomes-phase-3-measured">Real run: 1000 Genomes phase 3 <code>[measured]</code><a class="headerlink" href="#real-run-1000-genomes-phase-3-measured" title="Permanent link">&para;</a></h3>
@@ -1668,14 +1668,14 @@ figure is <strong>not measured</strong> — no <code>msa2eds</code> benchmark ex
 </tbody>
 </table>
 <p>Note the sources dominate the output roughly 10:1. Compressing them is the open question
-in TODO 3d; <code>--source-format edz-compressed</code> addresses it for <code>eds2leds</code> output today.</p>
+in <code>experiment_design.md</code> 3d; <code>--source-format edz-compressed</code> addresses it for <code>eds2leds</code> output today.</p>
 <h3 id="memory-formula-per-block-formula">Memory formula (per block) <code>[formula]</code><a class="headerlink" href="#memory-formula-per-block-formula" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Peak RAM ≈ block_size_bytes                     (reference region in RAM)
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>          + variants_in_block × ~200 bytes
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>          + EDS output buffer                   (flushed per block)
 </code></pre></div>
 <h3 id="block-size-trade-offs-formula">Block size trade-offs <code>[formula]</code><a class="headerlink" href="#block-size-trade-offs-formula" title="Permanent link">&para;</a></h3>
-<p>Memory only — no wall-clock measurements exist for different block sizes yet (TODO 3e).</p>
+<p>Memory only — no wall-clock measurements exist for different block sizes yet (<code>experiment_design.md</code> 3e).</p>
 <table>
 <thead>
 <tr>
@@ -1719,7 +1719,9 @@ the whole group, so a long deletion absorbs every variant inside it and every st
 symbol emits is full-span. On assembly-derived data this, not the SNVs, sets the file size
 <code>[measured]</code>. The table predates 2026-09-12: strings were then emitted one per (record,
 allele), and are now emitted one per distinct haplotype an allele copy carries (see
-<a href="../algorithms/#overlap-merging">algorithms § Overlap Merging</a>). It has not been re-measured.</p>
+<a href="../algorithms/#overlap-merging">algorithms § Overlap Merging</a>): tb_p100 48.2 → 14.3 MB,
+tb_p500 723 → 223 MB, and 5.3 / 8.8 MB with <code>vcf2eds --split-groups</code> (TODO 1a has the full
+table).</p>
 <table>
 <thead>
 <tr>
@@ -1879,7 +1881,7 @@ groups vector (~16 B/group).</p>
 </table>
 <p>Cost is driven by <strong>heterozygosity</strong>, not genome size: <code>vcf2eds</code> paths are sample-level, so
 a het sample sits in both the reference and the alt string at a site and a chain of k
-adjacent degenerate sites can survive up to 2^k combinations (TODO 1b). chrY, being haploid,
+adjacent degenerate sites can survive up to 2^k combinations (TODO, "Sources stay sample-level"). chrY, being haploid,
 runs in 1.35 s at 86 MB with an average context of 996 bp.</p>
 <h3 id="real-run-m-tuberculosis-linear-measured">Real run: M. tuberculosis, linear <code>[measured]</code><a class="headerlink" href="#real-run-m-tuberculosis-linear-measured" title="Permanent link">&para;</a></h3>
 <p>Haploid, one isolate per path — the same code with the heterozygosity pathology removed.
@@ -2168,13 +2170,13 @@ Plain gzip of the text SEDS beats everything by roughly 8× at every panel size.
 <p><strong>Guidance:</strong> if most of your variants are rare (a clonal or highly structured population),
 keep text SEDS and compress the file. Reach for EDZ only when entries are genuinely dense.
 <code>edz-compressed</code> has not been measured on rare-variant data — <code>collect_results.sh</code> currently
-only tries <code>--to edz --sparse</code> (TODO 2e). Set the format with <code>eds2leds --source-format</code>.</p>
+only tries <code>--to edz --sparse</code> (<code>experiment_design.md</code> 2e). Set the format with <code>eds2leds --source-format</code>.</p>
 <h3 id="index-building-measured">Index building <code>[measured]</code><a class="headerlink" href="#index-building-measured" title="Permanent link">&para;</a></h3>
 <p>Bulk 64 KB chunk scanning replaced per-character <code>get()</code> + <code>tellg()</code>: a 2 MB SEDS builds
 its index in ~32 <code>read()</code> calls instead of ~2 M function calls.</p>
 <h3 id="lru-cache-hit-rate-unverified">LRU cache hit rate <code>[unverified]</code><a class="headerlink" href="#lru-cache-hit-rate-unverified" title="Permanent link">&para;</a></h3>
 <p>The frequently quoted "~98% hit rate at the default 10 000 entries" is <strong>asserted, never
-measured</strong> (TODO 3e). Merges do access sources in near-linear order, so locality is real,
+measured</strong> (<code>experiment_design.md</code> 3e). Merges do access sources in near-linear order, so locality is real,
 but treat the number as a plausible guess until instrumented.</p>
 <h3 id="streaming-vs-in-memory-measured">Streaming vs in-memory <code>[measured]</code><a class="headerlink" href="#streaming-vs-in-memory-measured" title="Permanent link">&para;</a></h3>
 <table>
@@ -2210,7 +2212,7 @@ output size (1 MB, 100 MB and 10 GB outputs all peak at 4 MB) <code>[measured]</
 <p>Results in this document come from two machines. Anything without a machine named here is
 a <code>[formula]</code> estimate.</p>
 <p><strong>Server — <code>DGX-A100-KTI</code>.</strong> All 1000 Genomes and M. tuberculosis runs. Datasets on
-<code>raid_storage</code>. <em>Exact CPU, RAM and storage specification still to be recorded (TODO 3a).</em></p>
+<code>raid_storage</code>. <em>Exact CPU, RAM and storage specification still to be recorded (<code>experiment_design.md</code> 3a).</em></p>
 <p><strong>Laptop — ThinkPad T14s Gen 3.</strong> Synthetic benchmarks, block-mode measurements and the
 complement-fix figures. AMD Ryzen 7 PRO 6850U (8 cores / 16 threads), 30 GB RAM, Samsung
 NVMe SSD, Linux 6.8.</p>
