@@ -108,9 +108,16 @@ namespace {
 
         Length at(size_t p) {
             if (meta_.is_degenerate[p]) return 0;
-            if (p >= run_end_) {           // p starts a run we have not measured yet
-                Length run = 0;
+            if (p >= run_end_) {           // p lies in a run we have not measured yet
+                // p need not be the run's first symbol: needs_merge() never asks
+                // about position 0 (a boundary), so a run starting there is first
+                // queried at 1. Measuring from p then dropped symbol 0 and judged
+                // e.g. {AC}{GT}{A,C} at l=3 as a 2-character context, merging the
+                // leading run into the first degenerate symbol. Measure the whole
+                // run; each run is still walked at most twice.
                 size_t q = p;
+                while (q > 0 && !meta_.is_degenerate[q - 1]) --q;
+                Length run = 0;
                 while (q < n_ && !meta_.is_degenerate[q]) {
                     run += meta_.string_lengths[meta_.cum_set_sizes[q]];
                     ++q;

@@ -528,6 +528,29 @@ void test_split_regular_symbols_are_one_context() {
     pass();
 }
 
+// Regression (found by test_transform_fuzz): the context-run cursor measured a
+// run from the first position it was asked about. needs_merge() never asks
+// about position 0 (a boundary), so a run starting at 0 was measured from 1 and
+// came out one symbol short. {AC}{GT} is a 4-character leading context, enough
+// for l=3, but was judged as "GT" (2) and merged into {A,C}. Whole-file and
+// --block-size runs then disagreed, since block mode measures the run whole.
+void test_leading_split_run_is_measured_whole() {
+    test("A leading run of regular symbols is measured from its first symbol");
+
+    EDS t = transform_to_leds("{AC}{GT}{A,C}{TTT}{G,T}{A}", 3);
+    assert(t.length() == 5);
+    assert(t.read_symbol(0).size() == 1 && t.read_symbol(0)[0] == "ACGT");
+    assert(t.read_symbol(1).size() == 2);    // {A,C} untouched
+
+    // Same with an empty leading fragment: {A}{} is one 1-character run.
+    EDS e = transform_to_leds("{A}{}{,C}{G}", 1);
+    assert(e.length() == 3);
+    assert(e.read_symbol(0).size() == 1 && e.read_symbol(0)[0] == "A");
+    assert(e.read_symbol(1).size() == 2);
+
+    pass();
+}
+
 // ===== EDGE CASES =====
 
 void test_single_symbol_input() {
@@ -713,6 +736,7 @@ int main() {
     test_statistics_after_transform();
     test_metadata_consistency();
     test_split_regular_symbols_are_one_context();
+    test_leading_split_run_is_measured_whole();
 
     // Edge cases
     test_single_symbol_input();
