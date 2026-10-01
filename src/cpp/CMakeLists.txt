@@ -195,16 +195,29 @@ add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
 target_link_libraries(test_integration edsparser_lib)
 add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# Memory stress tests (built but NOT run automatically - too slow for CI)
-# Run manually when needed: ./test_memory_smoke or ./test_memory_stress
-add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
-target_link_libraries(test_memory_stress edsparser_lib)
+# Memory tests. Their input is generated, not committed
+# (tests/stress/generate_quick_data.sh / generate_data.sh), and without it they
+# exit 77, which SKIP_RETURN_CODE makes ctest report as *skipped*. Before
+# 2026-10-01 test_memory_smoke exited 0 having tested nothing.
+set(EDSPARSER_STRESS_DATA_DIR "${EDSPARSER_REPO_ROOT}/tests/stress/data")
 
 add_executable(test_memory_smoke ${TEST_DIR}/test_memory_smoke.cpp)
 target_link_libraries(test_memory_smoke edsparser_lib)
+add_test(NAME test_memory_smoke COMMAND test_memory_smoke ${EDSPARSER_STRESS_DATA_DIR})
+set_tests_properties(test_memory_smoke PROPERTIES SKIP_RETURN_CODE 77 LABELS memory)
 
-# Note: These are excluded from 'ctest' / 'make test'
-# To run: cd build/src/cpp && ./test_memory_smoke
+# test_memory_stress takes 30+ min once its data exists, so it is registered but
+# DISABLED (ctest lists it as "Not Run (Disabled)", never as passed) unless
+# configured with -DEDSPARSER_CTEST_MEMORY_STRESS=ON. Run it by hand any time:
+# build/tools/test_memory_stress tests/stress/data [--quick|--large]
+option(EDSPARSER_CTEST_MEMORY_STRESS "Run test_memory_stress under ctest" OFF)
+add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
+target_link_libraries(test_memory_stress edsparser_lib)
+add_test(NAME test_memory_stress COMMAND test_memory_stress ${EDSPARSER_STRESS_DATA_DIR})
+set_tests_properties(test_memory_stress PROPERTIES SKIP_RETURN_CODE 77 LABELS "memory;stress")
+if(NOT EDSPARSER_CTEST_MEMORY_STRESS)
+    set_tests_properties(test_memory_stress PROPERTIES DISABLED TRUE)
+endif()
 
 # Print configuration summary
 message(STATUS "")

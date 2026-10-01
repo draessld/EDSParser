@@ -7,7 +7,7 @@ EDSParser has four layers of testing:
 | **Unit** | Core C++ library logic | < 30 s | ✅ Yes |
 | **Integration** | End-to-end CLI tool workflows (in-process) | < 60 s | ✅ Yes |
 | **End-to-end (e2e)** | Shell invocations of installed CLIs | ~1 min | ❌ Manual |
-| **Memory** | Streaming memory bounds and leak detection | 1–30 min | ❌ Manual |
+| **Memory** | Streaming memory bounds and leak detection | 1–30 min | smoke: ✅ (Skipped without data); stress: Disabled unless `-DEDSPARSER_CTEST_MEMORY_STRESS=ON` |
 
 ---
 
@@ -187,6 +187,14 @@ tool on `PATH` — see the note above).
 ---
 
 ## 4. Memory Tests
+
+Their input is generated (`tests/stress/generate_quick_data.sh`,
+`generate_data.sh`), not committed. With no input present they exit **77** and
+ctest, through `SKIP_RETURN_CODE`, reports them as *Skipped* — before
+2026-10-01 `test_memory_smoke` exited 0 having tested nothing. A run where only
+some sizes exist exits 0 and prints how many were skipped.
+`test_memory_stress` is registered with ctest but Disabled unless configured
+with `-DEDSPARSER_CTEST_MEMORY_STRESS=ON`.
 
 ### test_memory_smoke (Quick, ~1–2 min)
 

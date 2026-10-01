@@ -7,6 +7,10 @@
 
 using namespace edsparser;
 
+// Exit code meaning "skipped" (automake convention); CMake registers this test
+// with SKIP_RETURN_CODE 77 so ctest reports it as skipped, never as passed.
+constexpr int SKIP_RETURN_CODE = 77;
+
 /**
  * Quick smoke test for memory validation (~1-2 minutes)
  * Tests only loading and source streaming - skips slow transformations
@@ -22,8 +26,9 @@ int main(int argc, char** argv) {
     }
 
     if (!std::filesystem::exists(data_dir)) {
-        std::cerr << "ERROR: Test data directory not found: " << data_dir << "\n";
-        return 1;
+        std::cout << "SKIP: test data directory not found: " << data_dir << "\n";
+        std::cout << "Run tests/stress/generate_quick_data.sh first\n";
+        return SKIP_RETURN_CODE;
     }
 
     double max_memory_mb = 2000.0;
@@ -32,7 +37,7 @@ int main(int argc, char** argv) {
     std::cout << "Testing file sizes: 10MB, 50MB\n";
     std::cout << "Memory limit: " << max_memory_mb << " MB\n\n";
 
-    int passed = 0, failed = 0;
+    int passed = 0, failed = 0, skipped = 0;
 
     for (size_t size_mb : test_sizes) {
         std::cout << "\n" << std::string(60, '=') << "\n";
@@ -43,7 +48,8 @@ int main(int argc, char** argv) {
         auto seds_path = data_dir / ("test_" + std::to_string(size_mb) + "MB.seds");
 
         if (!std::filesystem::exists(eds_path)) {
-            std::cout << "SKIP: File not found\n";
+            std::cout << "  Result: SKIP (test data not found: " << eds_path << ")\n";
+            skipped++;
             continue;
         }
 
@@ -90,8 +96,16 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\n" << std::string(60, '=') << "\n";
-    std::cout << "SUMMARY: " << passed << " passed, " << failed << " failed\n";
+    std::cout << "SUMMARY: " << passed << " passed, " << failed << " failed, "
+              << skipped << " skipped\n";
     std::cout << std::string(60, '=') << "\n";
 
-    return (failed == 0) ? 0 : 1;
+    // A run that tested nothing is a skip, not a pass: it used to exit 0 here
+    // with every input missing.
+    if (failed > 0) return 1;
+    if (passed == 0) {
+        std::cout << "SKIP: no input present — generate data with tests/stress/generate_quick_data.sh\n";
+        return SKIP_RETURN_CODE;
+    }
+    return 0;
 }

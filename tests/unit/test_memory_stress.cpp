@@ -8,8 +8,19 @@
 #include <filesystem>
 #include <iomanip>
 #include <random>
+#include <unistd.h>
 
 using namespace edsparser;
+
+// Exit code meaning "skipped" (automake convention); CMake registers this test
+// with SKIP_RETURN_CODE 77 so ctest reports it as skipped, never as passed.
+constexpr int SKIP_RETURN_CODE = 77;
+
+// Thrown when a test's input data is absent: the test did not run, which is
+// neither a pass nor a failure.
+struct SkipTest : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 /**
  * Memory Stress Test Configuration
@@ -28,6 +39,7 @@ struct StressTestConfig {
 struct TestResult {
     std::string test_name;
     bool passed;
+    bool skipped = false;
     double peak_memory_mb;
     double runtime_sec;
     std::string error_message;
@@ -42,8 +54,12 @@ void print_header(const std::string& test_name) {
 }
 
 void print_result(const TestResult& result) {
-    std::cout << "[" << (result.passed ? "PASS" : "FAIL") << "] "
+    std::cout << "[" << (result.skipped ? "SKIP" : result.passed ? "PASS" : "FAIL") << "] "
               << result.test_name << "\n";
+    if (result.skipped) {
+        std::cout << "  Reason: " << result.error_message << "\n";
+        return;
+    }
     std::cout << "  Peak Memory: " << std::fixed << std::setprecision(1)
               << result.peak_memory_mb << " MB\n";
     std::cout << "  Runtime: " << std::fixed << std::setprecision(2)
@@ -58,14 +74,16 @@ void print_summary() {
     std::cout << "TEST SUMMARY\n";
     std::cout << std::string(80, '=') << "\n";
 
-    size_t passed = 0;
+    size_t passed = 0, skipped = 0;
     for (const auto& result : test_results) {
-        if (result.passed) passed++;
+        if (result.skipped) skipped++;
+        else if (result.passed) passed++;
     }
 
     std::cout << "Total: " << test_results.size() << " tests\n";
     std::cout << "Passed: " << passed << "\n";
-    std::cout << "Failed: " << (test_results.size() - passed) << "\n";
+    std::cout << "Failed: " << (test_results.size() - passed - skipped) << "\n";
+    std::cout << "Skipped: " << skipped << "\n";
 
     std::cout << "\nDetailed Results:\n";
     for (const auto& result : test_results) {
@@ -98,7 +116,7 @@ void test_large_eds_loading(const StressTestConfig& config, size_t size_mb) {
             ("test_" + std::to_string(size_mb) + "MB.seds");
 
         if (!std::filesystem::exists(eds_path)) {
-            throw std::runtime_error("Test file not found: " + eds_path.string());
+            throw SkipTest("test data not found: " + eds_path.string());
         }
 
         std::cout << "Loading: " << eds_path << "\n";
@@ -140,6 +158,11 @@ void test_large_eds_loading(const StressTestConfig& config, size_t size_mb) {
         result.peak_memory_mb = peak;
         result.runtime_sec = timer.elapsed_seconds();
 
+    } catch (const SkipTest& e) {
+        monitor.stop();
+        timer.stop();
+        result.skipped = true;
+        result.error_message = e.what();
     } catch (const std::exception& e) {
         monitor.stop();
         timer.stop();
@@ -181,11 +204,11 @@ void test_eds_to_leds_transformation(const StressTestConfig& config,
 
         // Output files (temporary)
         auto temp_dir = std::filesystem::temp_directory_path();
-        std::filesystem::path leds_path = temp_dir / "stress_test_output.leds";
-        std::filesystem::path lseds_path = temp_dir / "stress_test_output.seds";
+        std::filesystem::path leds_path = temp_dir / ("stress_test_output_" + std::to_string(::getpid()) + ".leds");
+        std::filesystem::path lseds_path = temp_dir / ("stress_test_output_" + std::to_string(::getpid()) + ".seds");
 
         if (!std::filesystem::exists(eds_path)) {
-            throw std::runtime_error("Test file not found: " + eds_path.string());
+            throw SkipTest("test data not found: " + eds_path.string());
         }
 
         std::cout << "Transforming: " << eds_path << " → " << leds_path << "\n";
@@ -235,6 +258,11 @@ void test_eds_to_leds_transformation(const StressTestConfig& config,
         result.peak_memory_mb = peak;
         result.runtime_sec = timer.elapsed_seconds();
 
+    } catch (const SkipTest& e) {
+        monitor.stop();
+        timer.stop();
+        result.skipped = true;
+        result.error_message = e.what();
     } catch (const std::exception& e) {
         monitor.stop();
         timer.stop();
@@ -271,7 +299,7 @@ void test_source_streaming(const StressTestConfig& config, size_t size_mb) {
             ("test_" + std::to_string(size_mb) + "MB.seds");
 
         if (!std::filesystem::exists(eds_path)) {
-            throw std::runtime_error("Test file not found: " + eds_path.string());
+            throw SkipTest("test data not found: " + eds_path.string());
         }
 
         std::cout << "Loading with sources: " << eds_path << "\n";
@@ -325,6 +353,11 @@ void test_source_streaming(const StressTestConfig& config, size_t size_mb) {
         result.peak_memory_mb = peak;
         result.runtime_sec = timer.elapsed_seconds();
 
+    } catch (const SkipTest& e) {
+        monitor.stop();
+        timer.stop();
+        result.skipped = true;
+        result.error_message = e.what();
     } catch (const std::exception& e) {
         monitor.stop();
         timer.stop();
@@ -361,11 +394,11 @@ void test_multi_iteration_leds(const StressTestConfig& config, size_t size_mb) {
             ("test_" + std::to_string(size_mb) + "MB.seds");
 
         auto temp_dir = std::filesystem::temp_directory_path();
-        std::filesystem::path leds_path = temp_dir / "stress_multi_iter.leds";
-        std::filesystem::path lseds_path = temp_dir / "stress_multi_iter.seds";
+        std::filesystem::path leds_path = temp_dir / ("stress_multi_iter_" + std::to_string(::getpid()) + ".leds");
+        std::filesystem::path lseds_path = temp_dir / ("stress_multi_iter_" + std::to_string(::getpid()) + ".seds");
 
         if (!std::filesystem::exists(eds_path)) {
-            throw std::runtime_error("Test file not found: " + eds_path.string());
+            throw SkipTest("test data not found: " + eds_path.string());
         }
 
         std::cout << "Multi-iteration transformation with context length 50\n";
@@ -424,6 +457,11 @@ void test_multi_iteration_leds(const StressTestConfig& config, size_t size_mb) {
         result.peak_memory_mb = peak;
         result.runtime_sec = timer.elapsed_seconds();
 
+    } catch (const SkipTest& e) {
+        monitor.stop();
+        timer.stop();
+        result.skipped = true;
+        result.error_message = e.what();
     } catch (const std::exception& e) {
         monitor.stop();
         timer.stop();
@@ -458,9 +496,9 @@ int main(int argc, char** argv) {
 
     // Check if test data exists
     if (!std::filesystem::exists(config.data_dir)) {
-        std::cerr << "ERROR: Test data directory not found: " << config.data_dir << "\n";
-        std::cerr << "Run generate_data.sh first\n";
-        return 1;
+        std::cout << "SKIP: test data directory not found: " << config.data_dir << "\n";
+        std::cout << "Run tests/stress/generate_data.sh first\n";
+        return SKIP_RETURN_CODE;
     }
 
     // Run tests on different file sizes
@@ -502,11 +540,17 @@ int main(int argc, char** argv) {
     // Print summary
     print_summary();
 
-    // Return exit code
-    size_t passed = 0;
+    // Exit code: any failure fails; nothing run at all (every input missing)
+    // is a skip, never a pass.
+    size_t passed = 0, skipped = 0;
     for (const auto& result : test_results) {
-        if (result.passed) passed++;
+        if (result.skipped) skipped++;
+        else if (result.passed) passed++;
     }
-
-    return (passed == test_results.size()) ? 0 : 1;
+    if (passed + skipped < test_results.size()) return 1;
+    if (passed == 0) {
+        std::cout << "SKIP: no stress test ran — generate data with tests/stress/generate_data.sh\n";
+        return SKIP_RETURN_CODE;
+    }
+    return 0;
 }
