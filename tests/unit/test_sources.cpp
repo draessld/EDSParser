@@ -477,45 +477,42 @@ void test_edz_bitset_complement_encoding() {
 }
 
 void test_edz_bitset_intersection() {
-    std::cout << "EDZ Bitset Test 4: merge_adjacent_sources on EDZ bitset backend... ";
+    std::cout << "EDZ Bitset Test 4: pairwise intersections over the EDZ bitset backend... ";
 
-    // symbol1: [{1,2}, {3,4}]  symbol2: [{2,3}, {4,5}]
-    // num_paths = 5
-    // Expected intersections (non-empty pairs):
-    //   {1,2} ∩ {2,3} = {2}
-    //   {1,2} ∩ {4,5} = {}  (empty, skipped)
-    //   {3,4} ∩ {2,3} = {3}
-    //   {3,4} ∩ {4,5} = {4}
-    // Result: [{2}, {3}, {4}]
+    // symbol1: [{1,2}, {3,4}]  symbol2: [{2,3}, {4,5}]; num_paths = 5.
+    // Read back through the bitset backend and intersected the way the l-EDS
+    // merge pairs adjacent symbols (it used to go through
+    // merge_adjacent_sources(), deleted 2026-10-01: nothing else called it).
+    //   {1,2} ∩ {2,3} = {2}     {1,2} ∩ {4,5} = {}
+    //   {3,4} ∩ {2,3} = {3}     {3,4} ∩ {4,5} = {4}
+    auto pairwise = [](const Sources& src, size_t s1, size_t n1, size_t s2, size_t n2) {
+        std::vector<PathSet> out;
+        for (size_t i = 0; i < n1; ++i)
+            for (size_t j = 0; j < n2; ++j) {
+                PathSet isect = Sources::intersect_sources(src.read_source(s1 + i),
+                                                           src.read_source(s2 + j));
+                if (!isect.empty()) out.push_back(std::move(isect));
+            }
+        return out;
+    };
 
     const size_t np = 5;
     std::vector<PathSet> sets = {{1,2}, {3,4}, {2,3}, {4,5}};
-
     auto path = std::filesystem::temp_directory_path() / "test_edz_bitset_isect.edz";
     write_edz_bitset(path, sets, np);
-
     auto src = Sources::load(path);
-    // symbol1 starts at index 0 (size 2), symbol2 at index 2 (size 2)
-    auto merged = src->merge_adjacent_sources(0, 2, 2, 2);
-
     std::vector<PathSet> expected_merged = {{2}, {3}, {4}};
-    assert(merged.size() == expected_merged.size());
-    for (size_t i = 0; i < expected_merged.size(); ++i)
-        assert(merged[i] == expected_merged[i]);
+    assert(pairwise(*src, 0, 2, 2, 2) == expected_merged);
 
-    // Also test universal set intersection: {0} ∩ {1,2} = {1,2}
+    // Universal set: {0} ∩ {3,4} = {3,4}; {0} ∩ {2,3} = {2,3};
+    // {1,2} ∩ {3,4} = {}; {1,2} ∩ {2,3} = {2}
     const size_t np2 = 4;
     std::vector<PathSet> sets2 = {{0}, {1,2}, {3,4}, {2,3}};
     auto path2 = std::filesystem::temp_directory_path() / "test_edz_bitset_isect2.edz";
     write_edz_bitset(path2, sets2, np2);
-
     auto src2 = Sources::load(path2);
-    auto merged2 = src2->merge_adjacent_sources(0, 2, 2, 2);
-    // {0} ∩ {3,4} = {3,4}; {0} ∩ {2,3} = {2,3}; {1,2} ∩ {3,4} = {}; {1,2} ∩ {2,3} = {2}
     std::vector<PathSet> expected2 = {{3,4}, {2,3}, {2}};
-    assert(merged2.size() == expected2.size());
-    for (size_t i = 0; i < expected2.size(); ++i)
-        assert(merged2[i] == expected2[i]);
+    assert(pairwise(*src2, 0, 2, 2, 2) == expected2);
 
     std::filesystem::remove(path);
     std::filesystem::remove(path2);

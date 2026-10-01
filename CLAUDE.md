@@ -208,7 +208,7 @@ Key methods:
 - `Sources::load()` — factory method, returns `shared_ptr<Sources>`
 - `Sources::read_source(idx)` — access with automatic LRU caching; **returns by value** (thread-safe copy)
 - `Sources::read_source_ref(idx)` — returns a const reference into the LRU cache for single-threaded use only; **do not use in parallel contexts** — another thread can evict the cache entry, dangling the reference
-- `Sources::merge_adjacent_sources()` / `intersect_sources()` — set operations for l-EDS; uses `read_source()` (not `read_source_ref()`) to avoid dangling references across OpenMP threads
+- `Sources::intersect_sources()` — the set operation the l-EDS merge folds with (`compute_merge_metadata()` reads through `read_source()`, not `read_source_ref()`, to avoid dangling references across OpenMP threads). `merge_adjacent_sources()` was deleted 2026-10-01: no caller, and its bitset path still read a complement against an unmasked universe (the 20d8ff1 bug)
 - `EDS::set_sources_object()` / `get_sources_object()` — attach/retrieve Sources on EDS
 - `EDS::read_source(idx)` — delegates to Sources (works regardless of how the EDS was constructed)
 

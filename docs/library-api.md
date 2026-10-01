@@ -260,15 +260,13 @@ void copy_range_to_stream(size_t start_idx, size_t count, std::ostream& out) con
 static std::set<int> intersect_sources(
     const std::set<int>& sources1,
     const std::set<int>& sources2);
-
-// All valid merged source sets for two adjacent symbols
-std::vector<std::set<int>> merge_adjacent_sources(
-    size_t symbol1_start, size_t symbol1_size,
-    size_t symbol2_start, size_t symbol2_size) const;
 ```
 
-`merge_adjacent_sources()` throws `std::runtime_error` if all intersections
-are empty (no valid haplotype traverses the merged symbol).
+The l-EDS merge folds these intersections itself (`compute_merge_metadata()`, with a
+64-bit fast path below 64 paths). A `merge_adjacent_sources()` pairing two symbols
+existed until 2026-10-01; nothing called it, and its bitset path still expanded a
+complement against an unmasked 64-bit universe (the 20d8ff1 bug), so it was deleted
+rather than fixed.
 
 ### Cache Management
 

@@ -152,24 +152,6 @@ public:
         const PathSet& sources2
     );
 
-    /**
-     * Merge sources from two adjacent symbols (analogous to EDS::merge_adjacent).
-     *
-     * Computes all valid source combinations for merging symbol1 and symbol2,
-     * filtering by non-empty source intersection (LINEAR merge semantics).
-     *
-     * @param symbol1_start Global string index for first symbol
-     * @param symbol1_size Number of strings in first symbol
-     * @param symbol2_start Global string index for second symbol
-     * @param symbol2_size Number of strings in second symbol
-     * @return Vector of merged source sets (only non-empty intersections)
-     * @throws std::runtime_error if all intersections are empty
-     */
-    std::vector<PathSet> merge_adjacent_sources(
-        size_t symbol1_start, size_t symbol1_size,
-        size_t symbol2_start, size_t symbol2_size
-    ) const;
-
     // Query
     size_t cardinality() const { return cardinality_; }
     size_t num_paths() const { return num_paths_; }

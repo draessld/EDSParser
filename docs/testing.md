@@ -43,7 +43,7 @@ TRANSFORM_FUZZ_SOAK=600 ./test_transform_fuzz # long run on fresh seeds
 | Executable | Source | Coverage |
 |------------|--------|---------|
 | `test_eds` | `tests/unit/test_eds.cpp` | EDS parsing (full + compact format), symbol access, pattern generation, `extract()`, cardinality validation |
-| `test_sources` | `tests/unit/test_sources.cpp` | Sources load/save, `read_source()`, `read_source_ref()`, LRU cache eviction, `intersect_sources()`, `merge_adjacent_sources()`, thread safety |
+| `test_sources` | `tests/unit/test_sources.cpp` | Sources load/save, `read_source()`, `read_source_ref()`, LRU cache eviction, `intersect_sources()` (also over the EDZ bitset backend), thread safety |
 | `test_merge` | `tests/unit/test_merge.cpp` | Symbol merge: CARTESIAN and LINEAR strategies, empty alternatives, source intersection, merge metadata |
 | `test_msa` | `tests/unit/test_msa.cpp` | MSA parsing, streaming output, source tracking, gap handling, single-sequence edge case |
 | `test_vcf` | `tests/unit/test_vcf.cpp` | VCF parsing: SNPs, indels, `<DEL>`, `<INS>`, `<INV>`, `<CN0..N>`, multi-allelic, overlap merging (each genome on exactly one alternative of a merged group), block-based |
