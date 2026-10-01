@@ -43,23 +43,35 @@ which makes the boundary exact: **≤ 63 samples/sequences affected, > 63 unaffe
   heterozygosity is a separate problem the fix does not solve — see "Sources stay
   sample-level" — so haploidise the VCF first.
 
-### 0c. Surface the boundary-context exemption where users meet it *(mostly resolved)*
+### 0c. Surface the boundary-context exemption where users meet it *(resolved 2026-10-01)*
 
 `needs_merge()` skips the first and last symbol (`i > 0 && i < n - 1`), so a leading or
-trailing common symbol shorter than l survives untouched. Minimal repro:
-`{ACGT}{A,C}{160bp}{G,T}{160bp}` at `-l 20` keeps its 4 bp first symbol. Real instance: every
-TB panel reports `context_min` 27–31 at l=50 and l=100, because the first variant sits ~30 bp
-into H37Rv.
+trailing common symbol shorter than l survives untouched — intended: `docs/README.md` defines
+l-EDS as constraining every *internal* common segment, a boundary segment having a degenerate
+neighbour on one side only. Every TB panel reports `context_min` 27–31 at l=50 and l=100
+because the first variant sits ~30 bp into H37Rv.
 
-**This is intended design, not a bug** — `docs/README.md` has defined l-EDS as constraining
-every *internal* common segment since the beginning, on the grounds that a boundary segment
-has a degenerate neighbour on only one side and so is never ambiguous. Interior contexts do
-satisfy the invariant.
-
-What remains is presentation: `edsparser-stats` reports a single `context_min` that includes
-the boundary symbols, so a correct l-EDS looks like it violates its own constraint. Report
-interior minimum separately (or alongside), and confirm biofmi does not assume every context
-is ≥ l.
+Resolved on branch `regular-symbol-merge`:
+- `edsparser-stats` reports **`Internal minimum`** beside `Minimum` (JSON `internal_min`, CSV
+  `context_internal_min`), plus segment counts, split regular symbols, adjacent degenerate
+  symbols and the largest l the EDS satisfies without merging. Recommendations use that, not
+  the overall minimum, and name `eds2leds` (they said `edsparser-transform`, which does not
+  exist). `tb_p100_snv50` `linear_l59`: `Minimum 31`, `Internal minimum 59`.
+- **Context statistics are per segment** — a maximal run of regular symbols. `vcf2eds` wrote
+  panel-fixed SNPs as their own symbol, `{CGCG}{A}{TGCC…}`: 72 extra regular symbols in 27
+  runs on `panel_100_snv50`, which per-symbol statistics counted as short internal contexts.
+  `EDS::finalize_context_statistics()` computes them once for `EDS::parse` and the merge
+  writer alike. Not merged at parse time: that would renumber strings against the `.seds`.
+- **`vcf2eds` writes the canonical form** — a single haplotype every sample carries joins the
+  common text, carried across block boundaries. Both TB panels: new EDS = old with runs
+  concatenated, new SEDS = old minus the dropped `{0}`s. `eds2leds` already coalesced runs
+  (`ADJACENT_COMMON`) and judged shortness by run length (`CtxRunCursor`): its output on old
+  vs new input is byte-identical at l=3,5,9,11,14.
+- biofmi does not assume every context is ≥ l: `biofmi-build` checks internal segments only,
+  and since 2026-10-01 checks them per run (biofmi TODO §7b).
+- Tests: `test_eds` 15/15b, `test_merge` 18, `test_vcf` "panel-fixed variant", e2e goldens
+  `stats/simple.{json,csv}` and `vcf2eds/variants.{eds,seds}` regenerated (the latter lost two
+  split runs: 30 → 26 strings).
 
 ### 0d. `check_position()` has no caller, and so no specification
 

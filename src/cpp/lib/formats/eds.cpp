@@ -2,6 +2,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <limits>
 #include <cctype>
 #include <random>
 #include <optional>
@@ -50,10 +51,6 @@ void EDS::parse(std::istream& is, bool with_strings) {
     metadata_.num_common_chars = 0;
     metadata_.total_change_size = 0;
     metadata_.num_empty_strings = 0;
-    metadata_.min_context_length = UINT32_MAX;
-    metadata_.max_context_length = 0;
-    size_t total_context_length = 0;
-    size_t num_context_blocks = 0;
 
     // Lazy position-lookup arrays: cleared here, built on first use by
     // ensure_position_index() (see EDS::Metadata).
@@ -118,13 +115,10 @@ void EDS::parse(std::istream& is, bool with_strings) {
             // though the two were comparable.
             metadata_.total_change_size += symbol_chars;
         } else {
-            // Non-degenerate: this is a context block
-            Length ctx_len = metadata_.string_lengths[m_]; // first (and only) string
-            metadata_.num_common_chars += ctx_len;
-            if (ctx_len < metadata_.min_context_length) metadata_.min_context_length = ctx_len;
-            if (ctx_len > metadata_.max_context_length) metadata_.max_context_length = ctx_len;
-            total_context_length += ctx_len;
-            num_context_blocks++;
+            // Non-degenerate: part of a context segment. Segment statistics
+            // need the run it belongs to, so finalize_context_statistics()
+            // computes them once the whole index is known.
+            metadata_.num_common_chars += metadata_.string_lengths[m_]; // first (and only) string
         }
 
         // cum_common_positions / cum_degenerate_counts are NOT built here — they
@@ -247,21 +241,8 @@ void EDS::parse(std::istream& is, bool with_strings) {
         process_token(current_token, /*is_bracketed=*/false);
     }
 
-    if (n_ == 0) {
-        is_empty_ = true;
-        metadata_.min_context_length = 0;
-        metadata_.max_context_length = 0;
-        metadata_.avg_context_length = 0.0;
-    } else {
-        is_empty_ = false;
-        // Finalize statistics
-        if (metadata_.min_context_length == UINT32_MAX) {
-            metadata_.min_context_length = 0;
-        }
-        metadata_.avg_context_length = (num_context_blocks > 0)
-            ? static_cast<double>(total_context_length) / num_context_blocks
-            : 0.0;
-    }
+    is_empty_ = (n_ == 0);
+    finalize_context_statistics(metadata_);
 
     // The index arrays were grown by push_back, so each holds up to 2× the bytes
     // it needs. That slack is not transient for a METADATA_ONLY EDS: it stays
@@ -272,6 +253,58 @@ void EDS::parse(std::istream& is, bool with_strings) {
     metadata_.symbol_sizes.shrink_to_fit();
     metadata_.string_lengths.shrink_to_fit();
     metadata_.cum_set_sizes.shrink_to_fit();
+}
+
+void EDS::finalize_context_statistics(Metadata& meta) {
+    meta.min_context_length = 0;
+    meta.max_context_length = 0;
+    meta.avg_context_length = 0.0;
+    meta.min_internal_context_length = 0;
+    meta.num_internal_context_segments = 0;
+    meta.num_context_segments = 0;
+    meta.num_split_regular_symbols = 0;
+    meta.num_adjacent_degenerate = 0;
+
+    const size_t n = meta.is_degenerate.size();
+    Length min_all = std::numeric_limits<Length>::max();
+    Length min_internal = std::numeric_limits<Length>::max();
+    size_t total = 0;
+    bool seen_degenerate = false;   // a degenerate symbol lies before the current run
+
+    size_t i = 0;
+    while (i < n) {
+        if (meta.is_degenerate[i]) {
+            if (i > 0 && meta.is_degenerate[i - 1]) meta.num_adjacent_degenerate++;
+            seen_degenerate = true;
+            ++i;
+            continue;
+        }
+        // Maximal run [i, j) of non-degenerate symbols: one segment.
+        size_t len = 0;
+        size_t j = i;
+        while (j < n && !meta.is_degenerate[j]) {
+            len += meta.string_lengths[meta.cum_set_sizes[j]];
+            ++j;
+        }
+        const Length seg = static_cast<Length>(len);
+        meta.num_context_segments++;
+        meta.num_split_regular_symbols += (j - i) - 1;
+        total += len;
+        min_all = std::min(min_all, seg);
+        meta.max_context_length = std::max(meta.max_context_length, seg);
+        if (seen_degenerate && j < n) {             // degenerate on both sides
+            meta.num_internal_context_segments++;
+            min_internal = std::min(min_internal, seg);
+        }
+        i = j;
+    }
+
+    if (meta.num_context_segments > 0) {
+        meta.min_context_length = min_all;
+        meta.avg_context_length = static_cast<double>(total) / meta.num_context_segments;
+    }
+    if (meta.num_internal_context_segments > 0)
+        meta.min_internal_context_length = min_internal;
 }
 
 // ================================================================================

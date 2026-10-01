@@ -1,6 +1,7 @@
 #include "formats/eds.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>
+#include <optional>
 #include <set>
 #include <iostream>
 #include <fstream>
@@ -127,6 +128,22 @@ SourceStats compute_source_stats(const EDS& eds) {
     return result;
 }
 
+// Largest l this EDS already satisfies as an l-EDS, i.e. without any merging.
+// The l-EDS property constrains internal context segments only (a degenerate
+// symbol on both sides); boundary segments may be shorter. Two adjacent
+// degenerate symbols are an internal segment of length 0, so they cap it at 0.
+// No internal segment at all means every l is satisfied: returned as nullopt.
+static std::optional<Length> max_l_without_merge(const EDS::Metadata& meta) {
+    if (meta.num_adjacent_degenerate > 0) return 0;
+    if (meta.num_internal_context_segments == 0) return std::nullopt;
+    return meta.min_internal_context_length;
+}
+
+static std::string l_max_text(const EDS::Metadata& meta) {
+    auto l = max_l_without_merge(meta);
+    return l ? std::to_string(*l) : std::string("unbounded");
+}
+
 // Print statistics in standard format
 void print_standard(const EDS& eds, const std::filesystem::path& input_file, bool verbose, bool has_sources_file) {
     const auto& meta = eds.get_metadata();
@@ -155,10 +172,22 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
     std::cout << "  Regular symbols:              " << std::setw(12) << format_number(eds.length() - meta.num_degenerate_symbols) << "\n";
     std::cout << "\n";
 
-    std::cout << "Context Lengths (non-degenerate symbols):\n";
+    // A context segment is a maximal run of regular symbols: {CGCG}{A}{TGCC}
+    // is one segment of 9, not three. Minimum includes the boundary segments
+    // (before the first / after the last degenerate symbol), which the l-EDS
+    // property does not constrain; "Internal minimum" is the one it does.
+    // Keep the first three labels as they are: experiment specs scrape them.
+    std::cout << "Context Lengths (segments = maximal runs of regular symbols):\n";
     std::cout << "  Minimum:                      " << std::setw(12) << meta.min_context_length << "\n";
     std::cout << "  Maximum:                      " << std::setw(12) << meta.max_context_length << "\n";
     std::cout << "  Average:                      " << std::setw(12) << std::fixed << std::setprecision(2) << meta.avg_context_length << "\n";
+    std::cout << "  Internal minimum:             " << std::setw(12)
+              << (meta.num_internal_context_segments > 0 ? std::to_string(meta.min_internal_context_length) : std::string("-")) << "\n";
+    std::cout << "  Segments (internal):          " << std::setw(12)
+              << (format_number(meta.num_context_segments) + " (" + format_number(meta.num_internal_context_segments) + ")") << "\n";
+    std::cout << "  Split regular symbols:        " << std::setw(12) << format_number(meta.num_split_regular_symbols) << "\n";
+    std::cout << "  Adjacent degenerate symbols:  " << std::setw(12) << format_number(meta.num_adjacent_degenerate) << "\n";
+    std::cout << "  Largest l without merging:    " << std::setw(12) << l_max_text(meta) << "\n";
     std::cout << "\n";
 
     std::cout << "Variations:\n";
@@ -199,14 +228,21 @@ void print_standard(const EDS& eds, const std::filesystem::path& input_file, boo
 
     // Recommendations
     std::cout << "Recommendations:\n";
-    if (meta.min_context_length < 5) {
-        std::cout << "  ⚠️  Minimum context length (" << meta.min_context_length << ") < typical l-EDS threshold (5)\n";
-        std::cout << "  → Transformation to l-EDS may require merging adjacent symbols\n";
-        std::cout << "  → Suggested command:\n";
-        std::cout << "      edsparser-transform -i " << input_file.filename().string() << " -l 5 --method linear\n";
-    } else {
-        std::cout << "  ✓ Minimum context length (" << meta.min_context_length << ") ≥ 5\n";
-        std::cout << "  → Ready for indexing with l ≤ " << meta.min_context_length << "\n";
+    {
+        auto lmax = max_l_without_merge(meta);
+        if (lmax && *lmax < 5) {
+            std::cout << "  ⚠️  Internal contexts admit l <= " << *lmax << " only (< typical l-EDS threshold 5)\n";
+            std::cout << "  → Transformation to l-EDS will merge adjacent symbols\n";
+            std::cout << "  → Suggested command:\n";
+            std::cout << "      eds2leds -i " << input_file.filename().string() << " -l 5\n";
+        } else {
+            std::cout << "  ✓ Every internal context is ≥ 5\n";
+            std::cout << "  → Ready for indexing with l ≤ " << l_max_text(meta) << "\n";
+        }
+        if (meta.num_split_regular_symbols > 0) {
+            std::cout << "  ℹ " << format_number(meta.num_split_regular_symbols)
+                      << " regular symbol(s) directly follow another; counted as one segment\n";
+        }
     }
 
     std::cout << "========================================\n";
@@ -237,7 +273,12 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "  \"context_lengths\": {\n";
     std::cout << "    \"min\": " << meta.min_context_length << ",\n";
     std::cout << "    \"max\": " << meta.max_context_length << ",\n";
-    std::cout << "    \"avg\": " << std::fixed << std::setprecision(2) << meta.avg_context_length << "\n";
+    std::cout << "    \"avg\": " << std::fixed << std::setprecision(2) << meta.avg_context_length << ",\n";
+    std::cout << "    \"internal_min\": " << meta.min_internal_context_length << ",\n";
+    std::cout << "    \"segments\": " << meta.num_context_segments << ",\n";
+    std::cout << "    \"internal_segments\": " << meta.num_internal_context_segments << ",\n";
+    std::cout << "    \"split_regular_symbols\": " << meta.num_split_regular_symbols << ",\n";
+    std::cout << "    \"adjacent_degenerate\": " << meta.num_adjacent_degenerate << "\n";
     std::cout << "  },\n";
     std::cout << "  \"variations\": {\n";
     std::cout << "    \"total_change_size\": " << meta.total_change_size << ",\n";
@@ -260,12 +301,17 @@ void print_json(const EDS& eds, const std::filesystem::path& input_file, bool ha
     std::cout << "    \"avg_paths_per_string\": " << std::fixed << std::setprecision(2) << src_stats.avg_paths_per_string << "\n";
     std::cout << "  },\n";
     std::cout << "  \"recommendations\": {\n";
-    std::cout << "    \"needs_transformation\": " << (meta.min_context_length < 5 ? "true" : "false") << ",\n";
-    std::cout << "    \"ready_for_indexing\": " << (meta.min_context_length >= 5 ? "true" : "false") << ",\n";
-    std::cout << "    \"min_context_length\": " << meta.min_context_length << ",\n";
-    std::cout << "    \"suggested_command\": \"" << (meta.min_context_length < 5
-                  ? "edsparser-transform -i " + input_file.filename().string() + " -l 5"
-                  : "ready for indexing") << "\"\n";
+    {
+        auto lmax = max_l_without_merge(meta);
+        const bool needs = lmax && *lmax < 5;
+        std::cout << "    \"needs_transformation\": " << (needs ? "true" : "false") << ",\n";
+        std::cout << "    \"ready_for_indexing\": " << (needs ? "false" : "true") << ",\n";
+        std::cout << "    \"min_context_length\": " << meta.min_context_length << ",\n";
+        std::cout << "    \"max_l_without_merge\": " << (lmax ? std::to_string(*lmax) : std::string("null")) << ",\n";
+        std::cout << "    \"suggested_command\": \"" << (needs
+                      ? "eds2leds -i " + input_file.filename().string() + " -l 5"
+                      : "ready for indexing") << "\"\n";
+    }
     std::cout << "  },\n";
     std::cout << "  \"performance\": {\n";
     std::cout << "    \"runtime_s\": " << std::fixed << std::setprecision(2) << runtime_s << ",\n";
@@ -290,6 +336,8 @@ void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has
     std::cout << "file,file_size_bytes"
               << ",n_symbols,N_characters,m_strings,degenerate_symbols,regular_symbols"
               << ",context_min,context_max,context_avg"
+              << ",context_internal_min,context_segments,context_internal_segments"
+              << ",split_regular_symbols,adjacent_degenerate"
               << ",total_change_size,common_characters,empty_strings"
               << ",memory_current_bytes,memory_estimated_full_bytes,memory_reduction_factor"
               << ",sources_loaded,num_paths,max_paths_per_string,avg_paths_per_string"
@@ -306,6 +354,11 @@ void print_csv(const EDS& eds, const std::filesystem::path& input_file, bool has
               << "," << meta.min_context_length
               << "," << meta.max_context_length
               << "," << std::fixed << std::setprecision(2) << meta.avg_context_length
+              << "," << meta.min_internal_context_length
+              << "," << meta.num_context_segments
+              << "," << meta.num_internal_context_segments
+              << "," << meta.num_split_regular_symbols
+              << "," << meta.num_adjacent_degenerate
               << "," << meta.total_change_size
               << "," << meta.num_common_chars
               << "," << meta.num_empty_strings

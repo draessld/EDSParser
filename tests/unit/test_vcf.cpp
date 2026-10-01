@@ -850,6 +850,54 @@ void test_grouping_keeps_partition() {
     std::cout << "  PASS" << std::endl;
 }
 
+// A SNP every sample carries (fixed in the panel relative to the reference)
+// resolves to a single haplotype. It used to be written as its own symbol, so
+// the reference either side and it came out as {ACGT}{C}{ACGT...}: three
+// regular symbols for one conserved stretch. The canonical output has no two
+// regular symbols in a row, also across a block boundary, and keeps a
+// single haplotype that only SOME samples carry (others missing) as written.
+static bool has_adjacent_regular(const std::string& eds_str) {
+    bool prev_regular = false;
+    size_t i = 0;
+    while (i < eds_str.size()) {
+        if (eds_str[i] != '{') { ++i; continue; }
+        size_t j = eds_str.find('}', i);
+        bool regular = eds_str.find(',', i) > j;
+        if (regular && prev_regular) return true;
+        prev_regular = regular;
+        i = j + 1;
+    }
+    return false;
+}
+
+void test_fixed_variant_is_common_text() {
+    std::cout << "Test 18: Panel-fixed variant joins the common text..." << std::endl;
+
+    const std::string ref_seq = "ACGTACGTACGTACGTACGT";  // 20 chars
+    const std::string vcf_text =
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+        "chr1\t3\t.\tG\tA\t99\tPASS\t.\tGT\t0|1\t0|0\n"   // real variant
+        "chr1\t7\t.\tG\tC\t99\tPASS\t.\tGT\t1|1\t1|1\n"   // fixed: everyone C
+        "chr1\t12\t.\tT\tA\t99\tPASS\t.\tGT\t1|1\t1|1\n"  // fixed, block boundary at 10
+        "chr1\t16\t.\tT\tG\t99\tPASS\t.\tGT\t1|0\t0|0\n"; // real variant
+
+    for (size_t block : {size_t{0}, size_t{10}}) {
+        std::stringstream vcf(vcf_text);
+        std::stringstream fa(">chr1\n" + ref_seq + "\n");
+        auto [eds_str, seds_str] = parse_vcf_to_eds_streaming_str(vcf, fa, nullptr, block);
+        std::cout << "  block " << block << " EDS: " << eds_str << std::endl;
+
+        if (eds_str != "{AC}{G,A}{TACCTACGAACG}{T,G}{ACGT}")
+            throw std::runtime_error("fixed variants not folded into the common text: " + eds_str);
+        if (has_adjacent_regular(eds_str))
+            throw std::runtime_error("two regular symbols in a row");
+        if (count_seds_sets(seds_str) != 7)   // one source set per string
+            throw std::runtime_error("SEDS cardinality does not match the EDS");
+    }
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== VCF Transform Tests ===" << std::endl;
 
@@ -871,6 +919,7 @@ int main() {
         test_no_genotype_seds_cardinality();
         test_ref_mismatch_detection();
         test_grouping_keeps_partition();
+        test_fixed_variant_is_common_text();
 
         std::cout << "\n=== All VCF tests passed ===" << std::endl;
         return 0;

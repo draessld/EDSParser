@@ -321,6 +321,19 @@ EDS Statistics:
   l-EDS compliant:    YES (l=5)
 ```
 
+**Context lengths are per segment** (2026-10-01): a segment is a maximal run of
+regular symbols, so `{CGCG}{A}{TGCC}` counts once, as 9. `Minimum` includes the
+boundary segments before the first and after the last degenerate symbol, which
+the l-EDS property does not constrain; `Internal minimum` is the one it does, so
+a correct l-EDS reads `Internal minimum >= l` even when `Minimum < l` (every TB
+panel at l=59: 31 vs 59). Also reported: segment counts, `Split regular symbols`
+(regular symbols directly after another — older `vcf2eds` output), `Adjacent
+degenerate symbols` (an internal segment of length 0), and `Largest l without
+merging`. JSON adds `internal_min`, `segments`, `internal_segments`,
+`split_regular_symbols`, `adjacent_degenerate` under `context_lengths` and
+`max_l_without_merge` under `recommendations`; CSV adds the matching columns
+after `context_avg`.
+
 **JSON format** (`--json`):
 ```json
 {
