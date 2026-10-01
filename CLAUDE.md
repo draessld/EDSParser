@@ -37,7 +37,7 @@ cd build/src/cpp && ctest --output-on-failure
 # Run specific test
 cd build/tools && ./test_eds
 
-# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration
+# Available tests (auto-run by ctest): test_eds, test_sources, test_stats, test_merge, test_msa, test_vcf, test_integration, test_transform_fuzz
 
 # Manual memory stress tests (too slow for CI, run manually):
 cd build/tools && ./test_memory_stress
@@ -571,6 +571,7 @@ Two things worth knowing about the tests themselves:
 |------|-------------|---------|
 | `test_eds`, `test_sources`, `test_stats`, `test_merge`, `test_msa`, `test_vcf` | Yes | Unit tests for core library |
 | `test_integration` | Yes | End-to-end CLI tool workflows (all tools, all formats) |
+| `test_transform_fuzz` | Yes (~20 s) | Seeded differential fuzzing of every transform against brute-force path expansion — see below |
 | `test_memory_smoke` | **No** | Quick memory validation with 10-50MB files, 2GB limit (~1-2 min) |
 | `test_memory_stress` | **No** | Full stress testing with 100-500MB files, leak detection (~30+ min) |
 
@@ -578,6 +579,66 @@ Two things worth knowing about the tests themselves:
 - METADATA_ONLY (file loader via `EDS::load`): covered by most existing tests via `create_temp_eds()`
 - FULL (in-memory via stream/string ctors): covered by `test_stream_constructor`, `test_from_string_factory`, `test_mode_equivalence`, `test_full_mode_edge_cases` (Tests A1–A4)
 - Mode equivalence: `test_mode_equivalence` constructs the same EDS via string ctor and file loader and asserts all observable outputs match (`length`, `cardinality`, `size`, all `read_symbol(i)`, all metadata fields)
+
+### Differential fuzzing (`test_transform_fuzz`, added 2026-10-01)
+
+The other unit tests check hand-written examples; this one generates seeded
+panels biased to where the transforms have broken — empty and duplicate-empty
+alternatives, symbols at the very start and end, adjacent degenerate symbols,
+runs of regular symbols (including the empty `{}`), alternatives shorter and
+longer than l, minimum-width contexts, path counts either side of the 63-path
+bitset threshold, every source format and SEDS spelling (lists, ranges,
+complements) — and checks each output against a brute-force oracle:
+
+| Property | Checked |
+|---|---|
+| `linear` / `het` | `eds2leds` with sources: every path spells the same genome(s) through the l-EDS as through the EDS; sets still partition every symbol (`linear`; `het` uses sample-level non-partitioning sources and compares each path's *set* of spellings); internal segments ≥ l; no two regular symbols in a row; no string carried by no path; `num_paths` and cardinality preserved |
+| `cartesian` | `eds2leds` without sources (both entry points): language of the l-EDS = language of the EDS, enumerated; same shape checks |
+| `block` | `--block-size` output byte-identical to the whole-file run, `.leds` and `.seds`, linear and cartesian, every source format and spelling |
+| `msa` | `msa2eds` and the direct MSA → l-EDS: each row with gaps removed is the genome its path spells; partition; l-EDS property |
+| `vcf` | `vcf2eds` on haploid VCFs (overlapping records, multi-allelic, indels, deletions spanning other records, missing calls, 1 and 60+ samples): identical output at every `--block-size`; partition; each sample's genome equals an in-test model of the documented overlap rule, through the EDS and the direct VCF → l-EDS output, and equals `bcftools consensus` (see below) |
+| `roundtrip` | EDS text → parse → save (full and compact) → parse is the identity (compact fuses adjacent bare symbols by design); hand-spelled SEDS → load → `save_as` every format → load preserves every set; the library's own SEDS text is a fixed point |
+
+Every check runs in a forked child, so a crash is reported like any other
+failure. A failure prints the seed, a reproducer minimised by greedy shrinking,
+the CLI line to replay it, and `TRANSFORM_FUZZ_CASE=<prop>:<seed>` to rerun just
+that case. Knobs: `TRANSFORM_FUZZ_SEED` (default fixed, so ctest is
+reproducible), `TRANSFORM_FUZZ_ITERS=<x>` (scale case counts),
+`TRANSFORM_FUZZ_SOAK=<seconds>` (keep drawing fresh seeds — the long run),
+`TRANSFORM_FUZZ_ONLY=linear,vcf,...`, `TRANSFORM_FUZZ_BCFTOOLS=<path>`,
+`TRANSFORM_FUZZ_VERBOSE=1`. Without bcftools the comparison prints
+`SKIPPED: vcf2eds vs bcftools consensus` and the model check still runs.
+
+**It found six bugs on its first day, all fixed with a focused regression test
+each:** `msa2eds` segfaulted on a one-sequence MSA; `vcf2eds` wrote every
+universal source of a one-sample VCF as `{0,1}` (carried by nobody);
+`eds2leds` measured a leading run of regular symbols from its second symbol
+(over-merging, and block mode disagreed); compact output dropped an empty
+regular symbol (`.leds`/`.seds` cardinality mismatch, and block mode lost a
+whole degenerate symbol); a transform needing no merge copied EDZ/sparse input
+sources verbatim into an "SEDS" output, and block mode re-spelled untouched
+entries so its `.seds` differed from the whole-file run; above 63 paths a
+complement ∩ complement covering every path was kept as a string no path
+carries (20d8ff1's bug on the PathSet side).
+
+**`bcftools consensus` is not the same spec as `vcf2eds`** where a sample has
+calls at two records that overlap. vcf2eds applies the first *ALT* in file
+order and lets REF/missing calls block nothing (`merge_variant_group()`);
+bcftools 1.19 lets *any* non-missing call, REF included, freeze its REF span —
+a later overlapping ALT is skipped even when the earlier record was REF for
+that sample — and admits an indel starting on the last frozen base (so a SNP
+and an insertion at one position both apply). The harness compares bcftools
+strictly for samples without such calls, and for the rest counts divergences
+and checks them against an in-test model of bcftools' rule (≈99% reproduced;
+the remainder are bcftools' own allele trimming). Nothing was changed: which
+rule vcf2eds should follow is a decision, not a bug. `--split-groups` (branch
+`vcf-group-split`) is not in this base and is not exercised.
+
+`msa2eds` is held to the l-EDS property but not to canonical form: a column
+that is a gap in every row, or a region that spells the same in every row once
+gaps are removed, comes out as a regular symbol (possibly `{}`) beside another
+regular symbol — `-G`/`-G` gives `{}{G}`. Harmless to the language, and TODO 0c
+only promises canonical form for vcf2eds and eds2leds; left as is.
 
 ### End-to-End Suites ([tests/e2e/](tests/e2e/))
 

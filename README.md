@@ -449,6 +449,7 @@ Available unit tests:
 | `test_msa` | MSA parsing | Yes |
 | `test_vcf` | VCF parsing | Yes |
 | `test_integration` | End-to-end CLI tool workflows | Yes |
+| `test_transform_fuzz` | Seeded differential fuzzing of all transforms (~20 s; `TRANSFORM_FUZZ_SOAK=<s>` for longer) | Yes |
 | `test_memory_smoke` | Quick memory validation (~1-2 min) | **No — run manually** |
 | `test_memory_stress` | Full memory stress + leak detection (~30+ min) | **No — run manually** |
 

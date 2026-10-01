@@ -34,6 +34,8 @@ cd build/src/cpp && ctest --output-on-failure
 ./test_msa
 ./test_vcf
 ./test_stats
+./test_transform_fuzz                         # ~20 s, seeded
+TRANSFORM_FUZZ_SOAK=600 ./test_transform_fuzz # long run on fresh seeds
 ```
 
 ### Test Files
@@ -47,6 +49,7 @@ cd build/src/cpp && ctest --output-on-failure
 | `test_vcf` | `tests/unit/test_vcf.cpp` | VCF parsing: SNPs, indels, `<DEL>`, `<INS>`, `<INV>`, `<CN0..N>`, multi-allelic, overlap merging (each genome on exactly one alternative of a merged group), block-based |
 | `test_stats` | `tests/unit/test_stats.cpp` | Statistics computation, context length bounds, SEDS cardinality check |
 | `test_integration` | `tests/unit/test_integration.cpp` | Complete tool workflows using `std::stringstream` (no disk I/O) |
+| `test_transform_fuzz` | `tests/unit/test_transform_fuzz.cpp` | Seeded differential fuzzing: `eds2leds` linear/cartesian/block, `msa2eds`, `vcf2eds` (vs `bcftools consensus`), parser round trips, all against brute-force path expansion; failures print seed + minimised reproducer. Properties and knobs in CLAUDE.md § Differential fuzzing |
 
 ### Writing Unit Tests
 
@@ -283,5 +286,8 @@ bash tests/bench/bench_compare.sh          # regression check vs baseline
 | edsparser-stats JSON output | e2e `test_stats.sh` |
 | edsparser-stats CSV output | e2e `test_stats.sh` |
 | genrandomeds reproducibility (`--seed`) | e2e `test_genrandomeds.sh` |
+| Path-by-path genome preservation through every transform | `test_transform_fuzz` |
+| `--block-size` byte identity, all source formats | `test_transform_fuzz`, e2e `test_eds2leds.sh` |
+| vcf2eds genomes vs `bcftools consensus` | `test_transform_fuzz` |
 | Memory stability (streaming) | `test_memory_smoke` |
 | Memory leak detection (linear regression) | `test_memory_stress` |

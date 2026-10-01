@@ -195,6 +195,14 @@ add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
 target_link_libraries(test_integration edsparser_lib)
 add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Test: seeded differential fuzzing of every transform against brute-force path
+# expansion (eds2leds linear/cartesian/block, msa2eds, vcf2eds vs bcftools
+# consensus, parser round trips). ~20 s; TRANSFORM_FUZZ_SOAK=<s> for a longer run.
+add_executable(test_transform_fuzz ${TEST_DIR}/test_transform_fuzz.cpp)
+target_link_libraries(test_transform_fuzz edsparser_lib)
+add_test(NAME test_transform_fuzz COMMAND test_transform_fuzz)
+set_tests_properties(test_transform_fuzz PROPERTIES TIMEOUT 300)
+
 # Memory stress tests (built but NOT run automatically - too slow for CI)
 # Run manually when needed: ./test_memory_smoke or ./test_memory_stress
 add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
