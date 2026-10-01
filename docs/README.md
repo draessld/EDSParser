@@ -168,7 +168,7 @@ When paths are *sample*-level and diploid, as `vcf2eds` produces them, a
 heterozygous sample sits in **both** the reference and the alt string at a site.
 Intersections then rarely go empty, and a chain of k adjacent degenerate sites can
 survive up to 2^k combinations. 1000 Genomes chr7 at l=5 peaks at 28 GiB for this
-reason. See [performance.md](performance.md) and TODO 1b.
+reason. See [performance.md](performance.md) and TODO, "Sources stay sample-level".
 
 The practical consequence: `eds2leds` detects which strategy to use automatically.
 If a `.seds` file is supplied, LINEAR is used; without it, CARTESIAN.

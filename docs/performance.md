@@ -56,7 +56,7 @@ comparison work; sequences are never all held in RAM.
 | 100 000 sequences × 100 MB alignment | ~125 MB | Reference size dominates |
 
 Throughput is dominated by sequential reads and is quoted elsewhere as 50–200 MB/s; that
-figure is **not measured** — no `msa2eds` benchmark exists yet (TODO 3e).
+figure is **not measured** — no `msa2eds` benchmark exists yet (`experiment_design.md` 3e).
 
 ---
 
@@ -76,7 +76,7 @@ figure is **not measured** — no `msa2eds` benchmark exists yet (TODO 3e).
 | Sizes | 808 GB VCF → 3.4 GB EDS + 33.1 GB SEDS |
 
 Note the sources dominate the output roughly 10:1. Compressing them is the open question
-in TODO 3d; `--source-format edz-compressed` addresses it for `eds2leds` output today.
+in `experiment_design.md` 3d; `--source-format edz-compressed` addresses it for `eds2leds` output today.
 
 ### Memory formula (per block) `[formula]`
 
@@ -88,7 +88,7 @@ Peak RAM ≈ block_size_bytes                     (reference region in RAM)
 
 ### Block size trade-offs `[formula]`
 
-Memory only — no wall-clock measurements exist for different block sizes yet (TODO 3e).
+Memory only — no wall-clock measurements exist for different block sizes yet (`experiment_design.md` 3e).
 
 | Block size | Peak memory | I/O ops | EDS quality |
 |:----------:|:-----------:|:-------:|:-----------:|
@@ -106,7 +106,9 @@ the whole group, so a long deletion absorbs every variant inside it and every st
 symbol emits is full-span. On assembly-derived data this, not the SNVs, sets the file size
 `[measured]`. The table predates 2026-09-12: strings were then emitted one per (record,
 allele), and are now emitted one per distinct haplotype an allele copy carries (see
-[algorithms § Overlap Merging](algorithms.md#overlap-merging)). It has not been re-measured.
+[algorithms § Overlap Merging](algorithms.md#overlap-merging)): tb_p100 48.2 → 14.3 MB,
+tb_p500 723 → 223 MB, and 5.3 / 8.8 MB with `vcf2eds --split-groups` (TODO 1a has the full
+table).
 
 | M. tuberculosis panel | EDS | ctx_avg |
 |---|---:|---:|
@@ -176,7 +178,7 @@ Per chromosome, 2 504 samples. Ranges span chrY (trivial, haploid) to the larges
 
 Cost is driven by **heterozygosity**, not genome size: `vcf2eds` paths are sample-level, so
 a het sample sits in both the reference and the alt string at a site and a chain of k
-adjacent degenerate sites can survive up to 2^k combinations (TODO 1b). chrY, being haploid,
+adjacent degenerate sites can survive up to 2^k combinations (TODO, "Sources stay sample-level"). chrY, being haploid,
 runs in 1.35 s at 86 MB with an average context of 996 bp.
 
 ### Real run: M. tuberculosis, linear `[measured]`
@@ -319,7 +321,7 @@ Plain gzip of the text SEDS beats everything by roughly 8× at every panel size.
 **Guidance:** if most of your variants are rare (a clonal or highly structured population),
 keep text SEDS and compress the file. Reach for EDZ only when entries are genuinely dense.
 `edz-compressed` has not been measured on rare-variant data — `collect_results.sh` currently
-only tries `--to edz --sparse` (TODO 2e). Set the format with `eds2leds --source-format`.
+only tries `--to edz --sparse` (`experiment_design.md` 2e). Set the format with `eds2leds --source-format`.
 
 ### Index building `[measured]`
 
@@ -329,7 +331,7 @@ its index in ~32 `read()` calls instead of ~2 M function calls.
 ### LRU cache hit rate `[unverified]`
 
 The frequently quoted "~98% hit rate at the default 10 000 entries" is **asserted, never
-measured** (TODO 3e). Merges do access sources in near-linear order, so locality is real,
+measured** (`experiment_design.md` 3e). Merges do access sources in near-linear order, so locality is real,
 but treat the number as a plausible guess until instrumented.
 
 ### Streaming vs in-memory `[measured]`
@@ -354,7 +356,7 @@ Results in this document come from two machines. Anything without a machine name
 a `[formula]` estimate.
 
 **Server — `DGX-A100-KTI`.** All 1000 Genomes and M. tuberculosis runs. Datasets on
-`raid_storage`. *Exact CPU, RAM and storage specification still to be recorded (TODO 3a).*
+`raid_storage`. *Exact CPU, RAM and storage specification still to be recorded (`experiment_design.md` 3a).*
 
 **Laptop — ThinkPad T14s Gen 3.** Synthetic benchmarks, block-mode measurements and the
 complement-fix figures. AMD Ryzen 7 PRO 6850U (8 cores / 16 threads), 30 GB RAM, Samsung
