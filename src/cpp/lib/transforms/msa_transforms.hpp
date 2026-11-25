@@ -1,3 +1,8 @@
+// Multiple sequence alignment (FASTA with gaps) to EDS or l-EDS.
+//
+// The first sequence is the reference; every input sequence becomes one source
+// path. Columns that agree across all sequences become common symbols, columns
+// that vary become degenerate ones.
 #ifndef EDSPARSER_TRANSFORMS_MSA_TRANSFORMS_HPP
 #define EDSPARSER_TRANSFORMS_MSA_TRANSFORMS_HPP
 

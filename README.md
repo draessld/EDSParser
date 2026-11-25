@@ -200,10 +200,11 @@ edsparser-stats -i data.eds --verbose
 
 **Output:**
 - Number of symbols, characters, and strings
-- Context length statistics (min, max, average)
+- Context length statistics (min, max, average) — over *all* non-degenerate
+  symbols, including the first and last, which the l-EDS constraint exempts, so
+  the reported minimum is not an l-EDS compliance check
 - File size and memory estimates (METADATA_ONLY vs FULL mode)
 - Source tracking information (number of paths/genomes)
-- l-EDS compliance verification
 
 ### edsparser-source-transform - Source Format Conversion
 

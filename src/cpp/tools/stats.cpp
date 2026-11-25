@@ -1,3 +1,9 @@
+// edsparser-stats — report the structure, context lengths, sources and memory
+// profile of an EDS file, as a table, JSON or a single CSV row.
+//
+// Note that the context minimum spans every non-degenerate symbol, boundaries
+// included, so it is not an l-EDS compliance check: the constraint exempts the
+// first and last symbol.
 #include "formats/eds.hpp"
 #include "common.hpp"
 #include <boost/program_options.hpp>

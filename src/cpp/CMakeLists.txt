@@ -151,48 +151,48 @@ add_subdirectory(tools)
 # Add test executables
 set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/unit)
 
+# Every unit test states its expectations with assert(). A Release build defines
+# NDEBUG, which compiles those away — the suite then prints "All tests passed"
+# without checking anything, and Release is what INSTALL.sh builds. Undefine it
+# for the test targets only, so the suite is meaningful in every build type.
+function(edsparser_add_unit_test name)
+    add_executable(${name} ${TEST_DIR}/${name}.cpp)
+    target_link_libraries(${name} edsparser_lib)
+    target_compile_options(${name} PRIVATE -UNDEBUG)
+endfunction()
+
 # Test: EDS parsing
-add_executable(test_eds ${TEST_DIR}/test_eds.cpp)
-target_link_libraries(test_eds edsparser_lib)
+edsparser_add_unit_test(test_eds)
 add_test(NAME test_eds COMMAND test_eds)
 
 # Test: Sources parsing
-add_executable(test_sources ${TEST_DIR}/test_sources.cpp)
-target_link_libraries(test_sources edsparser_lib)
+edsparser_add_unit_test(test_sources)
 add_test(NAME test_sources COMMAND test_sources)
 
 # Test: Statistics
-add_executable(test_stats ${TEST_DIR}/test_stats.cpp)
-target_link_libraries(test_stats edsparser_lib)
+edsparser_add_unit_test(test_stats)
 add_test(NAME test_stats COMMAND test_stats)
 
 # Test: Merging
-add_executable(test_merge ${TEST_DIR}/test_merge.cpp)
-target_link_libraries(test_merge edsparser_lib)
+edsparser_add_unit_test(test_merge)
 add_test(NAME test_merge COMMAND test_merge)
 
 # Test: MSA transformation
-add_executable(test_msa ${TEST_DIR}/test_msa.cpp)
-target_link_libraries(test_msa edsparser_lib)
+edsparser_add_unit_test(test_msa)
 add_test(NAME test_msa COMMAND test_msa)
 
 # Test: VCF transformation
-add_executable(test_vcf ${TEST_DIR}/test_vcf.cpp)
-target_link_libraries(test_vcf edsparser_lib)
+edsparser_add_unit_test(test_vcf)
 add_test(NAME test_vcf COMMAND test_vcf)
 
 # Test: CLI tool integration tests
-add_executable(test_integration ${TEST_DIR}/test_integration.cpp)
-target_link_libraries(test_integration edsparser_lib)
+edsparser_add_unit_test(test_integration)
 add_test(NAME test_integration COMMAND test_integration ${CMAKE_BINARY_DIR}/tools WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # Memory stress tests (built but NOT run automatically - too slow for CI)
 # Run manually when needed: ./test_memory_smoke or ./test_memory_stress
-add_executable(test_memory_stress ${TEST_DIR}/test_memory_stress.cpp)
-target_link_libraries(test_memory_stress edsparser_lib)
-
-add_executable(test_memory_smoke ${TEST_DIR}/test_memory_smoke.cpp)
-target_link_libraries(test_memory_smoke edsparser_lib)
+edsparser_add_unit_test(test_memory_stress)
+edsparser_add_unit_test(test_memory_smoke)
 
 # Note: These are excluded from 'ctest' / 'make test'
 # To run: cd build/src/cpp && ./test_memory_smoke

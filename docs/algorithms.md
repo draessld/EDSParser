@@ -245,8 +245,8 @@ Uses `reserve()` on the output string to avoid repeated reallocations.
 
 ### Overlap Merging
 
-When two variants overlap (both affect base position P), they are merged
-into a single degenerate symbol:
+Records whose reference spans overlap — several records at one position
+included — are merged into a single degenerate symbol spanning all of them:
 
 ```
 Variant A: pos=100, REF=ACG, ALT=A
@@ -254,8 +254,24 @@ Variant B: pos=101, REF=CG,  ALT=TT
 
 After overlap merge:
   Combined REF span = [100, 103)
-  Alternatives: {A__}, {ATT} (padding with reference bases)
+  Alternatives: {ACG, A, ATT}   (reference, A applied, B applied)
 ```
+
+Each allele copy of each sample is then placed on exactly one alternative
+(`merge_variant_group()`): the reference span with **every** ALT that copy
+carries in the group applied. A copy carrying no ALT is on the reference. A
+copy carrying ALTs at disjoint records gets their combination as one string —
+only combinations some copy actually carries are emitted, never the cartesian
+product. A copy carrying ALTs at records that overlap each other, which no
+single chromosome can, keeps the first in file order and ignores the rest, as
+`bcftools consensus` does; `VCFStats::overlap_conflicts` counts them. An
+alternative no copy carries is dropped.
+
+This is what keeps a haploid panel's source sets a partition of its genomes,
+which LINEAR search in biofmi requires. Until 2026-09-12 alleles were assigned
+one record at a time, so a copy that was REF at *any* record of a group was put
+on the reference alternative too, and on `tb_p100_snv50` the reference held the
+whole panel at 309 of 19,801 symbols.
 
 `generate_eds_from_variants()` returns the group count to avoid calling
 `group_overlapping_variants()` twice.

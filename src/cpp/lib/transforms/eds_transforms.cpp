@@ -1,3 +1,11 @@
+// The l-EDS merge.
+//
+// Structured as three phases per iteration, each a strictly left-to-right walk:
+// select_merge_groups() finds maximal chains of positions that must merge,
+// compute_merge_metadata() folds each chain into output string lengths and
+// source sets without touching string data, and MergeStreamWriter reads the
+// symbols back and streams the result out. Iterations chain through temp files
+// so peak memory tracks the index and one batch, never the file.
 #include "eds_transforms.hpp"
 #include "formats/sources.hpp"
 #include <memory>

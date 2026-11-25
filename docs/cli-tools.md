@@ -162,7 +162,7 @@ eds2leds -i <data.eds> -l <N> [OPTIONS]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-i, --input` | path | required | Input EDS file (must have `.eds` extension) |
-| `-l, --context-length` | uint | required | Target minimum context length |
+| `-l, --context-length` | uint | required | Target minimum context length; enforced on *internal* common segments only (the first and last symbol are exempt — see [formats.md](formats.md#l-eds-constraint)) |
 | `-o, --output` | path | `<stem>_l<N>.leds` | Output l-EDS file |
 | `-s, --seds` | path | — | Input `.seds`/`.edz` source file (enables LINEAR merging); format auto-detected from extension/content |
 | `-z, --edz` | path | — | Input source file explicitly treated as binary EDZ regardless of its extension (mutually exclusive with `-s`) |
@@ -284,8 +284,8 @@ completion to avoid truncating the input.
 
 ## edsparser-stats
 
-Display statistics about an EDS or l-EDS file, including l-EDS compliance
-checking.
+Display statistics about an EDS or l-EDS file: structure, context lengths,
+sources, and memory estimates.
 
 ### Synopsis
 
@@ -308,34 +308,82 @@ edsparser-stats -i <data.eds> [OPTIONS]
 
 **Default (table) format:**
 ```
-EDS Statistics:
-  Symbols (n):        12543
-  Strings (m):        38291
-  Total chars (N):    1048576
-  Degenerate symbols: 2714
-  Common chars:       891200
-  Min context:        5
-  Max context:        127
-  Avg context:        8.4
-  Source paths:       4   (when -s provided)
-  l-EDS compliant:    YES (l=5)
+========================================
+EDS Statistics
+========================================
+File: data.eds
+Size: 199.0 B
+Storage Mode: STREAMING (memory-efficient)
+
+Structure:
+  Number of symbols (n):                  21
+  Total characters (N):                  147
+  Total strings (m):                      31
+  Degenerate symbols:                      9
+  Regular symbols:                        12
+
+Context Lengths (non-degenerate symbols):
+  Minimum:                                 1
+  Maximum:                                45
+  Average:                             10.50
+
+Variations:
+  Total change size:                      21
+  Common characters:                     126
+  Empty strings:                           1
+
+Sources (pangenome paths):
+  Strings with source info:               31
+  Total paths (genomes):                   5
+  Max paths per string:                    5
+  Avg paths per string:                 3.97
+
+Memory Usage:
+  Current (STREAMING):               599.0 B
+  Estimated (in-memory load):         1.9 KB
+  Reduction factor:                      3.3x
+
+Recommendations:
+  ⚠️  Minimum context length (1) < typical l-EDS threshold (5)
+  → Transformation to l-EDS may require merging adjacent symbols
+  → Suggested command:
+      edsparser-transform -i data.eds -l 5 --method linear
+========================================
 ```
 
-**JSON format** (`--json`):
+The `Sources` block appears only when `-s` / `-z` is given.
+
+> **The context minimum is not an l-EDS compliance check.** It is taken over
+> *every* non-degenerate symbol, including the first and last — which the l-EDS
+> constraint deliberately exempts, because a boundary segment has a degenerate
+> neighbour on only one side (see [formats.md](formats.md#l-eds-constraint)). A
+> correct l-EDS whose sequence simply starts a few bases before its first variant
+> therefore reports a minimum below `l`: `{ACGT}{A,C}{160bp}{G,T}{160bp}` at
+> `-l 20` converges in 0 iterations and still reports `context_min` 4. The
+> interior minimum — the one the constraint is actually about — is not reported
+> today; see TODO 0c. The `Recommendations` block compares the same figure
+> against a fixed threshold of 5 and inherits the caveat.
+
+**JSON format** (`--json`): the same figures as nested objects — `file`,
+`structure`, `context_lengths` (`min`, `max`, `avg`), `variations`, `memory`,
+`sources`, `recommendations`, `performance`:
+
 ```json
 {
-  "n": 12543,
-  "m": 38291,
-  "N": 1048576,
-  "num_degenerate_symbols": 2714,
-  "num_common_chars": 891200,
-  "min_context_length": 5,
-  "max_context_length": 127,
-  "avg_context_length": 8.4
+  "structure": {
+    "n_symbols": 21,
+    "N_characters": 147,
+    "m_strings": 31,
+    "degenerate_symbols": 9,
+    "regular_symbols": 12
+  },
+  "context_lengths": { "min": 1, "max": 45, "avg": 10.50 },
+  "sources": { "loaded": true, "num_paths": 5 }
 }
 ```
 
-**CSV format** (`--csv`): One header row + one data row — suitable for
+**CSV format** (`--csv`): one header row + one data row, flattening the same
+fields (`context_min`, `context_max`, `context_avg`, …) — suitable for
 aggregating across multiple files with shell loops.
 
 ### Examples
@@ -352,7 +400,7 @@ for f in results/*.leds; do
   edsparser-stats -i "$f" --csv
 done > all_stats.csv
 
-# Verbose: adds memory estimates and compliance details
+# Verbose: adds per-symbol averages and the degenerate ratio
 edsparser-stats -i data.leds --verbose
 ```
 

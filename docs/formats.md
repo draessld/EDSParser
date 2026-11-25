@@ -63,7 +63,7 @@ between an opening brace and the first comma:
 | Extension | Meaning |
 |-----------|---------|
 | `.eds` | Regular EDS (no l constraint enforced) |
-| `.leds` | l-EDS (minimum context length guaranteed) |
+| `.leds` | l-EDS (every *internal* common segment ≥ l; boundaries exempt) |
 
 Both are valid EDS syntax — the extension is only a hint about the constraint.
 

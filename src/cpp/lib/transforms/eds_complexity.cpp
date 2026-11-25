@@ -1,3 +1,9 @@
+// Pre-flight complexity estimate for the l-EDS merge.
+//
+// Runs over metadata only and returns a verdict (fast / slow / exponential
+// risk) that eds2leds prints before committing to a transform that can take
+// hours or explode combinatorially. Heuristic by design: it is a warning, not
+// the admission-control bound (that is estimate_worst_case_merge_memory()).
 #include "eds_transforms.hpp"
 #include <algorithm>
 #include <sstream>

@@ -75,7 +75,7 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
   - Position checking (verify if pattern occurs at position)
   - Merging adjacent symbols (CARTESIAN without sources, LINEAR with sources)
   - Pattern generation for benchmarking
-- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`
+- **Removed API** (deleted — do not use): `get_statistics()`, `print_statistics()`, `get_sets()`, `get_is_degenerate()`, `set_source_cache_capacity()`, `clear_source_cache()`, `check_position()` (removed 2026-09-02 — no caller here or in biofmi; see Testing below)
   - Use `get_metadata()` for all statistics/structural fields
   - Use `get_metadata().is_degenerate` instead of `get_is_degenerate()`
   - Use `get_sources_object()->set_cache_capacity()` for cache control
@@ -98,7 +98,8 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
   - Sample-level source tracking (one path per sample)
   - **Block-based processing** for memory-efficient handling of large VCF files (default: 10M bases per block)
   - Reference FASTA uses random-access streaming (minimal memory footprint)
-  - Returns `VCFStats` with counts: `total_variants`, `processed_variants`, `skipped_malformed`, `skipped_unsupported_sv`, `skipped_wrong_chrom`, `skipped_out_of_range`, `variant_groups`, plus `ref_checked` / `ref_mismatches`
+  - Returns `VCFStats` with counts: `total_variants`, `processed_variants`, `skipped_malformed`, `skipped_unsupported_sv`, `skipped_wrong_chrom`, `skipped_out_of_range`, `variant_groups`, plus `ref_checked` / `ref_mismatches` and `overlap_conflicts`
+  - **Grouped records keep the source partition** (2026-09-12): records that overlap or share a position are merged into one symbol, and `merge_variant_group()` places each allele copy on exactly one alternative — the reference span with every ALT that copy carries applied, combinations emitted only as observed. It used to assign alleles one record at a time, so a copy REF at any record also sat on the reference alternative; on haploid `tb_p100_snv50` that broke the partition LINEAR search needs at 309 of 19,801 symbols, and the raw VCF now audits at 0 with the same symbols. A copy carrying ALTs at records that overlap each other keeps the first in file order, as `bcftools consensus` does; `overlap_conflicts` counts the ignored calls (44 on that panel) and `vcf2eds` warns. `test_vcf` test 17
   - **REF is validated against the reference FASTA** (2026-08-30): the transform only ever used the *length* of the REF field — the allele it emits is read from the FASTA and was never compared to what the VCF claims is there, so a VCF from a different assembly produced a well-formed EDS built from the wrong spans at a reported 100% success rate. The group's reference span is already read in order to emit it, so the check is one substring compare per variant. Mismatches are counted (`ref_mismatches` of `ref_checked`), the first 10 are named individually on stderr, and the run continues — real VCFs do contain genuine mismatches. Spans containing `N` are not compared at all (padding, not sequence). A rate that can only mean "wrong assembly" refuses to continue: once 1000 comparable alleles have been checked, ≥ 50% disagreement throws (a wrong assembly disagrees at ~75%, a usable VCF at well under 1%), aborting within the first second rather than after hours. Finding this fixed three silently-wrong test fixtures (`tests/unit/test_vcf.cpp`'s `SMALL_VCF`, `tests/e2e/data/small.vcf`, `tests/e2e/data/test_overlaps.vcf`), one of which contained a "variant" whose ALT equalled the true reference base and so collapsed to a non-degenerate symbol.
 - **EDS → l-EDS** ([src/cpp/lib/transforms/eds_transforms.hpp](src/cpp/lib/transforms/eds_transforms.hpp), [src/cpp/lib/transforms/eds_transforms.cpp](src/cpp/lib/transforms/eds_transforms.cpp)): Length-constrained merging to ensure minimum context length. Two strategies:
   - LINEAR: Phasing-aware merging using source information (preserves valid combinations)
@@ -127,7 +128,7 @@ Transformation tools (each focused on a specific conversion):
   - Runs complexity estimation before transformation and warns on exponential-growth risk
   - **`--max-memory <size>` pre-flight guard** (2026-07-11; threshold corrected 2026-07-30): before any merging, predicts peak RAM from metadata only and refuses the transform with **exit code 3** if it would exceed `<size>` (accepts `450G`, `512M`, `2T`, or bare bytes; binary units). The **merge term** is `Σ_group merged_size × (group_count·8 + ~48 B)` over the largest `BATCH_SIZE`(=1000)-group window (matching how the transform batches metadata), but the guard compares the **full predicted peak**: merge term + index arrays (2× per-symbol metadata + the 8 B/string sources index) + 15% headroom + 64 MB. Until 2026-07-30 it compared the merge term alone, which is ~295 KiB for a linear run that actually peaks at 2.3 GB — so the guard was effectively unfirable in linear mode and only ever caught cartesian blow-ups. `merged_size` is the CARTESIAN product of the group's symbol cardinalities, capped at `num_paths` when sources are given. **That cap is WRONG on VCF-derived data and the estimate is unsafe for admission control until it is fixed** (measured 2026-08-01, chr7 l=5: predicted 0.64 GiB, actual peak 28.3 GiB — 45× under). The cap assumed a linear merge cannot outnumber the paths, but `vcf2eds` sources are *sample-level, not haplotype-level* (a deliberate choice — see "Sources stay sample-level" in TODO.md): a heterozygous sample is marked present in both the reference and the alt string at a site, so source intersections rarely go empty and a chain of k adjacent degenerate sites can survive up to 2^k combinations — unbounded by `num_paths`. chr7 iteration 0 has 218,016 adjacent-degenerate groups and expands 20M input strings to 55.5M. Without the cap the same input estimates ~TB (the raw cartesian bound), so neither bound is usable as-is; see TODO.md for the fix. Exit 3 is distinct from ordinary failures so orchestrators can mark the input "too intensive" and skip it (`~/Data/experiments/edsparser/run_leds_serial.sh`, and since 2026-07-30 the parallel workers `run_chrom_leds.sh` / `run_chrom_leds_incremental.sh` via `MAX_MEMORY`). Covered by `tests/e2e/test_eds2leds.sh`.
   - **Complement source sets were read as universal in the merge** (fixed 2026-08-04, 20d8ff1): a `PathSet` starting with 0 means either universal (`{0}`) or *complement* (`{0,e1,e2}` = all paths except e1,e2), and the bitset fast path in `compute_merge_metadata()` collapsed both to `~0ULL`. Complement sets then intersected with everything, the iterative fold never pruned, and it kept combinations no path carries — an l-EDS containing strings no genome carries, produced at combinatorial cost. `vcf2eds` and `msa2eds` both encode the reference allele as a complement, and the fast path engages only when all path IDs fit in [1,63], so **every dataset of at most 63 samples/sequences was affected and every larger one was not** (above 63 the guard already fell back to the correct `PathSet` code). Measured on a 50-path haploid VCF at l=5, where ≤ 50 strings per symbol is provable: 6,557,335 strings / 3159 MB / 21.2 s → 2,491 strings / max 50 per symbol / 5.9 MB / 0.01 s; a 40-sequence 3 kb MSA at l=20 went from killed at a 6 GB cap to 9.5 MB. `to_bits()` now expands complements against a universe masked to `num_paths`, and `use_bits` requires `num_paths ≤ 63`. **Consequence for existing results:** anything produced at ≤ 63 paths before this commit measures the bug — see TODO.md.
-  - **Path count and heterozygosity drive linear-merge memory** — magnitude not yet measured. The 2026-08-02 yeast 1011-vs-50 comparison is void: the two runs took different code paths across the 63-path threshold (see the complement fix above), so the "20x fewer paths bought 500x memory" figure compared a correct run against a buggy one. What survives: 1000G chr7 (2504 samples, correct path) genuinely peaks at 28.3 GiB at l=5, and on synthetic 50-path clustered data a heterozygous diploid VCF is still killed at 8 GB at every l while its haploidised twin runs l=5..30 under 19 MB. Cause is the sample-level path model (a deliberate choice — see "Sources stay sample-level" in TODO.md). `~/Data/experiments/edsparser/scripts/make_sample_subset.sh` + `run_subset_dataset.sh` build seeded, nested sample subsets and run them under a kernel-enforced `MemoryMax` scope; see TODO.md §1c for the path-count experiment, which must be re-run on a post-20d8ff1 binary. **A haplotype-resolved path model was prototyped and reverted on 2026-08-30** — it does remove the blow-up (the synthetic 50-sample case ran at 22 MB at every l), but it doubles `num_paths` and with it every SEDS/EDZ entry, which is not affordable when sources already dominate the artifact on disk. Do not re-propose it; see "Sources stay sample-level" in TODO.md.
+  - **Path count and heterozygosity drive linear-merge memory** — magnitude not yet measured. The 2026-08-02 yeast 1011-vs-50 comparison is void: the two runs took different code paths across the 63-path threshold (see the complement fix above), so the "20x fewer paths bought 500x memory" figure compared a correct run against a buggy one. What survives: 1000G chr7 (2504 samples, correct path) genuinely peaks at 28.3 GiB at l=5, and on synthetic 50-path clustered data a heterozygous diploid VCF is still killed at 8 GB at every l while its haploidised twin runs l=5..30 under 19 MB. Cause is the sample-level path model (a deliberate choice — see "Sources stay sample-level" in TODO.md). `~/Data/experiments/edsparser/scripts/make_sample_subset.sh` + `run_subset_dataset.sh` build seeded, nested sample subsets and run them under a kernel-enforced `MemoryMax` scope; see `~/Data/experiments/edsparser/experiment_design.md` §1c for the path-count experiment, which must be re-run on a post-20d8ff1 binary. **A haplotype-resolved path model was prototyped and reverted on 2026-08-30** — it does remove the blow-up (the synthetic 50-sample case ran at 22 MB at every l), but it doubles `num_paths` and with it every SEDS/EDZ entry, which is not affordable when sources already dominate the artifact on disk. Do not re-propose it; see "Sources stay sample-level" in TODO.md.
   - **`--estimate-memory`** (2026-07-30): prints the same prediction as machine-readable `KEY=BYTES` lines and exits 0 without doing any work — `MERGE_PEAK_BYTES`, `EDS_INDEX_BYTES`, `SOURCES_INDEX_BYTES`, `MERGE_GROUPS_BYTES`, `RECOMMENDED_BUDGET_BYTES` (the one to schedule on), `MERGE_GROUPS`, `PATH_CAP`, `SATURATED`, `BLOCK_SIZE_BYTES`. Honours `--block-size` by scaling the index terms to one block's share of the input. Calibrated to over-predict, since schedulers admit work on it: predicts 2.31 GiB for a run that peaked at 2.27 GiB, 778 MiB for one that peaked at 629 MiB, 216 MiB for one that peaked at 158 MiB. Used by `~/Data/experiments/edsparser/run_leds.sh` for memory-aware admission control (see below).
   - **Linear vs cartesian throughput** (`--size standard`, 1-10 MB, post raw-copy fix 2026-07-03): on real violation data (`--min-context 0`, 1% var, l=5) cartesian runs at ~25 MB/s vs linear ~21 MB/s and both converge in 1 iteration after the chain-merging fix (2026-06-28). At 5% variability: cartesian ~8.7 MB/s, linear ~5.7 MB/s. Remaining gap is inherent: linear writes an extra SEDS temp file per iteration; cartesian writes no SEDS data. The **EDS raw-copy pass-through** (2026-07-03) sped both up further on larger inputs — measured **cartesian 1.9–2.2×, linear 1.16–1.63×** on 20 MB inputs vs the pre-change serialiser (cartesian gains more because it has no SEDS I/O, so the EDS pass-through dominates its runtime).
   - **`--source-format <fmt>` for the output sources** (2026-07-30): `seds` (default, dense text), `seds-sparse`, `edz`, `edz-sparse`, `edz-compressed`. The merge pipeline itself still only *writes* dense text SEDS (it streams entries as it merges and has no binary writer); any other format is produced by re-encoding that file once at the end via `Sources::save_as()`, then deleting the text file. EDZ variants are written as `<output>.edz` (all EDZ variants share that extension and are self-describing via header flags). Measured on VCF-derived sources: at 500 paths SEDS 9.4 MiB → edz 8.7 MiB → edz-sparse 4.5 MiB → **edz-compressed 2.0 MiB (4.7×)**, which also beats `gzip -6` of the text SEDS (2.9 MiB); at 2504 paths (1000G-like) SEDS 16.3 MiB → edz 13.2 MiB → edz-sparse 7.8 MiB → **edz-compressed 2.7 MiB (5.9×)**. **The deciding factor is the allele-frequency spectrum, not the path count** (corrected 2026-08-06): a bitset costs ⌈paths/8⌉ bytes per entry regardless of contents, so it wins only when entries are dense. On the rare-variant M. tuberculosis panels the ranking inverts and worsens with scale — 100 paths SEDS 464 KB vs edz-sparse 529 KB; 500 paths 2.98 MB vs 8.36 MB; 1141 paths 7.83 MB vs **34.07 MB (4.4× larger than the text it replaces)**, because a variant carried by 3 of 1141 isolates is 143 bytes as a bitset and ~12 as `{5,88,900}`. `gzip -6` of the text SEDS beats every built-in format there by ~8× (1.02 MB at 1141 paths). `edz-compressed` has not been measured on rare-variant data. `edz-compressed` requires a zstd-enabled build and is validated up front, before the merge runs. Because the re-encode happens at the end, peak *disk* still includes the dense text SEDS — only the final artifact shrinks.
@@ -208,11 +209,7 @@ Key methods:
 
 **Cardinality validation**: `EDS::load(eds_path, seds_path)` validates that `Sources::cardinality()` matches `EDS::m_` at load time; throws `std::invalid_argument` on mismatch. This catches stale or mismatched `.seds` files early.
 
-**Pipe Streaming** ([src/cpp/lib/pipe_buffer.hpp](src/cpp/lib/pipe_buffer.hpp), [src/cpp/lib/pipe_stream.hpp](src/cpp/lib/pipe_stream.hpp)): Thread-safe circular buffer implementing `std::streambuf` to connect producer/consumer threads without intermediate temp files:
-- `PipeOutputStream` / `PipeInputStream` — stream wrappers for producer and consumer threads
-- `make_pipe()` — factory to create connected stream pairs
-- Default buffer: 64MB; uses mutex + condition variables for synchronization
-- Used in the VCF→EDS→l-EDS direct pipeline to eliminate temp files
+**Pipe streaming was deleted on 2026-09-02** (`pipe_buffer.hpp`, `pipe_stream.hpp`, ~394 lines): a thread-safe circular `std::streambuf` plus stream wrappers, documented as connecting the VCF→EDS→l-EDS stages without a temp file. Nothing ever included it — `parse_vcf_to_leds_streaming_direct()` has always used temp files, which is what the surrounding docs describe. Do not resurrect it speculatively; if the two-stage pipeline is ever fused, see TODO 2c, which wants a single pass rather than a pipe.
 
 **Complexity Estimation** ([src/cpp/lib/transforms/eds_complexity.cpp](src/cpp/lib/transforms/eds_complexity.cpp)): `estimate_leds_complexity()` analyzes EDS structure before transformation:
 - Detects: adjacent degenerate pairs, short context blocks, dense degenerate clusters
@@ -223,8 +220,7 @@ Key methods:
 **Memory Monitoring** ([src/cpp/lib/memory_monitor.hpp](src/cpp/lib/memory_monitor.hpp), [src/cpp/lib/memory_monitor.cpp](src/cpp/lib/memory_monitor.cpp)): `MemoryMonitor` class for diagnostics and test validation:
 - Periodic sampling thread; methods: `start()`, `stop()`, `add_label()`, `get_peak_memory_mb()`, `detect_memory_leak()`
 - Linear regression-based leak detection (threshold: 1.0 MB/sec default)
-- Helpers: `assert_memory_below()`, `assert_no_memory_growth()` for test assertions
-- Used by `test_memory_smoke` and `test_memory_stress`
+- Used by `test_memory_smoke` and `test_memory_stress`, which assert on the accessors directly (the `assert_memory_below()` / `assert_no_memory_growth()` helpers were removed 2026-09-02, uncalled)
 
 **Block-Based VCF Processing with Streaming Output**: For handling very large VCF files (e.g., 65GB+), the VCF parser uses genomic windowing with incremental file writing:
 - Divides reference genome into blocks (default: 10M bases)
@@ -505,11 +501,22 @@ This supersedes the collect/parse/compare half of the shell pipeline: `collect_r
 `source_formats` and the real-data `vcf2eds` have runs but no notebook. **Check a run
 actually produced rows before reading it**: several run directories are empty, and
 `vcf2leds_tb` has never had an `ok` row because `~/Data/tb/` is empty on this machine. See
-TODO.md §3g.
+`~/Data/experiments/edsparser/experiment_design.md` §3g.
 
-**Result validity:** anything produced at ≤ 63 paths before 20d8ff1 measures the complement bug — see TODO.md §0a. Only `~/Data/experiments/edsparser/results/yeast1011_50` is invalid (50 samples, collected the day before the fix; it carries an `INVALID.md`). `tb_100` was previously listed as invalid and is **not** — 100 paths is above the threshold and its binary postdates the fix; it is merely superseded by `tb_p100` (`SUPERSEDED.md`). `hgp1000`, `tb_p100`, `tb_p500`, `tb_p1141` and their `_snv50` twins are valid.
+**Result validity:** anything produced at ≤ 63 paths before 20d8ff1 measures the complement bug — see `~/Data/experiments/edsparser/experiment_design.md` §0a. Only `~/Data/experiments/edsparser/results/yeast1011_50` is invalid (50 samples, collected the day before the fix; it carries an `INVALID.md`). `tb_100` was previously listed as invalid and is **not** — 100 paths is above the threshold and its binary postdates the fix; it is merely superseded by `tb_p100` (`SUPERSEDED.md`). `hgp1000`, `tb_p100`, `tb_p500`, `tb_p1141` and their `_snv50` twins are valid.
 
 ## Testing
+
+### The unit suite only ran at all in Debug builds until 2026-09-02
+
+Every unit test asserts with `assert()`; `-DCMAKE_BUILD_TYPE=Release` adds
+`-DNDEBUG`, which deletes every one of them. All seven binaries printed
+"✓ All tests passed" while verifying nothing, and Release is exactly what
+`INSTALL.sh` builds — so anyone following the documented workflow had a green
+suite that could not fail. Test targets are now created by
+`edsparser_add_unit_test()` in `src/cpp/CMakeLists.txt`, which adds `-UNDEBUG`;
+register new test executables through it rather than `add_executable` directly.
+With assertions actually live, a clean Release build is 7/7 and warning-free.
 
 ### The unit suite builds and passes (repaired 2026-08-20)
 
@@ -524,12 +531,15 @@ a green e2e run is not evidence that library internals are correct:
 - **`find_symbol_at_common_position()` read out of bounds** for any common
   position at or past the total common-character count: `upper_bound` returns
   `end()`, `symbol_idx` becomes `n`, and every per-symbol array is indexed one
-  past the end. Segfaulted ~2 runs in 3. Reachable from the public
-  `check_position()`, which is written to catch `out_of_range` from it — the
-  read happened first. (Valgrind catches it; ASan does not, because the first
+  past the end. Segfaulted ~2 runs in 3. Reachable from the then-public
+  `check_position()` (removed 2026-09-02), which was written to catch
+  `out_of_range` from it — the read happened first. `generate_patterns()` is the
+  remaining caller. (Valgrind catches it; ASan does not, because the first
   over-read lands inside a `std::vector<bool>` word.)
 - **An out-of-range degenerate string id** was reported as `"Internal error: ...
-  maps to non-degenerate symbol"`. Now `out_of_range`, naming the universe size.
+  maps to non-degenerate symbol"`. Fixed to `out_of_range` naming the universe
+  size; the method that raised it (`decode_degenerate_string_number()`) went with
+  `check_position()` on 2026-09-02.
 - **A stray `}` was absorbed as a sequence character** — `"ACGT}"` parsed as one
   5-character symbol — so a truncated file parsed "successfully" with braces
   inside its strings. Unmatched `{` was already rejected; this is the symmetric
@@ -541,21 +551,28 @@ a green e2e run is not evidence that library internals are correct:
 
 Two things worth knowing about the tests themselves:
 
-- **`check_position()` has no caller anywhere in the repo**, so its tests are its
-  entire specification — and they used to contradict themselves about the
-  coordinate convention. It is now pinned in `test_check_position_basic`:
-  `common_pos` indexes **common characters only**; `degenerate_strings` are
-  **global** degenerate-string ids that must belong to a symbol the match
-  actually traverses (otherwise `invalid_argument`), while ids for symbols
-  outside the traversed range are warned about and ignored. A match cannot begin
-  inside a degenerate symbol.
+- **`check_position()` was deleted on 2026-09-02**, along with its exclusive
+  helpers (`decode_degenerate_string_number()`, `reconstruct_from_memory()` —
+  which had no caller even from it — `reconstruct_from_file()`,
+  `calculate_path_intersection()`) and the `cum_degenerate_counts` metadata array
+  they alone needed. Nothing in this repo called it, and biofmi — the presumed
+  consumer, which vendors this library under `external/edsparser/` — does not
+  either: its only EDS API use is `length()`, `cardinality()`, `size()`,
+  `read_symbol()` and `get_metadata().is_degenerate` /
+  `.num_degenerate_symbols`. Its tests had been its entire specification, and
+  they had contradicted themselves about the coordinate convention. Test 26,
+  which used it as a locate oracle for `generate_patterns()`, now enumerates the
+  4-string language of its fixture EDS and checks substring containment instead
+  — a stricter check that needs no coordinate convention. If a position-check API
+  is ever wanted again, write it against a stated convention rather than
+  restoring this one.
 - **Half of `test_merge` merged nothing.** `{G,C}{T}`, `{T}{A,C,G}`, `{,A}{T}`,
   `{ACGT}{G,C}{T}` and `{A}{B,C}{D}` all place their short common symbol at a
   boundary, where `needs_merge()`'s `i > 0 && i < n - 1` exempts it, so they
   asserted results the transform correctly never produces. They now use interior
   placements, and the exemption is asserted deliberately in two tests instead of
   accidentally in five. `test_merge` also covers the **path-count invariant**
-  (TODO 0b): a linear merge can never produce more strings in one symbol than
+  (the path-count invariant): a linear merge can never produce more strings in one symbol than
   there are paths — the assertion the complement-source bug (20d8ff1) would have
   failed.
 
